@@ -1,0 +1,56 @@
+# Product and scope
+
+## North star
+
+Deliver a clear, polished web game with correct deterministic rules and a
+dedicated rules page. A Strands decision agent deployed to AgentCore chooses the
+opponent's moves; a separate LLM narrator supplies its public voice. Evaluation
+measures legality, reliability, latency, and model quality. Platform defaults,
+customizations, and omissions are documented with their rationale.
+
+## MVP goals
+
+- A deployed, responsive, single-player game lasting six rounds.
+- A 54-card deck, one shared 3×3 coffin, hands, round scores, and total scores.
+- A dedicated rules page and public Dracula commentary at game, move, scoring,
+  and completion events.
+- Server-owned legal moves, state transitions, and scoring.
+- Named Bedrock model profiles and reproducible seeded evaluation.
+- FastAPI on Lambda, DynamoDB, private AgentCore Runtime, and observability.
+
+## Non-goals
+
+- Accounts, login, matchmaking, or multiplayer.
+- MCP, A2A, AgentCore Memory, Gateway, or Knowledge Bases.
+- Long-term player memory or arbitrary public Bedrock model IDs.
+- Perfect or game-theoretically optimal play.
+- Model control of rules, scoring, validation, or persistent state.
+
+## Acceptance
+
+A user can reach the deployed app, consult the rules, and finish a game without
+manual state repair. The opponent uses the deployed Strands/AgentCore path, the
+narrator receives no private state, failures cannot corrupt the game, and a run
+can be reproduced from its seed and resolved configuration.
+
+## Release-ready definition
+
+The MVP is release-ready when:
+
+- It is publicly reachable at a stable HTTPS URL.
+- A first-time user can open the rules, start a game as Queen or King, finish all
+  six rounds, see the final result, and start another game.
+- The interface is usable from a 360-pixel-wide phone through a standard desktop
+  display using current Chrome, Firefox, Safari, or Edge.
+- The deployed opponent uses the Strands agent in AgentCore Runtime for every
+  move, and the separate narrator produces the visible opponent commentary.
+- Rules, scoring, legal-move validation, state visibility, and stale-request
+  handling pass automated tests derived from the approved rules.
+- Model or narrator failure cannot corrupt state or expose private information.
+- The selected model profiles and prompts have documented evaluation evidence,
+  and each game records its seed and resolved configuration.
+- A deployment smoke test loads the frontend, passes `/health`, creates a game,
+  completes a seeded game through the deployed integrations, and confirms useful
+  logs and traces.
+- Rate limits and AWS budget alerts are active.
+- Deployment and teardown instructions work from a clean environment.
