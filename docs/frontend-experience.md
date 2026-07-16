@@ -4,7 +4,7 @@ The React, TypeScript, and Vite frontend provides a responsive game window, a
 dedicated rules page, direct card interaction, scoring presentations, and
 Dracula commentary. The browser renders `HumanGameView` and submits
 server-issued legal move IDs. It does not shuffle, score, decide legality, or
-receive private agent or deck data.
+receive private policy, opponent-hand, or deck data.
 
 ## Page structure
 
@@ -25,18 +25,17 @@ The initial view presents two primary actions: **Start as Queen** and **Start as
 King**. It also provides the Rules link. No game exists and no narrator request
 is made until the user selects a role.
 
-If the final model configuration exposes multiple public profiles, its
-allowlisted selector appears with the role controls. If the MVP has one public
-profile, the resolved default is used without showing a redundant control.
+Game creation resolves the current approved policy and narrator configuration.
+The MVP does not expose a model or difficulty selector.
 
 The interaction sequence is:
 
 1. The user may open Rules without leaving the start view.
 2. The user selects Queen or King, and the browser creates the game with that
-   role and the selected or default model profile.
+   role.
 3. The browser displays the dealt round and awaits the required round-opening
    comment before enabling card play.
-4. Human and agent turns alternate. Turn status makes clear when the user may
+4. Human and opponent turns alternate. Turn status makes clear when the user may
    act and when Dracula is deciding.
 5. After the eighth move, the main display runs the row and column scoring
    sequence before advancing.
@@ -45,7 +44,8 @@ The interaction sequence is:
    and closing comment, and offers **Start new game**.
 
 Reloading an active game restores the authoritative state and resumes any
-pending agent, narration, scoring, or round-advance phase described by the API.
+pending opponent, narration, scoring, or round-advance phase described by the
+API.
 
 ## Desktop layout
 
@@ -126,8 +126,8 @@ game control after the server response.
 
 While a move request is pending, further card input is disabled. A rejected or
 stale move restores interaction from the returned authoritative view. During an
-agent turn, the hand remains visible but inactive and the turn status indicates
-that Dracula is deciding.
+opponent turn, the hand remains visible but inactive and the turn status
+indicates that Dracula is deciding.
 
 The frontend does not display a global inventory of seen, hidden, or played
 cards. The human's card information is conveyed by their current hand and the
@@ -139,7 +139,8 @@ The commentary panel becomes active only after game creation. Desktop retains
 the full commentary stream for the current game. Narrow and mobile layouts show
 only the newest comment.
 
-Optional move comments arrive without interrupting card or agent-turn progress.
+Optional move comments arrive without interrupting card or opponent-turn
+progress.
 Required round-opening and scoring comments follow the bounded presentation
 waits defined in [architecture](architecture.md#narrator-scheduling). A failed
 narrator job ends its wait without inserting substitute Dracula dialogue.
@@ -150,34 +151,141 @@ event-order and current-round rules still admit it.
 
 ## Round-scoring presentation
 
-At the end of each round, the interface runs an ordered scoring sequence supplied
-by the game service. It highlights each Queen row and King column, then displays:
+The game service supplies the complete ordered `ScoringStep` sequence. The
+browser presents those steps and does not recalculate values, multipliers,
+rankings, tie resolution, round scores, or cumulative totals.
 
-1. Card values and their base total.
-2. The applicable suit or color multiplier.
-3. The resulting line score.
-4. Comparisons between each player's ranked lines.
-5. Any move to second- or third-ranked lines caused by ties.
-6. The awarded round scores and updated game totals.
+### Entering scoring
 
-The sequence displays deterministic `ScoringStep` data and does not reproduce
-scoring logic in the browser. It has two narrator touchpoints:
+After the eighth move, card interaction is disabled. The score tally and human
+hand fade out, and the completed coffin enlarges into the scoring layout. On
+desktop, the tall coffin sits beside a white calculation workspace. In the
+narrow layout, the same workspace appears below the coffin so the calculation
+does not reduce card size.
 
-1. Start row commentary when row animation begins. After the three rows and
-   provisional Queen ranking are shown, wait for and append the comment.
-2. Start column commentary when column animation begins. After the three
-   columns, cross-player tie resolution, awarded scores, and updated totals are
-   shown, wait for and append the comment.
+The dealer is scored first and the non-dealer second. Because either player may
+be Queen or King, the sequence supports both row-then-column and
+column-then-row ordering. The human calculation is headed **Your Score** and the
+opponent calculation is headed **My Score**, regardless of who dealt.
 
-Both waits have a configured upper bound; a pending or failed narrator response
-cannot prevent round advance. The main display prevents card interaction until
-the scoring sequence completes.
+The narrator job for the current orientation starts with its animation. After
+the three line scores are sorted, the browser performs the bounded wait and
+appends the comment to the unchanged commentary panel. The completed dealer
+tally then fades from the calculation workspace while the coffin remains and
+the non-dealer calculation begins.
+
+### Calculating one orientation
+
+Queen rows are processed from top to bottom, with cards read left to right. King
+columns are processed from left to right, with cards read top to bottom. The
+current three-card series receives a bold accent border for the duration of its
+calculation.
+
+Within a series, each card briefly scales to `1.08`, immediately returns to its
+normal size, and adds its direction-specific value to one horizontal expression
+at the peak of the motion:
+
+```text
+X
+X + Y
+X + Y + Z
+```
+
+When the third value is present, the expression collapses horizontally toward
+its center and fades seamlessly into the base sum `W`. A ripple pop passes over
+the three cards in reading order during the collapse.
+
+The service-supplied multiplier description then appears immediately to the
+right of `W`:
+
+| Multiplier | Description | Card emphasis |
+| ---: | --- | --- |
+| ×1 | **No Multiplier** | No additional card highlight |
+| ×2 | **2× Hearts**, **2× Clubs**, and so on | The two matching-suit cards |
+| ×3 | **3× Red** or **3× Black** | All three cards |
+| ×5 | **3× Hearts**, **3× Clubs**, and so on | All three cards |
+| ×0 | **Vampire** | Every Joker/Vampire in the series |
+
+The emphasized cards receive a distinct inner outline while the bold series
+border remains in place. The UI uses `multiplier_label` and
+`highlighted_card_ids` from `LineScore`; it does not infer the description or
+matching cards.
+
+After a short pause, the description changes to the numeric factor `× V`. After
+a second pause, `W × V` collapses horizontally and is replaced by the final
+series total `T`. **No Multiplier** therefore becomes `× 1`; **Vampire** becomes
+`× 0`. A Vampire is never assigned a directional card value.
+
+After all three series have been calculated, each line retains only `T`. The
+three values move to the center of the workspace and then rearrange into
+descending order. The service supplies both the sorted order and stable ordering
+for equal values.
+
+### Selecting round scores
+
+After both individual tallies are complete, the coffin fades out. **Your Score**
+and **My Score** appear side by side, each with its three sorted line values.
+Corresponding ranks are compared from highest to lowest:
+
+1. Both values in the current pair pop together.
+2. If they differ, **Round Score** appears beside both values and all unselected
+   values fade out.
+3. If they tie, **Tie** appears and both values receive a strikethrough. The tied
+   pair remains visible while the next ranked pair is compared.
+4. If the first two pairs tie, the third pair becomes the round score even if
+   its values also tie. It receives **Round Score**, not another rejection.
+
+Once the round-score pair is selected, previous tied pairs and all other values
+fade away. Under each retained round score, the interface reveals the previous
+cumulative total with an addition sign and underline, followed by the new
+cumulative total below the line.
+
+The round score, previous total, and new total remain visible. Rounds one through
+five end with **Deal Next Round**. Activating it advances the game, deals the
+next round, and begins its opening-comment sequence. After round six, the browser
+finalizes the game, awaits the closing comment, and shows **Play Again**; the
+score calculation remains visible until that action starts a new game.
+
+### Motion and recovery
+
+Initial motion tokens are:
+
+| Motion | Duration |
+| --- | ---: |
+| Hand/tally or coffin fade | 200 ms |
+| Coffin enlargement | 300 ms |
+| Card expansion | 120 ms |
+| Card return | 120 ms |
+| Ripple stagger between cards | 60 ms |
+| Base-expression collapse | 300 ms |
+| Multiplier-description pause | 500 ms |
+| Description-to-factor change | 200 ms |
+| Numeric-factor pause | 400 ms |
+| Product-to-total collapse | 300 ms |
+| Score reorder | 300 ms |
+| Player-tally transition | 200 ms |
+| Compared-pair pop | 240 ms |
+| Total-row reveal | 180 ms per row |
+
+Card pops have no plateau between expansion and return. Values, result text,
+tie labels, and round-score labels appear at the peak of their associated pop.
+Durations may be tuned together after prototype review, but their order and
+relative behavior remain fixed.
+
+The MVP has no skip or replay control for scoring. With reduced motion enabled,
+scale and movement are replaced by border, opacity, and text-state changes while
+every calculation step remains visible. Reloading during scoring restarts the
+presentation from the dealer's first series using the stored deterministic
+sequence; existing narration jobs are reused and commentary is not duplicated.
+
+Both narrator waits have a configured upper bound. A pending or failed response
+cannot prevent the sequence from reaching its completion control.
 
 ## Loading, failure, and recovery
 
 - A game-creation failure leaves the selected role visible and offers retry.
 - A pending human move preserves the displayed hand and coffin until accepted.
-- A pending agent turn shows its status and resumes the same claimed turn after
+- A pending opponent turn shows its status and resumes the same claimed turn after
   reload or retry.
 - A stale-state response replaces the local view with the server response before
   accepting more input.
@@ -195,22 +303,74 @@ module.
 
 CSS Grid provides the outer desktop/narrow layouts and the coffin. Container
 queries, `aspect-ratio`, and bounded fluid sizing support internal scaling. Card
-assets will use `@letele/playing-cards` or an equivalent vendored SVG set if
-bundling requires it. No drag-and-drop library has been selected; the choice
-must support pointer, touch, and keyboard behavior described above.
+assets use the Kenney Playing Cards Pack described below. No drag-and-drop
+library has been selected; the choice must support pointer, touch, and keyboard
+behavior described above.
 
-> **TODO UX-002 — Define usability acceptance.** Choose the desktop aspect ratio,
-> functional narrow-layout breakpoint, minimum card and text sizes, supported
-> viewports, Dracula and card assets, focus details, contrast, and selection
-> feedback. Record the final About and Contact URLs.
->
-> **Complete when:** A testable checklist and asset/license decision cover all 54
-> cards, supported layouts, direct-grid input methods, commentary variants, and
-> external links.
+## Usability acceptance
 
-> **TODO UX-004 — Design the scoring sequence.** Specify timing, highlighting,
-> transitions, skip/replay behavior, narrator insertion points, and the handoff to
-> the next round or final result.
->
-> **Complete when:** A reviewed storyboard covers ordinary multipliers, Vampire
-> lines, first- and second-level ties, round totals, and final-game scoring.
+The initial desktop main-display aspect ratio is `4 / 3`. The desktop layout
+uses the existing two-pane proportions until the game window is narrower than
+900 CSS pixels, at which point it switches to the narrow layout. The breakpoint
+may be adjusted during implementation only when the same acceptance cases show
+that cards, scores, or commentary no longer fit at the documented minimum size.
+
+Card image boxes do not render below 64×64 CSS pixels. The visible pixel-art
+card remains centered within that box. Body and control text is at least 16 CSS
+pixels; secondary labels are at least 14 CSS pixels. Short viewports scroll
+instead of reducing either minimum.
+
+The responsive checks cover:
+
+- 360×640 and 390×844 mobile viewports.
+- 768×1024 portrait and 1024×768 landscape viewports.
+- One pixel below and above the configured narrow-layout breakpoint.
+- 1440×900 desktop.
+
+At each size, all four hand cards and the complete coffin remain reachable; card
+labels, scores, and turn state remain readable; interactive regions do not
+overlap; and the latest mobile commentary is not clipped or given an internal
+scrollbar.
+
+Drag, tap-selection, and keyboard-selection paths must submit the same legal
+move. A selected card has a persistent outline and raised state. Legal coffin
+positions use a second visible treatment that does not depend on color alone.
+Pending and inactive controls are visually distinct. Keyboard focus uses a
+high-contrast outline at least two CSS pixels wide with visible separation from
+the component edge, and focus follows the behavior documented under card
+interaction.
+
+Normal text meets a 4.5:1 contrast ratio. Large text, focus indicators, card
+selection, and other meaningful interface graphics meet 3:1 against adjacent
+colors. Narrator updates remain polite live-region announcements. Reduced-motion
+preference disables nonessential movement without skipping scoring information.
+
+## Asset decision
+
+The selected deck is the [Kenney Playing Cards Pack](https://www.kenney.nl/assets/playing-cards-pack),
+version 1.0, released under CC0. The 64×64 PNG files in the local
+`Cards (large)` directory are the source for the initial implementation. The
+`Cards (medium)` directory is retained only as an alternate source and is not
+selected automatically at narrower layouts.
+
+Both source directories are ignored by Git and treated as immutable. An asset
+preparation step copies only the required files into the frontend asset set; it
+does not rename, resize, optimize, or write into the source directories. The
+copied set contains the 52 suited cards plus `card_joker_black.png` and
+`card_joker_red.png`, which map directly to the two Vampire card IDs. Jokers and
+Vampires are the same cards. A later custom Vampire-themed Joker may replace
+both images without changing game state or card semantics.
+
+Cards render with nearest-neighbor scaling and do not use interpolation that
+softens the pixel art. The asset mapping, Kenney source URL, pack version, and
+CC0 license are recorded with the copied frontend assets.
+
+The Dracula portrait and mobile avatar are project-provided artwork. Their final
+files do not block layout or interaction implementation: the desktop reserves
+its fixed portrait region and mobile uses a square placeholder with the same
+eventual dimensions. Before release, the supplied image must remain clear at
+both crops and include a recorded source and usage status.
+
+The Rules, About, and Contact destinations are configuration values. Their final
+URLs do not affect layout acceptance, but all three links must resolve correctly
+and the Rules link must open a new tab before release.

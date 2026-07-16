@@ -1,7 +1,8 @@
 Clear, polished gameplay with an accessible rules reference.
 Correct deterministic game rules and state handling.
-Appropriate Strands tools and AgentCore deployment.
+Competent opponent play produced by a reproducible self-trained neural policy.
+Appropriate AWS training, model-registry, and serverless-inference components.
 Explicit justification of default, customized, and omitted platform features.
-Focused evaluation proving legality, reliability, latency, and model choice.
+Focused evaluation proving policy competence, legality, reliability, latency, and cost.
 Concise documentation maintained consistently from design through deployment.
 Professional, product-focused documentation: state requirements and decisions directly; exclude coaching, conversational context, external positioning, and misplaced scope language. Keep platform-omission rationale in the design decisions.

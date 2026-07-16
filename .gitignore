@@ -1,0 +1,5 @@
+.DS_Store
+
+# Local, immutable source packs. Selected files are copied into frontend assets.
+/Cards (large)/
+/Cards (medium)/

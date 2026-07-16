@@ -21,7 +21,7 @@ Vampires are shuffled into the deck and dealt as ordinary cards.
 3. Before the first round, the human player chooses a scoring direction:
    - **Queen:** horizontal rows.
    - **King:** vertical columns.
-4. The LLM opponent receives the opposite direction. These directions remain
+4. The opponent receives the opposite direction. These directions remain
    fixed for all six rounds and do not depend on the dealer.
 
 The deal alternates each round, so each player deals three times.
