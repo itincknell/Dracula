@@ -1,8 +1,7 @@
 Clear, polished gameplay with an accessible rules reference.
 Correct deterministic game rules and state handling.
-Competent opponent play produced by a reproducible self-trained neural policy.
-Appropriate AWS training, model-registry, and serverless-inference components.
-Explicit justification of default, customized, and omitted platform features.
-Focused evaluation proving policy competence, legality, reliability, latency, and cost.
-Concise documentation maintained consistently from design through deployment.
-Professional, product-focused documentation: state requirements and decisions directly; exclude coaching, conversational context, external positioning, and misplaced scope language. Keep platform-omission rationale in the design decisions.
+The strongest manually selected self-trained policy serving as the single opponent.
+Local-first training designed for the project M3 MacBook Air with 8 GB memory.
+AWS deployment limited to components required to serve and operate the application.
+Manual model comparison supported by reproducible runs, checkpoints, and concise results.
+Professional documentation containing only decisions and requirements needed to build and verify the MVP.

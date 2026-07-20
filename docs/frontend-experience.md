@@ -25,7 +25,7 @@ The initial view presents two primary actions: **Start as Queen** and **Start as
 King**. It also provides the Rules link. No game exists and no narrator request
 is made until the user selects a role.
 
-Game creation resolves the current approved policy and narrator configuration.
+Game creation resolves the production policy and narrator configuration.
 The MVP does not expose a model or difficulty selector.
 
 The interaction sequence is:
@@ -181,8 +181,8 @@ columns are processed from left to right, with cards read top to bottom. The
 current three-card series receives a bold accent border for the duration of its
 calculation.
 
-Within a series, each card briefly scales to `1.08`, immediately returns to its
-normal size, and adds its direction-specific value to one horizontal expression
+Within a series, each card briefly enlarges and immediately returns to its
+normal size. Its direction-specific value appears in one horizontal expression
 at the peak of the motion:
 
 ```text
@@ -248,29 +248,10 @@ score calculation remains visible until that action starts a new game.
 
 ### Motion and recovery
 
-Initial motion tokens are:
-
-| Motion | Duration |
-| --- | ---: |
-| Hand/tally or coffin fade | 200 ms |
-| Coffin enlargement | 300 ms |
-| Card expansion | 120 ms |
-| Card return | 120 ms |
-| Ripple stagger between cards | 60 ms |
-| Base-expression collapse | 300 ms |
-| Multiplier-description pause | 500 ms |
-| Description-to-factor change | 200 ms |
-| Numeric-factor pause | 400 ms |
-| Product-to-total collapse | 300 ms |
-| Score reorder | 300 ms |
-| Player-tally transition | 200 ms |
-| Compared-pair pop | 240 ms |
-| Total-row reveal | 180 ms per row |
-
 Card pops have no plateau between expansion and return. Values, result text,
 tie labels, and round-score labels appear at the peak of their associated pop.
-Durations may be tuned together after prototype review, but their order and
-relative behavior remain fixed.
+Exact durations are tuned during implementation; their order and relative
+behavior remain fixed.
 
 The MVP has no skip or replay control for scoring. With reduced motion enabled,
 scale and movement are replaced by border, opacity, and text-state changes while
@@ -297,9 +278,7 @@ cannot prevent the sequence from reaching its completion control.
 
 The principal UI responsibilities are `GameStart`, `GameWindow`, `MainDisplay`,
 `CardGrid`, `Hand`, `Scoreboard`, `ScoringPresentation`, `CommentaryPanel`, and
-`RulesPage`, supported by an API client and game store. These are component
-boundaries, not a requirement that every responsibility occupy a separate
-module.
+`RulesPage`, supported by an API client and game store.
 
 CSS Grid provides the outer desktop/narrow layouts and the coffin. Container
 queries, `aspect-ratio`, and bounded fluid sizing support internal scaling. Card
@@ -354,9 +333,9 @@ version 1.0, released under CC0. The 64×64 PNG files in the local
 selected automatically at narrower layouts.
 
 Both source directories are ignored by Git and treated as immutable. An asset
-preparation step copies only the required files into the frontend asset set; it
-does not rename, resize, optimize, or write into the source directories. The
-copied set contains the 52 suited cards plus `card_joker_black.png` and
+preparation step copies only the required files into the frontend asset set and
+does not modify the source directories. The copied set contains the 52 suited
+cards plus `card_joker_black.png` and
 `card_joker_red.png`, which map directly to the two Vampire card IDs. Jokers and
 Vampires are the same cards. A later custom Vampire-themed Joker may replace
 both images without changing game state or card semantics.
@@ -371,6 +350,5 @@ its fixed portrait region and mobile uses a square placeholder with the same
 eventual dimensions. Before release, the supplied image must remain clear at
 both crops and include a recorded source and usage status.
 
-The Rules, About, and Contact destinations are configuration values. Their final
-URLs do not affect layout acceptance, but all three links must resolve correctly
-and the Rules link must open a new tab before release.
+The Rules, About, and Contact destinations are configuration values. All three
+must resolve correctly, and the Rules link opens a new tab.

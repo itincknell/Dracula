@@ -3,11 +3,11 @@
 ## North star
 
 Deliver a clear, polished web game with correct deterministic rules and a
-dedicated rules page. A recurrent neural policy trained through reproducible
-self-play chooses Dracula's moves; a separate Bedrock narrator supplies the
-public voice. Evaluation measures policy competence, legality, reliability,
-latency, and cost. Platform defaults, customizations, and omissions are
-documented with their rationale.
+dedicated rules page. The strongest manually selected recurrent policy produced
+by reproducible self-play chooses Dracula's moves at one fixed difficulty; a
+separate Bedrock narrator supplies the public voice. Evaluation measures policy
+competence, legality, reliability, latency, and cost. Platform defaults,
+customizations, and omissions are documented with their rationale.
 
 ## MVP goals
 
@@ -16,9 +16,9 @@ documented with their rationale.
 - A dedicated rules page and public Dracula commentary at game, move, scoring,
   and completion events.
 - Server-owned legal moves, state transitions, and scoring.
-- A versioned recurrent policy trained by the project and served for every
-  opponent move.
-- A reproducible self-play training suite with model evaluation and promotion.
+- One strongest available versioned recurrent policy trained by the project and
+  served for every opponent move.
+- A reproducible local self-play training suite with manual model comparison.
 - FastAPI on Lambda, DynamoDB, SageMaker Serverless Inference, SageMaker Model
   Registry, Bedrock narration, and observability.
 
@@ -48,13 +48,13 @@ The MVP is release-ready when:
   six rounds, see the final result, and start another game.
 - The interface is usable from a 360-pixel-wide phone through a standard desktop
   display using current Chrome, Firefox, Safari, or Edge.
-- The deployed opponent uses an approved SageMaker Model Registry version
+- The deployed opponent uses the selected SageMaker Model Registry version
   through SageMaker Serverless Inference for every move, and the separate
   Bedrock narrator produces visible commentary.
 - Rules, scoring, legal-move validation, state visibility, and stale-request
-  handling pass automated tests derived from the approved rules.
+  handling pass automated tests derived from the authoritative rules.
 - Policy or narrator failure cannot corrupt state or expose private information.
-- The approved policy has reproducible training and competence evidence. Each
+- The selected policy has reproducible training and comparison evidence. Each
   game records its game seed, policy version, inference configuration, narrator
   model, and prompt version.
 - A deployment smoke test loads the frontend, passes `/health`, creates a game,

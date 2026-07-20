@@ -8,8 +8,9 @@ indexes open design work.
 | [Product and scope](product-and-scope.md) | North stars, goals, non-goals, acceptance |
 | [Rules](rules.md) | Authoritative game rules and examples |
 | [Architecture](architecture.md) | Web application, policy serving, state, API, and persistence |
+| [Engine–model contract](engine-model-contract.md) | Deterministic engine, policy bridge, action mapping, and training transitions |
 | [Neural model](neural-model.md) | Recurrent policy, observation/action contracts, and model artifacts |
-| [Model training](model-training.md) | Self-play, training systems, evaluation, and registry promotion |
+| [Model training](model-training.md) | Local self-play, optimization, checkpointing, and model comparison |
 | [Narrator](narrator.md) | Dracula commentary behavior, prompt, and Bedrock configuration |
 | [Frontend experience](frontend-experience.md) | Responsive game interface and interaction flow |
 | [Evaluation and operations](evaluation-and-operations.md) | Application evaluation, deployment, observability, security, and local development |

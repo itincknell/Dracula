@@ -7,18 +7,21 @@ React browser
     |
 API Gateway -> FastAPI on Lambda
                     |-- DynamoDB state, events, and jobs
-                    |-- SageMaker Serverless Inference -> registered policy
+                    |-- async policy Lambda -> SageMaker Serverless Inference
                     `-- async narrator Lambda -> Bedrock
 
 SageMaker Model Registry and ECR
 CloudWatch observability
-S3 evaluation results
 ```
 
 The browser renders public state plus the human hand. FastAPI owns the
-authoritative state machine, projections, validation, scoring, persistence,
-policy invocation, and narration orchestration. The deterministic engine is
-pure Python with no AWS, neural-network, or LLM dependency.
+authoritative state machine, projections, validation, scoring, persistence, and
+policy-turn and narration orchestration. The deterministic engine is pure Python
+with no AWS, neural-network, or LLM dependency.
+
+The pure engine and its policy bridge are specified in
+[engine–model contract](engine-model-contract.md). The service adds persistence,
+idempotency, and deployment concerns around those deterministic transitions.
 
 ## State and visibility
 
@@ -58,7 +61,7 @@ class GameState:
     # Incremented after every accepted state change.
     version: int
 
-    # Controls the initial shuffle for reproducible games.
+    # Per-game seed controlling the initial shuffle for reproducible games.
     seed: str
 
     # Animation and presentation state remain frontend concerns.
@@ -174,17 +177,22 @@ class LegalMove:
 
 
 class PolicySession:
-    # Approved model and all schemas needed to interpret its I/O.
+    # Selected registered model and all schemas needed to interpret its I/O.
+    model_package_arn: str
     model_package_version: str
+    artifact_id: str
+    artifact_sha256: str
     observation_schema_version: str
     action_schema_version: str
     hidden_state_schema_version: str
 
-    # Resolved serving behavior, including sampling and numerical settings.
+    # One resolved serving behavior for the lifetime of the game.
     inference_profile_version: str
+    action_selection: Literal["argmax", "sample"]
+    temperature: float
 
-    # Opaque serialized recurrent state for Dracula. It advances only with an
-    # accepted opponent move.
+    # Little-endian float32[128]. It advances with each accepted opponent move,
+    # including a forced final placement.
     hidden_state: bytes
 
 
@@ -204,9 +212,12 @@ not additional card locations.
 and a resumable phase describing pending opponent inference, narration, scoring,
 or advance. `PolicyGameView` is the information-safe projection encoded for
 policy inference; it contains the opponent hand, coffin, card-status classes,
-round, turn, role, dealer status, and legal-action mask defined in
-[neural model](neural-model.md). `PublicGameView` contains neither hand, the
-stock, nor private legal moves.
+round, own-decision progress, dealer status, and legal-action mask defined in
+[neural model](neural-model.md). Its coffin and action positions are normalized
+to the policy player's scoring orientation. The deterministic construction of
+that view and its action mapping are defined in the
+[engine–model contract](engine-model-contract.md). `PublicGameView` contains
+neither hand, the stock, nor private legal moves.
 
 `PolicySession` and `NarratorSession` belong to the surrounding persisted game
 session, not the pure engine state. A policy model version and hidden-state
@@ -229,7 +240,8 @@ schema are immutable for the lifetime of a game.
 ## Game lifecycle
 
 Creating a game selects the first dealer from the seed, deals round one, places
-the center card, and emits `game_created` and `round_started`. The
+the center card, initializes the pinned policy's hidden state, and emits
+`game_created` and `round_started`. The
 `round_started` narrator projection contains only the center card and first
 player. The browser may animate the deal, but play is not enabled until the
 required opening comment is available or its bounded wait fails.
@@ -241,9 +253,10 @@ requests the opponent turn. This keeps human move acknowledgement fast and makes
 policy inference retries independent of move submission.
 
 The eighth move has exactly one legal card-position action. When the active
-player is the policy, the service applies it without policy inference; a human
-final move continues through the normal human-turn contract. After accepting
-the eighth move, the service deterministically computes every line and the final
+player is the policy, the service invokes inference to advance the game-scoped
+recurrent state and applies that unique move through the engine. A human final
+move continues through the normal human-turn contract. After accepting the
+eighth move, the service deterministically computes every line and the final
 round scores. It sets `pending_round_result`, updates totals, changes the status
 to `round_complete`, and emits the `move_accepted`, two orientation events, and
 `round_completed`. If the dealer is Queen, their order is `row_score_ready` then
@@ -252,10 +265,9 @@ cannot advance while the scoring presentation is running.
 
 After presentation, the browser calls the round-advance endpoint. The service
 moves `pending_round_result` to `completed_rounds`. For rounds one through five
-it clears the current round, resets the policy hidden state to the pinned model's
-initial state, alternates the dealer, deals the next round, and emits
-`round_started`. After round six it changes the status to `game_complete` and
-emits `game_completed`.
+it clears the current round, retains the policy hidden state, alternates the
+dealer, deals the next round, and emits `round_started`. After round six it
+changes the status to `game_complete` and emits `game_completed`.
 
 Game transitions are independent of presentation state. Reloading during an
 opponent turn, required narrator wait, or scoring presentation returns enough
@@ -277,40 +289,42 @@ phase and event information for the browser to resume the pending step.
 
 1. When the returned view names the opponent as active, the browser calls
    `opponent-turn` with the current version and a new `request_id`.
-2. The service conditionally claims that exact turn. Duplicate requests return
-   the existing job or result and do not start another inference invocation.
-3. If the turn has one legal action, the service applies it transactionally
-   without invoking SageMaker or advancing recurrent state, then completes the
-   round when it is the eighth placement.
-4. Otherwise, the service loads the game's pinned `PolicySession`, constructs
-   the immutable `PolicyGameView` and legal-action mask, and invokes the
-   matching SageMaker Serverless Inference deployment.
-5. The endpoint returns policy output and the next recurrent hidden state. The
-   resolved inference profile determines whether action sampling occurs in the
-   container or the service. The service maps the resulting action to a legal
-   card and position, revalidates it against the claimed game version, and
-   rejects malformed, masked, or stale output.
-6. One transaction applies the move, commits the next hidden state, appends the
-   public event, and completes the turn job. The hidden state cannot advance
-   independently of the accepted move.
-7. The response contains the updated human view. Any eligible comment on the
-   accepted opponent move is generated asynchronously.
+2. The service conditionally creates or reads the job for that exact game
+   version and turn. A new, requeued, or dispatchable expired job invokes the
+   policy Lambda asynchronously and returns `202`; a completed job returns its
+   existing result.
+3. One worker conditionally acquires the job's execution lease. It reloads the
+   claimed state, verifies that the turn is still active, constructs the
+   immutable `PolicyGameView` and engine-derived legal mask, and sends the
+   inference request defined in [neural model](neural-model.md). The request
+   carries the game's prior hidden state and pinned artifact ID.
+4. The SageMaker container runs deterministic CPU inference and returns raw
+   logits and the next hidden state. It retains no game session.
+5. The worker validates response versions, shapes, encoding, and finite values.
+   It applies the authoritative legal mask. The fixed production profile then
+   selects masked argmax or samples the masked temperature-one distribution. A
+   sampled profile uses a seed derived from the game ID, round, turn, package
+   digest, and sampling-seed version, so every attempt resolves the same action.
+   For a one-legal-action turn, the engine supplies that action and the returned
+   hidden state remains the recurrent successor.
+6. The service maps the selected action through the request's action table and
+   revalidates the move against the claimed authoritative state.
+7. One DynamoDB transaction conditionally applies the move, commits the next
+   hidden state, appends the public event, stores the idempotent response, and
+   completes the turn job. The hidden state cannot advance independently of the
+   accepted move.
+8. The browser retrieves the completed human view by repeating the same request
+   or polling events. Any eligible comment on the accepted opponent move starts
+   asynchronously.
 
-A timeout, unavailable endpoint, or invalid result leaves the same opponent turn
-and prior hidden state active. Retrying `opponent-turn` follows the bounded
-policy-inference profile and never substitutes a service-chosen move. Sampling
-ownership, inference seeding, exact request/response schemas, and retry reuse of
-inference results remain `ARCH-002` design work.
-
-> **TODO ARCH-002 — Finalize policy-turn orchestration and inference schemas.**
-> Define request and response fields, sampling ownership, inference seeding,
-> hidden-state serialization, claim leases, result reuse, retry and timeout
-> limits, invalid-output handling, and crash recovery between inference and
-> commit.
->
-> **Complete when:** Sequence and failure tests prove that duplicate, stale,
-> timed-out, malformed, and partially completed requests apply at most one legal
-> move and advance hidden state exactly with that move.
+Worker delivery and SageMaker invocation may repeat. Every attempt reconstructs
+the same input from the unchanged claimed state and uses the same action seed.
+A timeout, endpoint error, malformed response, or conditional conflict commits
+neither the move nor hidden state. The bounded retry profile records each
+attempt; after it is exhausted the job reports a retryable dependency failure
+while the opponent turn remains active. A later opponent-turn request may
+conditionally requeue that same job only while its game version and turn remain
+unchanged; the input hash and action seed remain fixed.
 
 ## Narrator scheduling
 
@@ -384,7 +398,7 @@ class NarratorOutput:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /games` | Create a game with a human role and current approved policy/narrator configuration |
+| `POST /games` | Create a game with a human role and the production policy/narrator configuration |
 | `GET /games/{game_id}` | Return the current human view and resumable phase |
 | `POST /games/{game_id}/moves` | Apply one server-issued human move |
 | `POST /games/{game_id}/opponent-turn` | Invoke and apply the currently authorized opponent turn |
@@ -395,19 +409,21 @@ class NarratorOutput:
 | `GET /health` | Health check |
 
 `POST /games` accepts `human_role` and a client-generated `request_id`. The
-service resolves the current approved policy package and narrator configuration
+service resolves the single production policy package and narrator configuration
 and generates the seed unless a trusted evaluation caller supplies one.
 Mutations of an existing game include a new `request_id` and the last observed
-`expected_version`. Repeating a request ID returns the original outcome. Reusing
-it with a different body is rejected. Narration start is idempotent by its
-server-issued event ID and does not require a game version.
+`expected_version`. Repeating a completed mutation returns the original outcome.
+Repeating an opponent-turn request returns the current state of its one claimed
+job, progressing from `202` to its terminal result. Reusing a request ID with a
+different body is rejected. Narration start is idempotent by its server-issued
+event ID and does not require a game version.
 
 A legal `move_id` is bound to its game, state version, player, card, and coffin
 position. It expires as soon as any of those inputs no longer describes the
 authoritative turn.
 
-Move and completed opponent-turn requests return `200` with `HumanGameView`. An
-opponent turn still running when the response window ends returns `202` with its
+Move requests and completed opponent-turn jobs return `200` with
+`HumanGameView`. A newly claimed or running opponent turn returns `202` with its
 job identifier and current resumable phase; the browser polls events or repeats
 the same request ID. Game creation returns `201`. Starting or polling unfinished
 narration returns `202` with its status and identifier. Completed and failed
@@ -447,8 +463,8 @@ contains:
 State changes use one transaction containing the conditional state update, the
 immutable event, and the idempotency result. Narrator completion is a separate
 conditional write and cannot change game state. The policy-turn claim is also
-separate from state; applying its validated result and next hidden state uses the
-normal state/event transaction.
+separate from state; its completion joins the state, event, hidden-state, and
+idempotency writes in one transaction.
 
 ## DynamoDB item model
 
@@ -459,7 +475,7 @@ The production adapter uses one on-demand table partitioned by game:
 | `STATE` | Authoritative state, resolved configuration, latest event sequence, timestamps, expiry |
 | `EVENT#{sequence}` | Immutable public event and any private replay payload |
 | `NARRATION#{event_id}` | Pending/completed/failed status, input hash, output, model and prompt metadata, timing |
-| `POLICY_TURN#{round}#{turn}` | Conditional claim, lease, policy version, attempt count, invocation ID, status, action, next-hidden-state hash |
+| `POLICY_TURN#{round}#{turn}` | Conditional claim, lease, request hash, package version, attempt records, status, action, result hash, next-hidden-state hash |
 | `REQUEST#{request_id}` | Request hash and original response for idempotency |
 
 All items use `PK = GAME#{game_id}`. Conditional expressions enforce state
@@ -496,10 +512,6 @@ only the corresponding immutable event is.
 - Idempotency request items expire after 24 hours, except terminal request data
   needed by an active job remains embedded in that job.
 - CloudWatch application logs and traces use 14-day retention.
-- Raw evaluation runs in S3 use a 90-day lifecycle; compact aggregate reports
-  and the configuration required to reproduce them are retained with the
-  project artifacts.
-
 These values are configuration, not engine behavior, and are represented in the
 deployment stack.
 
@@ -516,14 +528,19 @@ class GameStore(Protocol):
     def load(game_id) -> StoredGame | None: ...
     def commit(game_id, expected_version, request, next_state, events) \
         -> CommitResult: ...
+    def commit_policy_turn(job_id, expected_job_status, expected_version,
+                           next_state, events, response) -> CommitResult: ...
     def list_public_events(game_id, after_sequence) -> list[PublicEvent]: ...
 
 
 class PolicyTurnStore(Protocol):
-    def claim(game_id, round_number, turn_number, request_id, lease) \
+    def claim(game_id, round_number, turn_number, request_id) \
         -> ClaimResult: ...
     def get(job_id) -> PolicyTurnJob | None: ...
-    def finish(job_id, expected_status, result) -> PolicyTurnJob: ...
+    def acquire(job_id, expected_status, lease) -> PolicyTurnJob: ...
+    def record_attempt(job_id, expected_status, attempt) -> PolicyTurnJob: ...
+    def fail(job_id, expected_status, failure) -> PolicyTurnJob: ...
+    def retry(job_id, expected_status, expected_version) -> PolicyTurnJob: ...
 
 
 class PolicyInference(Protocol):
@@ -536,11 +553,11 @@ class NarrationStore(Protocol):
     def finish(job_id, expected_status, output) -> NarrationJob: ...
 ```
 
-`GameStore.create` and `commit` atomically persist their state, events, and
-idempotency result. A conditional conflict returns the current stored state and
-never partially appends events. Job `start`, `claim`, and `finish` operations
-return an existing compatible result when repeated and reject conflicting
-inputs.
+`GameStore.create`, `commit`, and `commit_policy_turn` atomically persist their
+state, events, and idempotency result. `commit_policy_turn` also conditionally
+completes its claimed job. A conflict returns the current stored state and never
+partially appends events or advances hidden state. Repeated job operations return
+an existing compatible result and reject conflicting inputs.
 
 The deployed implementation uses DynamoDB transactions and conditional writes.
 Local development uses SQLite with transactions and unique constraints that

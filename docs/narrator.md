@@ -33,10 +33,3 @@ The narrator configuration resolves to an allowlisted Bedrock model, prompt
 version, inference parameters, output limit, timeout, and retry limit. Games
 persist the resolved values. Public callers cannot supply arbitrary model IDs or
 prompts.
-
-> **TODO NARRATOR-002 — Define the narrator persona and prompt.** Specify
-> Dracula's voice, factuality, brevity, repetition limits, prohibited disclosure,
-> and graceful failure behavior.
->
-> **Complete when:** A versioned prompt passes representative grounding,
-> privacy, cadence, repetition, length, and tone cases using public input only.

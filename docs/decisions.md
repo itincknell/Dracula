@@ -13,47 +13,76 @@ self-play. The policy receives only its legitimate player view and a
 server-issued legal-action mask. LLM move selection, hand-authored strategy
 Oracles, and live deterministic substitutes are not part of the design.
 
+Five active policies provide opponent diversity during training. One strongest
+checkpoint is selected manually for deployment. The application exposes that
+policy as its single opponent and single difficulty mode.
+
 Model training is a separate build with its own architecture, system
-requirements, evaluation, artifacts, and cost controls. It shares the
+requirements, checkpoints, and result reporting. It shares the
 authoritative game engine and versioned tensor contract with the web
 application, not application persistence or request orchestration.
 
-## SageMaker serves and governs the policy
+## Training is local and serving uses SageMaker
 
-Approved policy artifacts are versioned in SageMaker Model Registry and served
-through SageMaker Serverless Inference. The application invokes the endpoint
-privately and revalidates every returned action. Serverless inference matches
-the expected intermittent traffic; a real-time endpoint is considered only if
-measured cold-start or latency results fail release requirements.
+Training runs locally with PyTorch on the project M3 MacBook Air. The engine,
+fixture scheduler, trajectory storage, and action sampling remain on CPU.
+Collection and optimization devices are configured independently; the initial
+configuration uses CPU collection and MPS optimization. The implementation uses
+float32, CPU trajectory buffers, and conservative minibatches for the machine's
+8 GB unified memory.
 
-The training framework and use of SageMaker Training remain evidence-driven.
-Local Apple Silicon training is preferred when it meets throughput and
-portability requirements; SageMaker Training supplies bounded cloud capacity and
-Managed Spot execution when justified.
+The manually selected policy artifact is versioned in SageMaker Model Registry
+and served through one SageMaker Serverless Inference endpoint. An IAM-restricted
+application worker invokes the endpoint and the game service revalidates every
+returned action. SageMaker Training is not used; AWS model infrastructure begins
+with the selected artifact.
 
 ## Policy version and recurrence are pinned per game
 
-Each game records one approved model version, tensor schema, inference
+Each game records one selected model version, tensor schema, inference
 configuration, and recurrent hidden-state format. These values cannot change
-during the game. The next hidden state is committed transactionally with its
-accepted opponent move; a failed or retried inference cannot advance it alone.
+during the game. The hidden state begins at game creation and persists through
+all six rounds. Its next value is committed transactionally with an accepted
+opponent move; a failed or retried inference cannot advance it alone.
 
-## Forced final placements bypass policy inference
+The SageMaker container is stateless. The application supplies the prior hidden
+state on every invocation and receives the next hidden state. The container
+returns raw logits; the game service applies the authoritative legal mask and
+the single resolved action-selection profile.
+
+## Forced final placements advance recurrent state
 
 The eighth placement of every round has one legal action. On a policy turn, the
-deterministic engine applies it directly and includes it in the terminal round
-calculation. The recurrent policy runs for the seven non-forced decisions only;
-the dealer's hidden state does not advance for its forced placement and resets
-after the round. Human interaction for the same placement remains governed by
-the frontend contract.
+policy processes the legal mask and current view to advance its hidden state;
+the deterministic engine applies the unique action. This transition is retained
+for recurrence and excluded from the actor, entropy, critic, and illegal-action
+losses. Human interaction for the same placement remains governed by the
+frontend contract.
 
 ## The policy and critic are separate models
 
 The recurrent policy selects moves without consulting a critic. A separate,
 player-agnostic critic is used only during training to estimate expected round
-return from perspective-normalized states. Critic estimates support advantage
-calculation for policy updates; the critic is neither exported nor invoked by
-the game application.
+return from a perspective-normalized observation. Critic estimates support the
+round-local advantage calculation for policy updates; the critic is neither
+exported nor invoked by the game application. It is an independently
+parameterized feed-forward value network trained by mean squared error against
+the normalized round-score difference.
+
+## Policy observations are player-relative
+
+The policy receives a canonical view in which its scoring lines are horizontal.
+King views transpose the authoritative coffin and action positions; Queen views
+retain them. Hands use fixed canonical card-index slots and never compact during
+a round. This removes role and deal-order permutations from the learned policy
+input.
+
+## Policy architecture uses structured pair scoring
+
+Policy version 1 uses shared learned card embeddings, separate hand-slot and
+coffin-position encoders, explicit card-status inputs, a 128-unit GRU, and a
+shared card-destination pair head. The head produces all 32 action logits under
+one masked softmax. The critic remains a separate training model.
 
 ## Narration is separate from gameplay
 

@@ -1,230 +1,527 @@
 # Model training
 
-This document defines the separate system used to train, evaluate, and promote
-the recurrent opponent policy. It does not participate in live game state or web
+This document defines local self-play training and model comparison for the
+recurrent opponent policy. It does not participate in live game state or web
 request handling.
 
 ## Self-play system
 
-The training environment runs the authoritative pure Python engine without AWS
-or narration. Its primary configuration dimensions are:
+The training environment runs the authoritative pure Python engine and its
+[engine–model contract](engine-model-contract.md). A collection window has five
+active policy versions and twelve lanes. Self matches are excluded.
 
-- `X`: independently initialized current player policies.
-- `Y`: concurrent seeded game streams.
+Each lane `o` owns a distinct root seed. For non-negative game counter `g`, its
+game seed is the SHA-256 digest of the UTF-8 sequence
+`dracula-fixture-v1`, that lane's root seed, and the decimal `g`, separated by
+zero bytes. The lane passes that seed to `create_game`. The lane's root seed
+separates it from every other lane; incrementing `g` starts a new full game in
+that lane.
 
-Each current player plays each seeded fixture against each current opponent.
-Fixtures expose the same deals to different opponents and different deals to
-the same opponents. Role, dealer, and play-order balancing are part of the
-fixture schedule. `X` and `Y` are increased only to the limit supported by
-measured collection, optimization, and memory throughput.
+One collection generation is the twelve lane games at one game counter. For
+each lane, every unordered pair from the five active policies plays one
+six-round game from that lane's seed. There are therefore:
 
-Seed streams may start at configured offsets by burning cards before the first
-game; the current proposal is `6 × offset` cards. A stream starts another game
-from its configured seed when one finishes. `TRAIN-004` must define whether
-that means continuation of one random stream or reproducible reseeding, prevent
-unintended overlapping fixtures, and define exactly how offsets map to deals.
+```text
+C(5, 2) × 12 = 120 engine games per collection generation
+```
+
+For an ordered pair `(A, B)`, where `A` sorts before `B` by stable policy ID,
+`A` is Queen when `((o + g) % 2) == 0`; otherwise `B` is Queen. Every pair
+therefore plays six Queen and six King games in one collection generation. Each
+player is dealer for three rounds and non-dealer for three rounds in every game.
+
+The collector derives a sampling seed for each learned action from the match
+fixture ID, learner policy version, player role, round number, and recurrent
+step index. The deck and action samples are consequently reproducible without
+exposing either seed to a policy.
+
+Each actor update accumulates four complete collection generations before model
+weights change. A five-model population therefore produces 480 engine games per
+update window. One policy plays four opponents in each of twelve lanes, yielding
+48 player-game trajectories and 1,008 actor-loss samples per generation. Four
+generations yield 192 complete trajectories and 4,032 actor-loss samples for
+that policy's PPO update.
+
+The fixture record contains collection generation, lane, game counter, lane-root
+seed digest, game seed, ordered policy pair and versions, Queen/King assignment,
+and sampling-seed derivation version. A match fixture starts both participant
+hidden states from the all-zero model state. Hidden state and policy data never
+cross from one match fixture to another.
 
 Each simulated player has a separate recurrent hidden state and receives only
-its legitimate `PolicyGameView`. The policy is invoked for the seven non-forced
-placements. The engine applies the eighth placement directly and uses the
-complete round to calculate terminal return.
+its legitimate `PolicyGameView`. The policy is invoked for every turn owned by
+that player. On the dealer's fourth turn, the engine applies the unique legal
+move and the policy invocation advances hidden state. Each player therefore has
+24 ordered recurrent state updates per game: four in each of six rounds.
 
-Collected optimizer samples are owned by the learner and exact policy version
-that generated them. Each decision record contains the observation, legal mask,
-input hidden state, selected action, old action log-probability, critic estimate,
-learner and opponent identities and versions, fixture identity, and eventual
-terminal round return. The forced placement is an environment transition, not
-an actor-loss sample.
+Twenty-one of those updates are learned decisions: four in each round in which
+the player is non-dealer and three in each round in which the player is dealer.
+The three dealer-final updates use a false actor-loss mask. Collected transitions
+are owned by the learner and exact policy version that generated them. A learned
+transition records its observation, legal mask, selected action, old action log
+probability, critic estimate, learner and opponent identities and versions,
+fixture identity, and eventual round return.
 
-Recurrent updates preserve complete per-player decision sequences or carry the
-exact initial hidden state for a fragment. Minibatches mix fixtures, opponents,
-roles, dealers, and game stages while retaining learner/version ownership.
+An optimizer batch contains complete, ordered player-game trajectories generated
+by one learner policy version. Its members span all twelve lanes and all four
+opponents. The policy is replayed from the all-zero game state across all 24
+updates, without detaching hidden state at a round boundary. Actor trajectories
+remain in their generating policy-version bucket. The shared critic trains from
+the aggregate state/return rows collected in the window.
 
 ## Learning objective
 
 The player policy and critic are conceptually and operationally separate:
 
 - The recurrent policy produces masked move probabilities and selects actions.
-- One shared, player-agnostic critic estimates expected terminal round return
-  from a perspective-normalized state and trains from states collected across
-  all current players, opponents, and seeded fixtures.
+- One shared, player-agnostic critic estimates the expected normalized
+  round-local return from a perspective-normalized observation. It trains from
+  states collected across all current players, opponents, and seeded fixtures.
 - The critic is used only to estimate advantages during training. It is not an
   input to policy action selection and is not deployed with the policy.
 
-The deterministic engine supplies one terminal round return to each player
-after the forced placement. Its exact definition and normalization remain open;
-the current candidate is an opposing value derived from the two rules-defined
-round results. The training design uses *return* for this signal to distinguish
-it from model logits and rules-defined scores.
+The engine supplies one rules-defined round result for both players after the
+eighth placement. For player `p` in round `r`, the return is:
 
-The critic has its own regression objective against observed or bootstrapped
-returns. A move's advantage is derived from the terminal return and critic
-estimates; the critic does not directly label a move. Terminal Monte Carlo and
-generalized advantage estimation are the candidate estimators.
+```text
+R_r,p = (round_score_r,p - round_score_r,other_player) / 150
+```
 
-PPO is the candidate policy-update algorithm. For each collected action it
-compares the action probability under the updated policy with the saved
-probability under the generating policy. The clipped surrogate limits a single
-update from changing that ratio too far. Each policy's actions contribute only
-to that policy's learner update; both sides may contribute to their respective
-learner batches when both are current policies.
+Every learned decision owned by `p` in round `r` receives `R_r,p`. The maximum
+possible line and round score is 150, so the return lies in `[-1, 1]`. This
+preserves the rules-defined score difference while giving policy and critic
+targets a fixed scale.
 
-The combined training configuration includes distinct terms for:
+At collection time, the critic estimate `V_old(observation_t)` is stored with
+each learned decision. Its fixed actor advantage is
+`A_t = R_r,p - V_old(observation_t)`. The advantage is an observed round result
+minus its expected value; it is not a deterministic move score. Critic updates
+regress against `R_r,p` independently. Later-round losses can train recurrent
+representations through retained hidden state, while an earlier action's policy
+term receives only its own round's return.
 
-- PPO policy loss using estimated advantages.
-- Critic value regression loss.
-- Optional entropy regularization over legal actions.
-- Thresholded illegal-probability penalty measured before the hard output mask.
-- A scheduled policy round-objective weight.
+## Critic model
 
-The critic initially trains on the broad random play produced by untrained
-policies. The policy round-objective weight begins at zero or a low value and
-increases after a configured critic burn-in condition. The critic continues to
-train throughout self-play. Burn-in exit, weight schedule, PPO clip range,
-target KL, update epochs, value coefficient, entropy coefficient, illegal-loss
-threshold and coefficient, gradient clipping, and optimizer settings remain
-configuration decisions.
+The critic is an independently parameterized feed-forward nonlinear regressor.
+It receives `observation: bool[875]` and produces one unconstrained scalar. It
+uses the policy's structured input decomposition with separate weights:
+
+```text
+card embedding:       54 × 32
+hand slot encoder:    (32 card + 8 slot + 1 occupied) -> 64, for four slots
+coffin cell encoder:  (32 card + 8 position + 1 occupied) -> 64, for nine cells
+status encoder:       162 -> 64
+context encoder:      11 -> 16
+fused state:          912 -> 128 -> 64 -> 1
+```
+
+The first fused layer uses GELU followed by 128-feature layer normalization;
+the second uses GELU; the value head is linear. This model has **143,273
+trainable parameters**. It does not share actor weights, use a recurrent state,
+or consume the legal mask.
+
+For `N` learned decisions in one learner batch, its loss is:
+
+```text
+L_critic = (1 / N) * Σ_t (V(observation_t) - R_round,t)^2
+```
+
+Mean squared error makes `V` estimate the conditional expected return. The
+round return already has a fixed `[-1, 1]` scale, so critic targets are not
+normalized again within a batch.
+
+## Policy update and loss schedule
+
+PPO updates one learner policy version at a time. For every learned action, the
+collector stores the masked behavior log probability `log_prob_old,t`. During an
+update, the policy replays the complete ordered trajectory from its all-zero
+hidden state and calculates `log_prob_new,t` under the current weights:
+
+```text
+ratio_t = exp(log_prob_new,t - log_prob_old,t)
+advantage_t = R_round,t - V_old(observation_t)
+advantage_normalized_t = (advantage_t - mean(advantage)) / (std(advantage) + 1e-8)
+L_PPO = -(1 / N) * Σ_t min(
+    ratio_t * advantage_normalized_t,
+    clip(ratio_t, 0.8, 1.2) * advantage_normalized_t
+)
+```
+
+The sums in `L_critic` and `L_PPO` include the 21 learned decisions in each
+player-game trajectory. The three forced recurrent transitions remain in the
+GRU unroll and have a false actor-loss mask. Actor advantages remain fixed for
+all four PPO epochs; critic predictions are recomputed for each critic update.
+
+For the same learned steps, let `q_t` be the 32-way softmax of the raw policy
+logits before hard legality masking, and let `m_t` be the Boolean legal mask.
+The illegal probability and thresholded penalty are:
+
+```text
+p_illegal,t = Σ_i q_t,i * (1 - m_t,i)
+L_illegal = (1 / N) * Σ_t max(0, p_illegal,t - 0.001)^2
+```
+
+Entropy uses the hard-masked policy distribution over legal actions:
+
+```text
+H = (1 / N) * Σ_t -Σ_i policy_probability_t,i * log(policy_probability_t,i)
+L_policy = actor_weight * L_PPO - entropy_coefficient * H + 1.0 * L_illegal
+```
+
+The critic begins on broad random play. `actor_weight` is zero until both of
+these conditions hold: at least 10,000 completed training rounds have been
+collected, and the critic's mean squared error improves by at least five percent
+over a zero-value predictor on three consecutive held-out collection windows.
+It then increases linearly from zero to one during the next 10,000 completed
+rounds. `entropy_coefficient` is `0.005` through critic burn-in and the actor
+ramp, then `0.001` after `actor_weight` reaches one. The illegal penalty and
+entropy term remain active throughout burn-in.
+
+The policy optimizer is Adam with learning rate `3e-4`; the critic optimizer is
+Adam with learning rate `1e-3`. Both use beta values `(0.9, 0.999)`, epsilon
+`1e-8`, and global gradient-norm clipping at `0.5`. Each learner batch receives
+four PPO epochs. Each epoch applies both policy and critic updates. It shuffles
+complete trajectories and preserves all 24 ordered recurrent steps. The target
+laptop starts with 16 player-game trajectories per minibatch; the configured
+maximum is 64. An update stops before a further epoch when
+`mean(log_prob_old - log_prob_new)` across learned steps reaches `0.015`.
+
+Training samples the hard-masked policy at temperature `1.0`. Exploration comes
+from the entropy term; action sampling does not inject separate random moves.
 
 The training environment supplies no manually coded strategic move score. The
 deterministic engine supplies legal actions and terminal rules outcomes only.
 
-## Population lifecycle
+## Integrated training iteration
 
-Current policies train against other current policies. At a configured cadence,
-performance is estimated on controlled fixtures. The lowest-performing eligible
-policies may be archived and replaced by randomly initialized policies. This
-preserves opponent variety and introduces learners under different critic and
-population states.
+One training iteration collects four complete collection generations from a
+frozen active population, updates each policy and the shared critic, then runs
+one held-out evaluation pass. No policy or critic weight changes while a
+collection window is in progress.
 
-Replacement must not use noisy short-window ranks as fact. The design must set
-minimum evidence, tie handling, replacement count and cadence, archive metadata,
-critic behavior across replacement, and whether archived policies remain
-evaluation references or active opponents. External random action injection,
-temperature, and entropy are alternative exploration controls and are not yet
-selected.
+### Iteration boundary
 
-## Training suite
+At the start of an iteration, the trainer snapshots the five active policy
+versions and the critic parameters. These are the behavior policies and
+`V_old` critic for the entire window. Let `g_0` be the next game counter in
+every lane. The window contains game counters `g_0` through `g_0 + 3`.
 
-The suite will provide:
+For every counter and lane, the trainer creates the ten unordered pairs of the
+five policy IDs and assigns Queen with the established `((o + g) % 2) == 0`
+rule. It runs the resulting full six-round fixtures using the policy and critic
+snapshots. A fixture may execute concurrently with another fixture, provided
+that its engine state, two hidden states, sampling stream, and trajectory data
+remain independent.
 
-- Vectorized environment collection and legal-action masking.
-- Population creation, matchmaking, checkpointing, and resumption.
-- Recurrent trajectory storage with policy versions and behavior probabilities.
-- Separate policy and critic optimization, validation, periodic tournaments,
-  and regression detection.
-- Structured metrics and reproducible configuration snapshots.
-- Artifact export, evaluation attachment, and Model Registry submission.
+The window has these fixed sizes:
 
-Every run records source, engine, rules, tensor schema, model architecture,
-framework, hardware, seeds, population, opponent-selection policy,
-hyperparameters, checkpoints, duration, and cost.
+| Quantity | Per policy | Entire population |
+| --- | ---: | ---: |
+| Complete player-game trajectories | 192 | 960 |
+| Recurrent state updates | 4,608 | 23,040 |
+| Learned action and critic rows | 4,032 | 20,160 |
+| Engine games | — | 480 |
 
-## Local compute
+Each policy's 192 trajectories contain all four opponents, all twelve lanes,
+and all four game counters. The 20,160 critic rows are the learned rows from
+both participants in every engine game. Forced recurrent transitions remain in
+the 23,040 state updates but contribute no actor or critic row.
 
-The first benchmark compares native CPU execution, PyTorch MPS, TensorFlow with
-`tensorflow-metal`, and MLX on the actual environment-collection and
-recurrent-update workload. It measures complete rounds per second, policy-update
-throughput, memory, numerical stability, portability, and implementation effort.
+### Fixture collection
 
-The selected local environment must use native Apple Silicon Python and support
-long-running resumable jobs. Local checkpoints use the same logical artifact
-metadata as cloud training.
+For each fixture, the trainer creates the game from its game seed, initializes
+one zero hidden state for each participant, and runs the engine to terminal
+state. For an active player turn, it performs this sequence:
 
-## AWS training
+```text
+context = build_policy_turn_context(engine_state, active_player)
+policy = behavior_policy[active_player]
+hidden_out, raw_logits = policy(context.input, hidden_in[active_player])
 
-SageMaker Training is the cloud execution target when local throughput is
-insufficient or a cloud parity run is required. The training image is stored in
-ECR; checkpoints, metrics, and final artifacts are stored in S3 and CloudWatch.
-Managed Spot Training is preferred for interruptible long runs after checkpoint
-recovery is verified.
+if context.kind is learned:
+    probabilities = masked_softmax(raw_logits, context.input.legal_mask, T=1.0)
+    action = sample(probabilities, fixture-derived sampling seed)
+    critic_value = V_old(context.input.observation)
+    move = context.action_table[action]
+else:
+    action = the unique legal action index
+    critic_value = absent
+    move = context.forced_move
 
-Training jobs have explicit maximum runtime, instance count, checkpoint
-interval, and cost metadata. SageMaker Studio is not required for unattended
-jobs and must not remain running as an incidental dependency.
+transition = apply_move(engine_state, move)
+record the ordered policy transition
+engine_state = transition.state
+hidden_in[active_player] = hidden_out
+```
 
-## Evaluation and promotion
+The recorded transition contains the pre-action input, behavior version,
+selected action, masked behavior log probability when learned, and the frozen
+critic estimate when learned. The two hidden states remain local to the fixture
+and are discarded after its ordered trajectories have been assembled.
 
-Evaluation tournaments include random legal play, independently trained current
-policies, and a fixed historical checkpoint pool. Current-versus-current results
-alone are not promotion evidence. Reports separate Queen/King role, dealer,
-round, policy version, invalid outputs, score differential, win rate, latency,
-and inference stability.
+When the eighth move produces an `EngineRoundResult`, the trainer calculates
+both rules-defined round returns. It attaches each player's return to that
+player's learned transitions in the completed round and advances the engine to
+the next round. A terminal sixth-round result completes the fixture. The
+trainer rejects a fixture if it does not produce exactly 24 ordered transitions
+per participant, 21 learned rows per participant, and six completed round
+results.
 
-A candidate that passes the selected thresholds is registered as a versioned
-model package in SageMaker Model Registry. Promotion records the approved model
-package and serving configuration. Production games pin that exact version for
-their lifetime.
+### Batch assembly
 
-> **TODO TRAIN-001 — Select the local ML stack and system requirements.** Build
-> the representative CPU, PyTorch MPS, TensorFlow Metal, and MLX benchmark and
-> record supported OS, Python, framework, memory, and toolchain versions.
->
-> **Complete when:** Results identify the default local framework and a portable
-> cloud path using end-to-end rounds-per-second and update-throughput evidence.
+After all 480 fixtures finish, the trainer assembles five actor buckets keyed
+by their behavior policy version. Each contains 192 complete 24-step
+trajectories and 4,032 learned rows. For each bucket, it calculates
+`R_round - V_old(observation)` and standardizes those 4,032 advantages once.
+The stored behavior log probabilities, frozen critic estimates, returns, and
+standardized advantages remain unchanged for all PPO epochs.
 
-> **TODO TRAIN-002 — Define terminal return and the critic.** Select the terminal
-> round-return formula and normalization, perspective transform, critic inputs
-> and architecture, value targets, recurrence behavior, burn-in workload, and
-> burn-in exit criteria.
->
-> **Complete when:** Equations and deterministic fixtures map complete rounds to
-> both players' returns, critic targets, and perspective-normalized inputs
-> without ambiguity.
+The shared critic pool contains the 20,160 learned observation/return pairs
+from all five actor buckets. It carries no recurrent state and may mix policy
+versions in a regression minibatch.
 
-> **TODO TRAIN-003 — Define the policy update.** Confirm or replace PPO; define
-> advantage estimation, old-policy data, clip range, target KL, update epochs,
-> entropy, raw illegal-probability penalty, round-objective ramp, sequence
-> handling, optimizer, and numerical safeguards.
->
-> **Complete when:** Equations, tensor shapes, pseudocode, and deterministic
-> cases specify one separate critic update and one learner-policy update without
-> implying that the policy consults the critic during action selection.
+### Optimization
 
-> **TODO TRAIN-004 — Define seeded collection and matchmaking.** Specify `X` and
-> `Y`, seed continuation or reseeding, burn offsets, fixture identity, role and
-> dealer balancing, full versus sampled round robin, batch mixing, and exact
-> trajectory fields.
->
-> **Complete when:** A small seeded schedule reproduces every deal and matchup,
-> avoids unintended fixture overlap, and attributes every action to its learner,
-> opponent, versions, behavior probability, and terminal return.
+The trainer performs four optimization passes over the assembled window. In
+each pass it first processes every non-halted actor bucket in stable policy-ID
+order. It shuffles complete trajectories, partitions them using the configured
+trajectory minibatch size, replays each trajectory from its zero hidden state,
+and preserves all 24 recurrent steps in order. The policy loss uses the three
+loss masks and coefficients defined above. Only the policy represented by that
+bucket receives gradients.
 
-> **TODO TRAIN-005 — Define population lifecycle and exploration.** Select
-> initialization, ranking evidence, replacement eligibility and cadence,
-> archive retention and use, critic treatment of replacements, exploration
-> controls, and collapse/regression response.
->
-> **Complete when:** A seeded population schedule deterministically identifies
-> evaluation, archive, replacement, and exploration actions from recorded
-> results and configuration.
+After an actor pass, the trainer calculates its approximate KL over all learned
+rows in that actor bucket. If it reaches `0.015`, that policy takes no further
+PPO passes in this iteration. Its already collected data remains unchanged.
 
-> **TODO TRAIN-006 — Specify one end-to-end training iteration.** Integrate the
-> tensor contract, seven-decision trajectories, collector, critic update, policy
-> update, and population schedule into one ordered dataflow with ownership and
-> version boundaries.
->
-> **Complete when:** Executable pseudocode and a deterministic miniature run
-> specify every state transition and tensor from deal creation through updated
-> policy and critic checkpoints.
+Each optimization pass also performs one shuffled regression pass over the
+shared critic pool. Critic minibatches use the learned rows from the same number
+of complete player-game trajectories as the actor configuration. They minimize
+the stated MSE against the stored round returns. The critic completes all four
+regression passes even when one or more actor policies stop early; its updated
+predictions do not replace the stored `V_old` values in the actor objective.
 
-> **TODO TRAIN-007 — Specify the training suite and resumption contract.** Define
-> process boundaries, configuration schema, checkpoint contents, metrics,
-> failure recovery, and artifact layout.
->
-> **Complete when:** A stopped local run resumes without losing policy or critic
-> models, optimizers, schedulers, random generators, seeded streams, population,
-> matchmaking, or evaluation state.
+After optimization, every active policy receives a new policy version and the
+critic receives a new critic version. New collection begins only after all six
+updated versions are available. No game, recurrent state, actor trajectory, or
+critic target crosses this iteration boundary.
 
-> **TODO TRAIN-008 — Finalize SageMaker training and cost controls.** Choose the
-> container, instance candidates, Spot behavior, storage, IAM, network boundary,
-> runtime caps, checkpoint interval, and budget alarms.
->
-> **Complete when:** A short parity job reproduces local behavior, restores from
-> an interrupted checkpoint, and emits a complete itemized cost record.
+### Evaluation
 
-> **TODO EVAL-001 — Define competence and promotion criteria.** Select tournament
-> opponents, seeds, sample sizes, metrics, uncertainty reporting, regression
-> limits, and approval thresholds.
->
-> **Complete when:** The protocol can reject a deliberately regressed policy and
-> promote a candidate without reference to current-versus-self win rate alone.
+The trainer then evaluates the five updated policies on the configured held-out
+fixture roots. Evaluation uses the same full-game role balancing and
+temperature-one masked sampling as collection, with sampling seeds derived from
+the held-out fixture identity. It starts fresh hidden states for every game.
+The pass reports each policy's victory percentage and does not contribute rows
+to the next training iteration.
+
+### Reference run
+
+With five policies and twelve lanes, one iteration beginning at `g_0` runs the
+following sequence:
+
+```text
+collect g_0, g_0 + 1, g_0 + 2, and g_0 + 3
+    4 counters × 12 lanes × C(5, 2) pairs = 480 full engine games
+    per policy: 4 opponents × 12 lanes × 4 counters = 192 trajectories
+    per policy: 192 trajectories × 21 learned steps = 4,032 actor rows
+
+freeze the five 4,032-row actor objectives and assemble 20,160 critic rows
+run up to four PPO passes for each policy and four MSE passes for the critic
+evaluate the resulting five policy versions on the held-out fixture set
+```
+
+## Manual evaluation and population changes
+
+The five active policies train only against each other. Evaluation uses a
+configured held-out fixture set with root seeds distinct from collection lanes.
+An evaluation pass plays each active policy against every other active policy
+over that fixture set with the same Queen/King balancing rule as collection.
+Each game starts new participant hidden states and executes all six rounds.
+
+The ranking metric is victory percentage:
+
+```text
+victory_percentage = (wins + 0.5 × ties) / completed_games
+```
+
+The configured evaluation window defaults to one post-update evaluation pass.
+
+Population changes occur manually between training runs. Victory percentages
+support the decision to archive a high-performing checkpoint as a regression
+reference or replace an active policy with a randomly initialized policy.
+Collection then resumes with five policies.
+
+The five-policy population is a training mechanism, not a set of product
+difficulty levels. When training concludes, one checkpoint is manually selected
+as the strongest deployment candidate. Candidate comparisons reuse the same
+held-out fixtures, roles, and action-selection profile so deck ordering does not
+favor one candidate. Victory percentage remains the primary ranking metric;
+per-fixture results remain available for manual review.
+
+## Local ML stack
+
+Training uses native arm64 Python 3.12 and PyTorch. The deterministic engine,
+fixture scheduler, action sampling, and trajectory storage run on CPU. Policy
+collection and policy and critic optimization select a PyTorch device through
+configuration.
+
+The target machine has 8 GB of unified memory. Version 1 therefore uses
+`float32`, processes one learner policy at a time, keeps full collection buffers
+on CPU, transfers only the active minibatch to the optimization device, and
+uses eager PyTorch execution with in-process data loading.
+
+The default configuration uses CPU for collection and MPS for optimization.
+Collection consists of small recurrent calls interleaved with CPU engine work;
+optimization performs the larger batched forward and backward passes that can
+benefit from MPS. Both phases use the same PyTorch implementation.
+
+The trajectory minibatch is 16 complete player games. Supported values are one
+through 64; changes are made explicitly between runs after measuring the full
+24-step backward pass on the target machine.
+
+The initial benchmark measures collection and optimization separately on CPU
+and MPS. It records phase duration and throughput, process memory, MPS memory,
+swap growth, finite losses and gradients, and numerical agreement for logits,
+critic values, and hidden states. The committed device configuration must
+complete a sustained iteration without unsupported operations, excessive swap,
+or material thermal degradation.
+
+## Local training suite
+
+The suite runs as one process with ordered collection, optimization, evaluation,
+and commit phases. Collection seals the complete training window before weights
+change. Optimization updates the five policies sequentially, updates the shared
+critic, validates all six models, and writes one population checkpoint.
+Evaluation reads that checkpoint and produces the manual comparison report.
+
+### Configuration
+
+A run reads one TOML file. The suite resolves defaults and `auto` device values
+once at startup and writes an immutable JSON configuration manifest. At minimum,
+the configuration contains:
+
+| Section | Fields |
+| --- | --- |
+| Run | Run ID, root seed, iteration count, output directory |
+| Population | Five policy IDs and checkpoints, critic checkpoint |
+| Fixtures | Twelve collection lane roots, held-out evaluation roots, next game counter |
+| Compute | Collection device, optimization device, trajectory minibatch size |
+| Training | Optimizer settings, PPO settings, critic burn-in and actor-weight schedule |
+| Versions | Rules, engine, observation, action map, policy, critic, and training formats |
+
+The compute settings are:
+
+```toml
+[compute]
+collection_device = "cpu"       # cpu | mps | auto
+optimization_device = "mps"     # cpu | mps | auto
+trajectory_batch_size = 16      # 1..64 complete trajectories
+```
+
+`auto` selects MPS when it is available and passes a policy-and-critic operation
+probe; otherwise it selects CPU. The resolved device remains fixed for the run.
+An out-of-memory failure does not change the batch size automatically.
+
+Random operations use independently derived seeds. Model initialization,
+fixture action sampling, trajectory shuffling, critic-row shuffling, and
+evaluation sampling each use the run root seed, a versioned namespace, and
+stable operation identifiers. Resumption therefore reconstructs the same
+streams without depending on an unrecorded mutable generator.
+
+### Memory and process boundaries
+
+The suite retains observations and masks as Boolean or unsigned-byte CPU
+tensors and converts the active minibatch to `float32` at the model boundary.
+Complete trajectories remain ordered and on CPU. Only the policy or critic
+being optimized and its active minibatch occupy the optimization device.
+
+The initial process has no worker processes or multiprocessing data loader.
+Collection may batch simultaneously available policy views while preserving
+each fixture's engine, hidden states, and sampling seed. Policy optimization
+processes one learner bucket at a time. Critic optimization uses the shared
+CPU row pool.
+
+### Artifacts and checkpoints
+
+Each run uses this logical layout:
+
+```text
+runs/<run-id>/
+  resolved-config.json
+  state.json
+  checkpoints/<iteration>/iteration-start.pt
+  checkpoints/<iteration>/post-update.pt
+  collections/<iteration>.pt
+  metrics/<iteration>.json
+  reports/<iteration>.md
+```
+
+`state.json` identifies the last committed phase and references artifacts by
+content hash. Artifact files are written to a temporary name, validated, and
+atomically renamed before `state.json` advances.
+
+An iteration-start checkpoint contains the five policy states and optimizer
+states, critic state and optimizer state, policy and critic versions, training
+and schedule counters, lane roots and next game counter, seed-derivation
+version, and resolved configuration and contract versions.
+
+The sealed collection artifact contains the five ordered actor buckets, the
+shared critic rows, fixture identities, behavior-policy versions, selected
+actions, old log probabilities, frozen critic estimates, returns, and masks
+required to reproduce the update. It contains no retained fixture hidden
+states. The artifact is deleted after the iteration and its report commit
+successfully unless retained explicitly for diagnosis.
+
+The post-update checkpoint contains the same resumable training state with all
+six updated model versions and the next game counter. A manually archived
+checkpoint contains the selected policy artifact, its model and tensor
+contracts, its resolved training manifest, and the comparison report that
+motivated retention.
+
+### Recovery and commit rules
+
+Recovery begins at a complete phase boundary:
+
+- A collection failure reloads the iteration-start checkpoint and recollects
+  the four-generation window.
+- An optimization failure reloads the iteration-start checkpoint and sealed
+  collection, then repeats all policy and critic updates.
+- An evaluation failure reloads the post-update checkpoint and repeats
+  evaluation.
+
+The suite does not resume a partial game or minibatch. A post-update population
+becomes the active population only after all policy and critic states are
+finite, expected tensor shapes and version contracts match, the checkpoint
+commits, and the next game counter advances. Any validation failure leaves the
+prior committed population active.
+
+### Metrics and comparison report
+
+Each iteration records:
+
+- Victory percentage and mean round return for each policy, including Queen and
+  King splits.
+- Policy loss, entropy, approximate KL, pre-mask illegal probability, and
+  gradient norm for each policy.
+- Critic mean squared error, zero-predictor mean squared error, and gradient
+  norm.
+- Collection, optimization, and evaluation duration and throughput.
+- Peak process memory, peak MPS allocation, swap growth, and validation
+  failures.
+
+Metrics are stored as structured JSON. The Markdown report identifies the run,
+population and contract versions, resolved compute configuration, victory
+percentages, training diagnostics, runtime and memory measurements, and any
+failed phase. It supports manual checkpoint archiving and random policy
+replacement; it does not select or replace a policy.
+
+### Verification
+
+The suite is accepted after a smoke configuration and one full five-policy,
+twelve-lane, four-generation iteration complete on the target laptop. Recovery
+tests interrupt collection, optimization, and evaluation and confirm that each
+phase restarts from its documented boundary. Repeated recovery produces the
+same fixture schedule and committed model versions, with neural values matching
+the configured numerical tolerance. The full run must avoid sustained swap
+growth and produce a complete comparison report.
