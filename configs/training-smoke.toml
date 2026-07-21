@@ -1,0 +1,25 @@
+[run]
+run_id = "dracula-smoke"
+root_seed = "dracula-smoke-root"
+iteration_count = 1
+output_directory = "../runs"
+profile = "smoke"
+
+[population]
+policy_ids = ["policy-0", "policy-1"]
+
+[fixtures]
+collection_lane_count = 1
+collection_generations = 1
+collection_lane_roots = ["smoke-collection-lane"]
+held_out_lane_count = 1
+held_out_generations = 1
+held_out_lane_roots = ["smoke-held-out-lane"]
+
+[compute]
+collection_device = "cpu"
+optimization_device = "cpu"
+trajectory_batch_size = 1
+
+[training]
+actor_weight_override = 1.0

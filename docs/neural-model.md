@@ -9,11 +9,12 @@ model comparison belong in [model training](model-training.md).
 ## Policy boundary
 
 The policy is a recurrent neural network. On each turn owned by a
-policy-controlled player, it consumes the current `PolicyGameView`, the
-legal-action mask, and its prior hidden state. It returns raw action logits and
-a new hidden state. The engine selects or supplies the resulting move. The
-policy does not receive a move log because the current coffin and card-status
-tensors encode the current game state.
+policy-controlled player, it consumes the current player-relative `PolicyInput`
+and its prior hidden state. `PolicyInput` contains the observation and
+legal-action mask. The policy returns raw action logits and a new hidden state.
+The engine selects or supplies the resulting move. The policy does not receive
+a move log because the current coffin and card-status tensors encode the
+current game state.
 
 The policy never receives the human hand, stock order, authoritative hidden-card
 locations, game seed, scoring implementation, or persistence access. The game
@@ -32,11 +33,11 @@ coffin orientation and King uses its transpose, so a policy player's scoring
 lines are always the three horizontal rows of its view. The action mapping uses
 the same transform. The policy therefore receives no Queen/King role field.
 
-The fixed card-index order is Clubs, Diamonds, Hearts, Spades; within each suit
-the ranks are Ace, 2 through 10, Jack, Queen, King; the two remaining indexes
-are `Vampire-0` and `Vampire-1`. The Vampire indexes distinguish physical cards
-only; they have identical game meaning. Every card-indexed tensor uses this
-order.
+The fixed card-index order is `AC` through `KC`, `AD` through `KD`, `AH`
+through `KH`, `AS` through `KS`, followed by `V1` and `V2`, as defined by the
+[engine–model contract](engine-model-contract.md#card-identity-and-order). The
+Vampire indexes distinguish physical cards only; they have identical game
+meaning. Every card-indexed tensor uses this order.
 
 For global grid coordinates `(row, column)`, Queen uses `(row, column)` and
 King uses `(column, row)`. In row-major index form, the King transform is
@@ -128,6 +129,12 @@ Serving invokes the policy once for each policy-controlled turn, including a
 forced recurrent transition. Training replays ordered 24-step player-game
 trajectories. Its state-update mask is true at every step; its actor-loss mask
 is false at the three forced recurrent transitions.
+
+Collection records the behavior policy's hidden input and output at every step.
+During PPO, the current policy begins from the all-zero state and recomputes its
+own hidden sequence across all 24 steps for backpropagation through time. Stored
+behavior hidden states validate deterministic replay and are not recurrent
+inputs to the updated policy.
 
 ## Validation
 
@@ -301,13 +308,16 @@ position embeddings sample from a zero-mean normal distribution with standard
 deviation `1 / sqrt(embedding_width)`. GRU input matrices use Xavier-uniform
 initialization, recurrent matrices use orthogonal initialization per gate, and
 GRU biases initialize to zero. Layer-normalization scales initialize to one and
-biases to zero. Dropout is zero.
+biases to zero. Dropout is zero. Each model receives its deterministic
+initialization seed from the `dracula-model-initialization-v1` namespace defined
+in [model training](model-training.md#deterministic-seed-namespaces).
 
 ### Acceptance
 
 The required tests cover exact forward-pass shapes, parameter count,
 Queen/King transpose equivalence, canonical-hand permutation equivalence,
 action-table and legal-mask agreement, forced-transition routing, game-scoped
-hidden-state continuity, finite forward/backward values, and actor-loss masking
-for 24-step player-game batches. The local benchmark measures full-iteration
-throughput and memory on the target laptop.
+hidden-state continuity, behavior-hidden replay validation, current-policy
+hidden recomputation from zero, finite forward/backward values, and actor-loss
+masking for 24-step player-game batches. The local benchmark measures
+full-iteration throughput and memory on the target laptop.

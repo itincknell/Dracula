@@ -14,10 +14,15 @@ Vampires are shuffled into the deck and dealt as ordinary cards.
 - One shared 3×3 layout, called the **coffin**.
 - A running score for each player.
 
+The canonical card IDs are `AC` through `KC`, `AD` through `KD`, `AH`
+through `KH`, `AS` through `KS`, followed by `V1` and `V2`. This is also their
+canonical order. `V1` and `V2` have identical rules behavior.
+
 ## Setup
 
 1. Shuffle all 54 cards, including both Vampires, to form the stock.
-2. Select the first dealer using the game seed.
+2. Select the first dealer deterministically from a dealer seed derived from
+   the game seed independently of the shuffle seed.
 3. Before the first round, the human player chooses a scoring direction:
    - **Queen:** horizontal rows.
    - **King:** vertical columns.
@@ -28,10 +33,16 @@ The deal alternates each round, so each player deals three times.
 
 ## Dealing a round
 
-1. Deal four private cards to each player.
-2. Place the next stock card face up in the center of the coffin. This is the
+Starting at the front of the stock:
+
+1. Deal the next two cards to the non-dealer.
+2. Deal the next two cards to the dealer.
+3. Deal the next two cards to the non-dealer.
+4. Deal the next two cards to the dealer.
+5. Sort each completed hand by canonical card order.
+6. Place the next stock card face up in the center of the coffin. This is the
    first nail.
-3. Leave the remaining stock face down without changing its order.
+7. Leave the remaining stock face down without changing its order.
 
 There is no draw during a round. A player's hand is private. The coffin, played
 cards, scores, dealer, and scoring directions are public. An unplayed Vampire is

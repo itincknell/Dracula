@@ -1,0 +1,38 @@
+[run]
+run_id = "dracula-full"
+root_seed = "replace-with-run-seed"
+iteration_count = 1
+output_directory = "../runs"
+profile = "full"
+
+[population]
+policy_ids = ["policy-0", "policy-1", "policy-2", "policy-3", "policy-4"]
+
+[fixtures]
+collection_lane_count = 12
+collection_generations = 4
+collection_lane_roots = [
+  "collection-lane-00", "collection-lane-01", "collection-lane-02",
+  "collection-lane-03", "collection-lane-04", "collection-lane-05",
+  "collection-lane-06", "collection-lane-07", "collection-lane-08",
+  "collection-lane-09", "collection-lane-10", "collection-lane-11",
+]
+held_out_lane_count = 12
+held_out_generations = 1
+held_out_lane_roots = [
+  "held-out-lane-00", "held-out-lane-01", "held-out-lane-02",
+  "held-out-lane-03", "held-out-lane-04", "held-out-lane-05",
+  "held-out-lane-06", "held-out-lane-07", "held-out-lane-08",
+  "held-out-lane-09", "held-out-lane-10", "held-out-lane-11",
+]
+
+[compute]
+collection_device = "cpu"
+optimization_device = "cpu"
+trajectory_batch_size = 16
+
+[training]
+critic_validation_improvement = 0.05
+critic_validation_consecutive_windows = 3
+critic_minimum_collected_rounds = 10000
+actor_ramp_collected_rounds = 10000

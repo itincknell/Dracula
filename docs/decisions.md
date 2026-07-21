@@ -6,6 +6,14 @@ Pure Python code owns dealing, legal moves, validation, transitions, scoring,
 and factual effects. The policy may return an action and the narrator may
 paraphrase supplied facts, but neither can mutate or recalculate game truth.
 
+The canonical deck order is `AC` through `KC`, `AD` through `KD`, `AH` through
+`KH`, `AS` through `KS`, then `V1` and `V2`. Each round deals pairs to the
+non-dealer, dealer, non-dealer, and dealer before taking the next card as the
+center; completed hands sort by canonical card index. Deterministic randomness
+uses versioned SHA-256 seed namespaces, a SHA-256 counter stream, unbiased
+`randbelow`, and Fisher-Yates rather than a language-runtime shuffle. Initial
+dealer selection uses an independent derived seed.
+
 ## A trained recurrent policy plays Dracula
 
 Dracula's moves are selected by a recurrent neural policy trained through
@@ -31,6 +39,11 @@ configuration uses CPU collection and MPS optimization. The implementation uses
 float32, CPU trajectory buffers, and conservative minibatches for the machine's
 8 GB unified memory.
 
+The default held-out pass uses twelve lane roots and one generation, producing
+120 games and 5,040 learned critic-validation rows. Critic burn-in requires a
+configurable five-percent MSE improvement over zero prediction for three
+consecutive windows after at least 10,000 collected training rounds.
+
 The manually selected policy artifact is versioned in SageMaker Model Registry
 and served through one SageMaker Serverless Inference endpoint. An IAM-restricted
 application worker invokes the endpoint and the game service revalidates every
@@ -49,6 +62,11 @@ The SageMaker container is stateless. The application supplies the prior hidden
 state on every invocation and receives the next hidden state. The container
 returns raw logits; the game service applies the authoritative legal mask and
 the single resolved action-selection profile.
+
+Training transitions retain the behavior policy's hidden input and output as
+replay evidence. PPO begins the current policy at zero and recomputes all 24
+hidden states for backpropagation; stored behavior states are not supplied to
+updated weights.
 
 ## Forced final placements advance recurrent state
 

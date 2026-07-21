@@ -10,7 +10,9 @@ Every training run and policy artifact records this version tuple:
 
 ```text
 rules_version
+card_schema_version
 engine_version
+randomness_schema_version
 observation_schema_version
 action_schema_version
 policy_architecture_version
@@ -23,6 +25,72 @@ SHA-256 digest of the UTF-8 canonical JSON serialization of the versioned
 `EngineState`, with fixed field order and card IDs in their stored order.
 Fixtures use the fingerprint to verify deterministic replay and cross-runtime
 agreement.
+
+## Card identity and order
+
+The engine uses these 54 card IDs in this exact order:
+
+```text
+AC, 2C, 3C, 4C, 5C, 6C, 7C, 8C, 9C, 10C, JC, QC, KC,
+AD, 2D, 3D, 4D, 5D, 6D, 7D, 8D, 9D, 10D, JD, QD, KD,
+AH, 2H, 3H, 4H, 5H, 6H, 7H, 8H, 9H, 10H, JH, QH, KH,
+AS, 2S, 3S, 4S, 5S, 6S, 7S, 8S, 9S, 10S, JS, QS, KS,
+V1, V2
+```
+
+The zero-based card index is the position in this list. `V1` and `V2` are
+distinct physical cards with identical Vampire behavior. Hands, card-indexed
+tensors, serialized engine state, and fingerprints all use these IDs and this
+order.
+
+## Deterministic seeds and shuffle
+
+All deterministic random streams use one seed-derivation function:
+
+```text
+derive_seed(namespace, component_1, ..., component_n) =
+    SHA-256(UTF8(namespace) || NUL || UTF8(component_1) || ...
+            || NUL || UTF8(component_n))
+```
+
+The namespace is the first component and contains its version, such as
+`dracula-engine-shuffle-v1`. Every argument is a Unicode string encoded as
+UTF-8, and each separator is one `0x00` byte. Integer components use unsigned
+base-10 without leading zeroes. Digest components use lowercase hexadecimal.
+The function rejects a namespace or component containing NUL. It returns the
+full 32-byte digest; its canonical text form is lowercase hexadecimal, and its
+integer form is the unsigned big-endian interpretation of all 32 bytes.
+
+For a supplied game seed, the engine derives independent values:
+
+```text
+shuffle_seed = derive_seed("dracula-engine-shuffle-v1", game_seed)
+dealer_seed  = derive_seed("dracula-engine-initial-dealer-v1", game_seed)
+```
+
+The initial dealer is Queen when the dealer-seed integer is even and King when
+it is odd. Dealer selection never consumes or modifies the shuffle stream.
+
+The shuffle uses a SHA-256 counter stream. Starting at counter zero, each
+candidate block is:
+
+```text
+derive_seed(
+    "dracula-sha256-counter-v1",
+    lowercase_hex(shuffle_seed),
+    decimal(counter),
+)
+```
+
+The counter increments after every candidate block, including a rejected one.
+For `randbelow(n)`, interpret the block as an unsigned 256-bit big-endian
+integer `x`, set `limit = 2^256 - (2^256 mod n)`, reject `x >= limit`, and
+otherwise return `x mod n`. This rejection rule avoids modulo bias.
+
+The engine copies the canonical deck and applies Fisher-Yates from index 53
+down through 1. At index `i`, it swaps that card with index
+`randbelow(i + 1)`. The front of the resulting tuple is the next card drawn.
+The engine does not use Python's `random` module or its shuffle implementation.
 
 ## Engine state and operations
 
@@ -102,12 +170,17 @@ def apply_move(state: EngineState, move: EngineMove) -> EngineTransition: ...
 def advance_after_round(state: EngineState) -> EngineState: ...
 ```
 
-`create_game` shuffles the 54-card deck from the supplied seed, selects the
-initial dealer, deals the first round, places the center card, and sets the
-non-dealer active. The seeded shuffle and card-ID order are versioned engine
-behavior. A game seed identifies one complete six-round game: repeated calls
-with the same seed produce the same game. Fixture scheduling derives a distinct
-game seed for each game before calling this function.
+`create_game` shuffles the canonical deck and selects the initial dealer through
+the independent derivations above. It then deals from the front of the stock:
+two cards to the non-dealer, two to the dealer, two to the non-dealer, and two
+to the dealer. It sorts each completed hand by card index, assigns the four
+cards to slots zero through three, places the next stock card in the center,
+and sets the non-dealer active. The remaining stock retains its order with the
+next draw at index zero.
+
+A game seed identifies one complete six-round game: repeated calls with the
+same seed produce the same game. Fixture scheduling derives a distinct game
+seed for each game before calling this function.
 
 `legal_moves` resolves card identity from the player's canonical hand slot and
 returns every currently legal placement in global grid coordinates. Its ordered
@@ -120,9 +193,11 @@ eighth accepted placement produces the `EngineRoundResult`, applies rules-define
 scoring and cumulative totals, and moves the state to round completion.
 
 `advance_after_round` archives the completed round. Through round five, it
-alternates the dealer, deals the next round from the existing stock, places the
-center card, resets the current-round move list, and sets the new non-dealer
-active. After round six, it produces the terminal game state.
+alternates the dealer and consumes the next nine cards using the same
+non-dealer, dealer, non-dealer, dealer pair sequence followed by the center
+card. It sorts both completed hands, resets the current-round move list, and
+sets the new non-dealer active. After round six, it produces the terminal game
+state with an empty stock.
 
 The engine reports typed rule violations for a malformed state, wrong active
 player, unavailable hand slot, invalid grid index, occupied destination,
@@ -261,6 +336,14 @@ round occupies recurrent indexes zero through three, and the sixth occupies
 indexes 20 through 23. The forced recurrent transition records its unique action
 index and has `actor_loss_mask = false`.
 
+`policy_hidden_in` and `policy_hidden_out` are the behavior policy's exact
+little-endian `float32[128]` states before and after every recurrent update.
+They remain part of the transition in sealed collection artifacts. Replay with
+the recorded behavior policy starts from zero and must reproduce both values
+within the configured numerical tolerance. PPO optimization starts the current
+policy from zero and recomputes its complete hidden sequence; it never supplies
+the stored behavior hidden states as recurrent inputs to updated weights.
+
 For a learned decision at time `t`, collection records the critic estimate
 `V_old(observation_t)`. The engine emits an `EngineRoundResult`, from which
 training derives one round-local return `R_round` for each player and the fixed
@@ -296,8 +379,10 @@ The contract fixture set covers these cases:
 
 | Fixture | Evidence |
 | --- | --- |
-| Seeded creation | Repeated creation with one game seed yields equal state fingerprints, dealer, stock, hands, and center card |
-| Canonical hands | Equivalent dealt-card sets populate identical fixed hand slots regardless of deal order |
+| Card schema | The 54 IDs and indexes exactly match the canonical ordered list |
+| Seed derivation | UTF-8/NUL encoding, integer and digest formatting, NUL rejection, and known SHA-256 vectors agree across runtimes |
+| Seeded creation | Repeated creation with one game seed yields equal shuffle digest, dealer, stock, hands, center card, and state fingerprint |
+| Pair deal | Every round assigns stock positions 0–1 and 4–5 to the non-dealer, 2–3 and 6–7 to the dealer, position 8 to the center, and then sorts each hand by card index |
 | Queen orientation | Global coffin and action positions map directly to policy positions |
 | King orientation | Transposed policy coffin and actions invert to the original global positions |
 | Action table | Every legal engine move occupies one legal action index; every masked index maps to `None` |
@@ -305,4 +390,34 @@ The contract fixture set covers these cases:
 | Information boundary | Policy inputs comprise the active player's hand, public coffin and history, and hidden-card class |
 | Recurrent sequence | Each player records four ordered policy transitions per round; the dealer's fourth transition uses the unique legal action and has a false actor-loss mask |
 | Round result | The eighth move produces reproducible line calculations, selected round scores, totals, and round-return attachment points |
-| Replay | Recorded action indexes and transition kinds reproduce engine states, policy contexts, engine moves, and round-result fingerprints |
+| Replay | Recorded action indexes and transition kinds reproduce engine states, policy contexts, engine moves, round-result fingerprints, and behavior-policy hidden inputs and outputs |
+
+The seeded-creation known-answer fixture uses game seed
+`engine-contract-fixture-1`. It has these exact results:
+
+```text
+shuffle seed:
+47f9be37aef2409c1b4bf610dc40012aa03b58ceeb775314fec9312e43b22aef
+
+dealer seed:
+3736def5b5df2e7f99d7e6b6a60dc83303463feae387d4cdb8342f61124a87db
+
+initial dealer: King
+shuffled-deck CSV SHA-256:
+f4d82c3e12ab9d6cf37d777400e69a702e751ced8d5215d1716248a2aa66583f
+
+first nine shuffled cards:
+4D, 10S, 10H, 9C, AS, 6H, 3H, 8H, 7H
+
+Queen/non-dealer hand after canonical sort:
+4D, 6H, AS, 10S
+
+King/dealer hand after canonical sort:
+9C, 3H, 8H, 10H
+
+center card: 7H
+remaining stock: 45 cards, beginning with 2S and ending with 10C
+```
+
+The shuffled-deck digest is SHA-256 over the UTF-8 comma-separated sequence of
+all 54 shuffled card IDs with no spaces or trailing comma.

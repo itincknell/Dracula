@@ -1,4 +1,11 @@
 .DS_Store
+.pytest_cache/
+.venv/
+__pycache__/
+*.egg-info/
+/build/
+/dist/
+/runs/
 
 # Local, immutable source packs. Selected files are copied into frontend assets.
 /Cards (large)/
