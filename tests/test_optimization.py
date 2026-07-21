@@ -22,6 +22,7 @@ from dracula.optimization import (
     OptimizationConfig,
     actor_weight,
     critic_mse,
+    entropy_coefficient,
     illegal_probability_loss,
     optimize_collection,
     ppo_clipped_surrogate,
@@ -80,6 +81,21 @@ def test_actor_weight_burn_in_ramp_and_entropy_boundary() -> None:
     assert actor_weight(10_000, 2, config) == 0.0
     assert actor_weight(15_000, 3, config) == 0.5
     assert actor_weight(20_000, 3, config) == 1.0
+
+    continuation = OptimizationConfig(
+        minimum_collected_rounds=11_520,
+        actor_ramp_rounds=345_600,
+        actor_weight_start=0.1,
+        actor_weight_end=0.3,
+        actor_requires_critic_validation=False,
+    )
+    assert actor_weight(11_519, 0, continuation) == 0.0
+    assert actor_weight(11_520, 0, continuation) == pytest.approx(0.1)
+    assert actor_weight(184_320, 0, continuation) == pytest.approx(0.2)
+    assert actor_weight(357_120, 0, continuation) == pytest.approx(0.3)
+    assert entropy_coefficient(0.1, continuation) == pytest.approx(0.005)
+    assert entropy_coefficient(0.2, continuation) == pytest.approx(0.003)
+    assert entropy_coefficient(0.3, continuation) == pytest.approx(0.001)
 
 
 # Normalization spans the learner's complete bucket rather than each trajectory.

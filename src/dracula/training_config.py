@@ -84,6 +84,9 @@ class TrainingSettings:
     critic_minimum_collected_rounds: int
     actor_ramp_collected_rounds: int
     actor_weight_override: float | None
+    actor_weight_start: float = 0.0
+    actor_weight_end: float = 1.0
+    actor_requires_critic_validation: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,10 +318,6 @@ def _resolve(raw: dict[str, Any], *, base_directory: Path) -> ResolvedTrainingCo
     override = training_data.get("actor_weight_override", 1.0 if smoke else None)
     if override is not None:
         override = _unit_float(override, "actor weight override")
-        if not smoke:
-            raise TrainingConfigurationError(
-                "actor weight override is available only in the smoke profile"
-            )
     training = TrainingSettings(
         actor_learning_rate=_nonnegative_float(
             training_data.get("actor_learning_rate", 3e-4), "actor learning rate"
@@ -370,7 +369,21 @@ def _resolve(raw: dict[str, Any], *, base_directory: Path) -> ResolvedTrainingCo
             "actor ramp collected rounds",
         ),
         actor_weight_override=override,
+        actor_weight_start=_unit_float(
+            training_data.get("actor_weight_start", 0.0), "actor starting weight"
+        ),
+        actor_weight_end=_unit_float(
+            training_data.get("actor_weight_end", 1.0), "actor ending weight"
+        ),
+        actor_requires_critic_validation=_boolean(
+            training_data.get("actor_requires_critic_validation", False),
+            "actor critic-validation requirement",
+        ),
     )
+    if training.actor_weight_end < training.actor_weight_start:
+        raise TrainingConfigurationError(
+            "actor ending weight cannot be below its starting weight"
+        )
     resolved = ResolvedTrainingConfig(run, population, fixtures, compute, training)
     _validate_resolved(resolved)
     return resolved

@@ -120,7 +120,8 @@ def _nested_equal(first, second) -> bool:
 
 # Resolution fixes the full population and fixture defaults in an immutable manifest.
 def test_full_defaults_and_smoke_profile_resolve_exact_dimensions(tmp_path) -> None:
-    full = load_training_config(_full_defaults_file(tmp_path))
+    full_path = _full_defaults_file(tmp_path)
+    full = load_training_config(full_path)
     assert len(full.population.policy_ids) == 5
     assert len(full.fixtures.collection_lane_roots) == 12
     assert full.fixtures.collection_generations == 4
@@ -129,6 +130,13 @@ def test_full_defaults_and_smoke_profile_resolve_exact_dimensions(tmp_path) -> N
     assert full.compute.trajectory_batch_size == 16
     assert full.compute.collection_device == "cpu"
     assert full.compute.optimization_device == "cpu"
+    assert full.training.actor_requires_critic_validation is False
+    full_path.write_text(
+        full_path.read_text(encoding="utf-8")
+        + "\n[training]\nactor_weight_override = 0.1\n",
+        encoding="utf-8",
+    )
+    assert load_training_config(full_path).training.actor_weight_override == 0.1
     with pytest.raises(FrozenInstanceError):
         full.run.run_id = "changed"  # type: ignore[misc]
 
@@ -140,6 +148,17 @@ def test_full_defaults_and_smoke_profile_resolve_exact_dimensions(tmp_path) -> N
     assert smoke.compute.trajectory_batch_size == 1
     assert smoke.training.actor_weight_override == 1.0
     assert ResolvedTrainingConfig.from_manifest(smoke.manifest()) == smoke
+    legacy_manifest = smoke.manifest()
+    for field in (
+        "actor_weight_start",
+        "actor_weight_end",
+        "actor_requires_critic_validation",
+    ):
+        del legacy_manifest["training"][field]
+    legacy = ResolvedTrainingConfig.from_manifest(legacy_manifest)
+    assert legacy.training.actor_weight_start == 0.0
+    assert legacy.training.actor_weight_end == 1.0
+    assert legacy.training.actor_requires_critic_validation is True
     assert canonical_manifest_bytes(smoke) == canonical_manifest_bytes(smoke)
     suite = TrainingSuite.create(smoke)
     manifest_before = (suite.run_directory / "resolved-config.json").read_bytes()
@@ -192,12 +211,17 @@ def test_default_held_out_schedule_has_balanced_roles_and_exact_rows() -> None:
 
 # Held-out critic rows are evaluated after optimization and never enlarge its row pool.
 def test_smoke_iteration_keeps_validation_rows_out_of_training_and_limits_reports(
-    tmp_path,
+    tmp_path, capsys,
 ) -> None:
     suite = TrainingSuite.create(
         load_training_config(_config_file(tmp_path, "report-contract"))
     )
     suite.run()
+    progress = capsys.readouterr().out
+    assert "phase=collection status=running games=1/1" in progress
+    assert "phase=optimization status=complete" in progress
+    assert "phase=evaluation status=complete" in progress
+    assert "run=report-contract status=complete" in progress
     metrics_path = suite.run_directory / suite.state["artifacts"]["metrics"]["path"]
     report_path = suite.run_directory / suite.state["artifacts"]["report"]["path"]
     metrics = json.loads(metrics_path.read_bytes())
@@ -324,6 +348,7 @@ def test_actor_burn_in_uses_round_count_and_prior_consecutive_windows(
             critic_minimum_collected_rounds=6,
             actor_ramp_collected_rounds=6,
             critic_validation_consecutive_windows=1,
+            actor_requires_critic_validation=True,
         ),
     )
     original_evaluate = training_module.evaluate_population

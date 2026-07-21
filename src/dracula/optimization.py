@@ -53,6 +53,9 @@ class OptimizationConfig:
     actor_ramp_rounds: int = 10_000
     required_critic_validation_windows: int = 3
     actor_weight_override: float | None = None
+    actor_weight_start: float = 0.0
+    actor_weight_end: float = 1.0
+    actor_requires_critic_validation: bool = True
     device: str = "cpu"
 
     def __post_init__(self) -> None:
@@ -131,6 +134,25 @@ class OptimizationConfig:
             or not 0 <= self.actor_weight_override <= 1
         ):
             raise OptimizationContractViolation("actor weight override must be in [0, 1]")
+        for value, label in (
+            (self.actor_weight_start, "actor starting weight"),
+            (self.actor_weight_end, "actor ending weight"),
+        ):
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or not 0 <= value <= 1
+            ):
+                raise OptimizationContractViolation(f"{label} must be in [0, 1]")
+        if self.actor_weight_end < self.actor_weight_start:
+            raise OptimizationContractViolation(
+                "actor ending weight cannot be below its starting weight"
+            )
+        if type(self.actor_requires_critic_validation) is not bool:
+            raise OptimizationContractViolation(
+                "actor critic-validation requirement must be Boolean"
+            )
         try:
             torch.device(self.device)
         except (RuntimeError, TypeError) as error:
@@ -227,25 +249,44 @@ def actor_weight(
         )
     if config.actor_weight_override is not None:
         return float(config.actor_weight_override)
+    if collected_rounds < config.minimum_collected_rounds:
+        return 0.0
     if (
-        collected_rounds < config.minimum_collected_rounds
-        or critic_validation_windows < config.required_critic_validation_windows
+        config.actor_requires_critic_validation
+        and critic_validation_windows < config.required_critic_validation_windows
     ):
         return 0.0
-    return min(
+    progress = min(
         1.0,
-        (collected_rounds - config.minimum_collected_rounds)
-        / config.actor_ramp_rounds,
+        max(
+            0.0,
+            (collected_rounds - config.minimum_collected_rounds)
+            / config.actor_ramp_rounds,
+        ),
+    )
+    return config.actor_weight_start + progress * (
+        config.actor_weight_end - config.actor_weight_start
     )
 
 
 def entropy_coefficient(weight: float, config: OptimizationConfig) -> float:
     if not math.isfinite(weight) or not 0 <= weight <= 1:
         raise OptimizationContractViolation("actor weight must be in [0, 1]")
-    return (
-        config.trained_entropy_coefficient
-        if weight >= 1.0
-        else config.burn_in_entropy_coefficient
+    if config.actor_weight_override is not None:
+        return (
+            config.trained_entropy_coefficient
+            if weight >= 1.0
+            else config.burn_in_entropy_coefficient
+        )
+    width = config.actor_weight_end - config.actor_weight_start
+    if width == 0:
+        progress = 1.0 if weight >= config.actor_weight_end else 0.0
+    else:
+        progress = min(
+            1.0, max(0.0, (weight - config.actor_weight_start) / width)
+        )
+    return config.burn_in_entropy_coefficient + progress * (
+        config.trained_entropy_coefficient - config.burn_in_entropy_coefficient
     )
 
 

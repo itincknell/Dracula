@@ -6,6 +6,7 @@ __pycache__/
 /build/
 /dist/
 /runs/
+/output*
 
 # Local, immutable source packs. Selected files are copied into frontend assets.
 /Cards (large)/

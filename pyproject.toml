@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 dracula-train = "dracula.cli:main"
+dracula-tournament = "dracula.tournament:main"
 
 [project.optional-dependencies]
 test = [

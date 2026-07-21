@@ -213,22 +213,19 @@ H = (1 / N) * Σ_t -Σ_i policy_probability_t,i * log(policy_probability_t,i)
 L_policy = actor_weight * L_PPO - entropy_coefficient * H + 1.0 * L_illegal
 ```
 
-The critic begins on broad random play. `actor_weight` is zero until both of
-these conditions hold: at least 10,000 completed training rounds have been
-collected, and the critic's mean squared error is at most 95 percent of the
-zero-prediction mean squared error on three consecutive held-out validation
-windows. It then increases linearly from zero to one during the next 10,000
-completed training rounds. Held-out games do not increment either round
-counter.
+`actor_weight` is zero until the configured minimum number of completed
+training rounds has been collected. It then moves linearly from
+`actor_weight_start` to `actor_weight_end` over the configured ramp. Critic
+validation remains diagnostic unless `actor_requires_critic_validation` is
+enabled. Held-out games do not increment the round counter.
 
 The collected-round counter increments once for each completed engine round in
 training collection, not once per player and not for held-out games. The
-10,000-round minimum, five-percent improvement threshold, three-window streak,
-and 10,000-round ramp are configuration values. The smoke profile may override
-`actor_weight` to exercise PPO without satisfying burn-in. The
-`entropy_coefficient` is `0.005` through critic burn-in and the actor ramp, then
-`0.001` after `actor_weight` reaches one. The illegal penalty and entropy term
-remain active throughout burn-in.
+minimum, weight bounds, ramp length, and optional critic gate are configuration
+values. An explicit override pins `actor_weight` for a diagnostic run. During a
+scheduled ramp, `entropy_coefficient` moves linearly from its burn-in value to
+its trained value. The illegal penalty and entropy term remain active
+throughout.
 
 The policy optimizer is Adam with learning rate `3e-4`; the critic optimizer is
 Adam with learning rate `1e-3`. Both use beta values `(0.9, 0.999)`, epsilon
@@ -437,17 +434,41 @@ victory_percentage = (wins + 0.5 × ties) / completed_games
 The configured evaluation window defaults to the one-generation, twelve-lane
 post-update pass defined above.
 
-Population changes occur manually between training runs. Victory percentages
-support the decision to archive a high-performing checkpoint as a regression
-reference or replace an active policy with a randomly initialized policy.
-Collection then resumes with five policies.
+Population changes occur manually between training runs. The five-policy
+population is a training mechanism, not a set of product difficulty levels.
 
-The five-policy population is a training mechanism, not a set of product
-difficulty levels. When training concludes, one checkpoint is manually selected
-as the strongest deployment candidate. Candidate comparisons reuse the same
-held-out fixtures, roles, and action-selection profile so deck ordering does not
-favor one candidate. Victory percentage remains the primary ranking metric;
-per-fixture results remain available for manual review.
+Post-training selection loads the five candidates from one checkpoint. Every
+candidate pair plays a full round robin, and each candidate separately plays a
+stateless random-legal controller. The controller samples uniformly after legal
+masking and has no learned parameters. Historical checkpoints are evaluated in
+separate regression comparisons rather than included as tournament opponents.
+
+The selection tournament uses twelve dedicated lane roots and defaults to 256
+generations: 3,072 games for each of ten candidate matchups and five random
+control matchups. Every matchup reuses the same deck fixtures and balances Queen
+and King roles. Tournament evaluation performs policy inference only and does
+not construct critic-validation rows.
+
+The primary rank is each candidate's macro-average victory percentage against
+the other four candidates. Random-control results do not affect rank. The report
+includes the complete opponent matrix, Queen and King splits, normalized round
+returns, worst-opponent performance, Wilson matchup intervals, and bootstrap
+rank probabilities obtained by resampling shared lane-generation fixtures. An
+ordering is unresolved when adjacent candidates do not reach 95% bootstrap
+superiority. Tournament generation count may be increased when the ordering
+remains unresolved.
+
+One checkpoint is manually selected for deployment after tournament review.
+Other candidates may be archived or replaced with randomly initialized policies
+before a later training run.
+
+```bash
+dracula-tournament runs/<run-id> \
+  --checkpoint checkpoints/<iteration>/post-update.pt \
+  --generations 256 \
+  --bootstrap-samples 2000 \
+  --output-stem reports/candidate-tournament
+```
 
 ## Local ML stack
 
@@ -522,6 +543,9 @@ critic_validation_improvement = 0.05
 critic_validation_consecutive_windows = 3
 critic_minimum_collected_rounds = 10000
 actor_ramp_collected_rounds = 10000
+actor_weight_start = 0.0
+actor_weight_end = 1.0
+actor_requires_critic_validation = false
 ```
 
 Lane counts validate the number of configured root seeds rather than generating
@@ -551,9 +575,10 @@ held-out: 1 lane × C(2, 2) × 1 generation = 1 engine game
 critic validation: 42 learned rows
 ```
 
-The smoke manifest may set `actor_weight_override = 1.0` to execute the PPO
-path before the configured critic burn-in criteria are met. The override is
-recorded in the resolved manifest and is valid only for a smoke run.
+The smoke manifest defaults `actor_weight_override` to `1.0` so it executes the
+PPO path before the configured critic burn-in criteria are met. A full
+experimental run may also set an override explicitly; it pins the actor weight
+for the run and is recorded in the resolved manifest.
 
 ### Memory and process boundaries
 

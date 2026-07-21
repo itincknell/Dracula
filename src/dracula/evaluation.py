@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 from dracula.bridge import PolicyTurnKind, apply_policy_action, build_policy_turn_context
 from dracula.collection import (
@@ -183,24 +183,23 @@ def evaluate_population(
     policies: Mapping[PolicyVersion, Policy],
     critic: Critic,
     required_improvement: float = 0.05,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> EvaluationResult:
     if set(policies) != set(schedule.policies):
         raise EvaluationContractViolation("evaluation models do not match the schedule")
     if not math.isfinite(required_improvement) or not 0 <= required_improvement <= 1:
         raise EvaluationContractViolation("critic improvement must be in [0, 1]")
-    frozen_policies = {
-        identity: copy.deepcopy(policies[identity]).cpu().eval().requires_grad_(False)
-        for identity in schedule.policies
-    }
+    frozen_policies = _freeze_policies(policies, schedule)
     frozen_critic = copy.deepcopy(critic).cpu().eval().requires_grad_(False)
     fixture_results: list[EvaluationFixtureResult] = []
     validation_rows: list[_ValidationRow] = []
-    for fixture in schedule.fixtures:
-        result, rows = _evaluate_fixture(
-            fixture, run_root_seed, frozen_policies
-        )
+    fixture_count = len(schedule.fixtures)
+    for completed, fixture in enumerate(schedule.fixtures, start=1):
+        result, rows = _evaluate_fixture(fixture, run_root_seed, frozen_policies)
         fixture_results.append(result)
         validation_rows.extend(rows)
+        if progress_callback is not None:
+            progress_callback(completed, fixture_count)
     policy_metrics = tuple(
         _policy_metrics(identity, fixture_results) for identity in schedule.policies
     )
@@ -215,10 +214,50 @@ def evaluate_population(
     )
 
 
+def evaluate_matchups(
+    *,
+    run_root_seed: str,
+    schedule: EvaluationSchedule,
+    policies: Mapping[PolicyVersion, nn.Module],
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[EvaluationFixtureResult, ...]:
+    """Play scheduled matchups without constructing critic-validation rows."""
+
+    frozen_policies = _freeze_policies(policies, schedule)
+    fixture_results: list[EvaluationFixtureResult] = []
+    fixture_count = len(schedule.fixtures)
+    for completed, fixture in enumerate(schedule.fixtures, start=1):
+        result, rows = _evaluate_fixture(
+            fixture,
+            run_root_seed,
+            frozen_policies,
+            collect_validation_rows=False,
+        )
+        if rows:
+            raise EvaluationContractViolation("matchup evaluation retained critic rows")
+        fixture_results.append(result)
+        if progress_callback is not None:
+            progress_callback(completed, fixture_count)
+    return tuple(fixture_results)
+
+
+def _freeze_policies(
+    policies: Mapping[PolicyVersion, nn.Module], schedule: EvaluationSchedule
+) -> dict[PolicyVersion, nn.Module]:
+    if set(policies) != set(schedule.policies):
+        raise EvaluationContractViolation("evaluation models do not match the schedule")
+    return {
+        identity: copy.deepcopy(policies[identity]).cpu().eval().requires_grad_(False)
+        for identity in schedule.policies
+    }
+
+
 def _evaluate_fixture(
     fixture: EvaluationFixture,
     run_root_seed: str,
-    policies: Mapping[PolicyVersion, Policy],
+    policies: Mapping[PolicyVersion, nn.Module],
+    *,
+    collect_validation_rows: bool = True,
 ) -> tuple[EvaluationFixtureResult, tuple[_ValidationRow, ...]]:
     state = create_game(fixture.game_seed)
     identities = PlayerValues(queen=fixture.queen, king=fixture.king)
@@ -258,9 +297,10 @@ def _evaluate_fixture(
                     action_index, _ = sample_masked_action(
                         logits, context.input.legal_mask, seed=seed
                     )
-                    learned_by_round[player][context.round_number - 1].append(
-                        context.input.observation.clone()
-                    )
+                    if collect_validation_rows:
+                        learned_by_round[player][context.round_number - 1].append(
+                            context.input.observation.clone()
+                        )
                 else:
                     action_index = None
                 transition = apply_policy_action(state, context, action_index)
@@ -286,7 +326,7 @@ def _evaluate_fixture(
                 _ValidationRow(observation, round_returns[player][round_index])
                 for observation in observations
             )
-    if len(rows) != 42:
+    if collect_validation_rows and len(rows) != 42:
         raise EvaluationContractViolation("evaluation fixture must produce 42 learned rows")
     return (
         EvaluationFixtureResult(

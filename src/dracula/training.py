@@ -146,8 +146,14 @@ class TrainingSuite:
         return cls(config, state)
 
     def run(self) -> dict[str, object]:
+        print(
+            f"run={self.config.run.run_id} status=started "
+            f"iterations={self.config.run.iteration_count}",
+            flush=True,
+        )
         while self._completed_iteration_count() < self.config.run.iteration_count:
             self.run_iteration()
+        print(f"run={self.config.run.run_id} status=complete", flush=True)
         return self.state
 
     def resume(self) -> dict[str, object]:
@@ -301,6 +307,7 @@ class TrainingSuite:
             }
         )
         self._commit_state(state)
+        self._progress("iteration", "started")
 
     def _collect(self, interrupt: bool) -> None:
         snapshot = self._load_referenced_checkpoint("iteration_start")
@@ -311,6 +318,7 @@ class TrainingSuite:
             generation_count=self.config.fixtures.collection_generations,
             start_game_counter=snapshot.next_collection_counter,
         )
+        self._progress("collection", "started", games=schedule.counts.engine_games)
         started = time.perf_counter()
         collection = collect_schedule(
             run_root_seed=self.config.run.root_seed,
@@ -318,6 +326,9 @@ class TrainingSuite:
             policies=snapshot.policies,
             critic=snapshot.critic,
             critic_version=snapshot.critic_version,
+            progress_callback=lambda completed, total: self._fixture_progress(
+                "collection", completed, total
+            ),
         )
         duration = time.perf_counter() - started
         if interrupt:
@@ -346,6 +357,7 @@ class TrainingSuite:
         )
         state["phase_metrics"] = phase_metrics
         self._commit_state(state)
+        self._progress("collection", "complete", seconds=f"{duration:.3f}")
 
     def _optimize(self, interrupt: bool) -> None:
         snapshot = self._load_referenced_checkpoint("iteration_start")
@@ -356,6 +368,12 @@ class TrainingSuite:
         collected_rounds = (
             snapshot.collected_training_rounds
             + collection.schedule.counts.engine_games * 6
+        )
+        self._progress(
+            "optimization",
+            "started",
+            learned_rows=collection.schedule.counts.learned_rows,
+            device=self.config.compute.optimization_device,
         )
         started = time.perf_counter()
         result = optimize_collection(
@@ -414,6 +432,12 @@ class TrainingSuite:
         )
         state["phase_metrics"] = phase_metrics
         self._commit_state(state)
+        self._progress(
+            "optimization",
+            "complete",
+            seconds=f"{duration:.3f}",
+            actor_weight=f"{result.actor_weight:.3f}",
+        )
 
     def _evaluate_and_commit(self, interrupt: bool) -> None:
         snapshot = self._load_referenced_checkpoint("post_update")
@@ -423,6 +447,7 @@ class TrainingSuite:
             generation_count=self.config.fixtures.held_out_generations,
             start_game_counter=snapshot.next_evaluation_counter,
         )
+        self._progress("evaluation", "started", games=len(schedule.fixtures))
         started = time.perf_counter()
         evaluation = evaluate_population(
             run_root_seed=self.config.run.root_seed,
@@ -430,6 +455,9 @@ class TrainingSuite:
             policies=snapshot.policies,
             critic=snapshot.critic,
             required_improvement=self.config.training.critic_validation_improvement,
+            progress_callback=lambda completed, total: self._fixture_progress(
+                "evaluation", completed, total
+            ),
         )
         duration = time.perf_counter() - started
         if interrupt:
@@ -487,6 +515,31 @@ class TrainingSuite:
             }
         )
         self._commit_state(state)
+        self._progress(
+            "evaluation",
+            "complete",
+            seconds=f"{duration:.3f}",
+            critic_validation=(
+                "passed" if evaluation.critic_validation.passed else "failed"
+            ),
+        )
+        self._progress("iteration", "complete")
+
+    def _fixture_progress(self, phase: str, completed: int, total: int) -> None:
+        interval = max(1, total // 10)
+        if completed == total or completed % interval == 0:
+            self._progress(phase, "running", games=f"{completed}/{total}")
+
+    def _progress(self, phase: str, status: str, **values: object) -> None:
+        iteration = int(self.state["iteration_index"]) + 1
+        fields = [
+            f"run={self.config.run.run_id}",
+            f"iteration={iteration}/{self.config.run.iteration_count}",
+            f"phase={phase}",
+            f"status={status}",
+        ]
+        fields.extend(f"{key}={value}" for key, value in values.items())
+        print(" ".join(fields), flush=True)
 
     def _active_population(self) -> PopulationSnapshot:
         phase = TrainingPhase(self.state["phase"])
@@ -697,12 +750,19 @@ def _load_checkpoint(
         payload = torch.load(path, map_location="cpu", weights_only=True)
     except (OSError, RuntimeError, ValueError) as error:
         raise TrainingSuiteError("checkpoint could not be loaded") from error
+    payload_manifest = payload.get("manifest") if isinstance(payload, dict) else None
+    try:
+        normalized_payload_manifest = ResolvedTrainingConfig.from_manifest(
+            payload_manifest
+        ).manifest()
+    except TrainingConfigurationError:
+        normalized_payload_manifest = None
     if (
         not isinstance(payload, dict)
         or payload.get("format_version") != CHECKPOINT_FORMAT_VERSION
         or payload.get("training_format_version") != TRAINING_FORMAT_VERSION
         or payload.get("manifest_hash") != manifest_hash
-        or payload.get("manifest") != config.manifest()
+        or normalized_payload_manifest != config.manifest()
     ):
         raise TrainingSuiteError("checkpoint contract or manifest does not match")
     policy_entries = payload.get("policies")
@@ -800,6 +860,9 @@ def _optimization_config(config: ResolvedTrainingConfig) -> OptimizationConfig:
         actor_ramp_rounds=training.actor_ramp_collected_rounds,
         required_critic_validation_windows=training.critic_validation_consecutive_windows,
         actor_weight_override=training.actor_weight_override,
+        actor_weight_start=training.actor_weight_start,
+        actor_weight_end=training.actor_weight_end,
+        actor_requires_critic_validation=training.actor_requires_critic_validation,
         device=config.compute.optimization_device,
     )
 

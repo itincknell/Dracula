@@ -9,7 +9,7 @@ import json
 import math
 import os
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import combinations
 from pathlib import Path
@@ -775,6 +775,7 @@ def collect_schedule(
     policies: Mapping[PolicyVersion, Policy],
     critic: Critic,
     critic_version: str,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> CollectionData:
     _validate_identifier(run_root_seed, "run root seed")
     _validate_identifier(critic_version, "critic version")
@@ -785,7 +786,8 @@ def collect_schedule(
     fixture_results: list[FixtureResult] = []
     critic_rows: list[CriticRow] = []
 
-    for fixture in schedule.fixtures:
+    fixture_count = len(schedule.fixtures)
+    for completed, fixture in enumerate(schedule.fixtures, start=1):
         fixture_result, trajectories = _collect_fixture(
             fixture, run_root_seed, frozen
         )
@@ -808,6 +810,8 @@ def collect_schedule(
                         round_return=transition.round_return,
                     )
                 )
+        if progress_callback is not None:
+            progress_callback(completed, fixture_count)
 
     actor_buckets = tuple(
         ActorBucket(policy, tuple(trajectories_by_policy[policy]))
