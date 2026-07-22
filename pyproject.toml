@@ -15,8 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dracula-train = "dracula.cli:main"
-dracula-tournament = "dracula.tournament:main"
+dracula-search-validate = "dracula.search.validation:main"
 
 [project.optional-dependencies]
 test = [

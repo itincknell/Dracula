@@ -1,1 +1,1 @@
-"""Deterministic Dracula game engine and learned opponent."""
+"""Deterministic Dracula game engine and opponent systems."""

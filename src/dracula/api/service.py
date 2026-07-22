@@ -71,14 +71,19 @@ class PolicyTurnRequest:
     game_id: UUID
     policy: PolicyDescriptor
     turn_number: int
-    context: Any
+    player: EnginePlayer
+    round_number: int
+    turn_kind: Any
+    policy_input: Any
+    action_table: tuple[Any, ...]
+    information_state: Any
     hidden_state: bytes
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyTurnResult:
     action_index: int | None
-    hidden_state: bytes
+    hidden_state: bytes | None
 
 
 class PolicyExecutionError(Exception):
@@ -602,18 +607,26 @@ class GameplayService:
             # The bridge is loaded only when inference is requested, preserving a
             # lightweight FastAPI import path for health and public state reads.
             from dracula.bridge import apply_policy_action, build_policy_turn_context
+            from dracula.search import information_state_from_engine
 
             context = build_policy_turn_context(state, opponent)
+            information_state = information_state_from_engine(state, opponent)
             policy_result = self.policy_executor.invoke(
                 PolicyTurnRequest(
                     game_id=claimed.game_id,
                     policy=policy_descriptor,
                     turn_number=len(state.current_round_moves) + 1,
-                    context=context,
+                    player=opponent,
+                    round_number=state.round_number,
+                    turn_kind=context.kind,
+                    policy_input=context.input,
+                    action_table=context.action_table,
+                    information_state=information_state,
                     hidden_state=claimed.policy_session.hidden_state,
                 )
             )
-            validate_hidden_state(policy_result.hidden_state)
+            if policy_result.hidden_state is not None:
+                validate_hidden_state(policy_result.hidden_state)
             transition = apply_policy_action(
                 state, context, policy_result.action_index
             )

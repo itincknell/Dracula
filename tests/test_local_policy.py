@@ -41,6 +41,7 @@ from dracula.policy_adapter import (
     resolve_inference_profile,
     select_masked_action,
 )
+from dracula.search import information_state_from_engine
 from dracula.training_config import VersionSettings
 
 
@@ -264,7 +265,12 @@ def test_queen_and_king_policy_actions_map_to_the_correct_global_move(
         game_id=uuid4(),
         policy=executor.descriptor,
         turn_number=1,
-        context=context,
+        player=policy_player,
+        round_number=state.round_number,
+        turn_kind=context.kind,
+        policy_input=context.input,
+        action_table=context.action_table,
+        information_state=information_state_from_engine(state, policy_player),
         hidden_state=bytes(HIDDEN_STATE_BYTES),
     )
 

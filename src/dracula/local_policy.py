@@ -16,6 +16,11 @@ from dracula.api.service import (
     PolicyTurnResult,
 )
 from dracula.bridge import PolicyTurnKind
+from dracula.legacy_policy_contract import (
+    ACTION_MAP_VERSION,
+    OBSERVATION_SCHEMA_VERSION,
+    POLICY_ARCHITECTURE_VERSION,
+)
 from dracula.models import HIDDEN_SIZE, Policy
 from dracula.policy_adapter import (
     HIDDEN_STATE_SCHEMA_VERSION,
@@ -31,13 +36,6 @@ from dracula.policy_adapter import (
     select_masked_action,
     validate_hidden_bytes,
 )
-from dracula.training_config import (
-    ACTION_MAP_VERSION,
-    OBSERVATION_SCHEMA_VERSION,
-    POLICY_ARCHITECTURE_VERSION,
-)
-
-
 class PolicyArtifactError(PolicyContractError):
     """A selected policy archive cannot be used for inference."""
 
@@ -257,13 +255,13 @@ class InlinePolicyExecutor:
             raise PolicyContractError("game policy session does not match the adapter")
         if type(request.turn_number) is not int or not 1 <= request.turn_number <= 8:
             raise PolicyContractError("policy turn number must be between one and eight")
-        context = request.context
+        policy_input = request.policy_input
         observation = tuple(
-            bool(value) for value in context.input.observation.detach().cpu().tolist()
+            bool(value) for value in policy_input.observation.detach().cpu().tolist()
         )
         legal_mask = tuple(
             tuple(bool(value) for value in row)
-            for row in context.input.legal_mask.detach().cpu().tolist()
+            for row in policy_input.legal_mask.detach().cpu().tolist()
         )
         adapter_request = PolicyInferenceRequest(
             contract_version=POLICY_INFERENCE_CONTRACT_VERSION,
@@ -279,13 +277,13 @@ class InlinePolicyExecutor:
         ):
             raise PolicyContractError("policy adapter returned a mismatched response")
         action_index = None
-        if context.kind is not PolicyTurnKind.FORCED_RECURRENT_TRANSITION:
+        if request.turn_kind is not PolicyTurnKind.FORCED_RECURRENT_TRANSITION:
             action_index = select_masked_action(
                 response.raw_logits,
                 legal_mask,
                 self.profile,
                 game_id=str(request.game_id),
-                round_number=context.round_number,
+                round_number=request.round_number,
                 turn_number=request.turn_number,
                 artifact_id=metadata.artifact_id,
             )

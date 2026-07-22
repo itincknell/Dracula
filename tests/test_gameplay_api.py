@@ -44,7 +44,7 @@ class FirstLegalPolicy:
             )
         action_index = next(
             index
-            for index, move in enumerate(request.context.action_table)
+            for index, move in enumerate(request.action_table)
             if move is not None
         )
         values = list(struct.unpack("<128f", request.hidden_state))
@@ -58,7 +58,7 @@ class InvalidPolicy:
         values[0] = 99.0
         illegal_index = next(
             index
-            for index, move in enumerate(request.context.action_table)
+            for index, move in enumerate(request.action_table)
             if move is None
         )
         return PolicyTurnResult(illegal_index, struct.pack("<128f", *values))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 
 from pathlib import Path
@@ -37,6 +38,11 @@ LOCAL_POLICY_ARCHIVE_ENV = "DRACULA_POLICY_ARCHIVE"
 LOCAL_INFERENCE_PROFILE_ENV = "DRACULA_POLICY_INFERENCE_PROFILE"
 DEFAULT_LOCAL_INFERENCE_PROFILE = "argmax-v1"
 LOCAL_GAME_SEED_ENV = "DRACULA_LOCAL_GAME_SEED"
+LOCAL_OPPONENT_MODE_ENV = "DRACULA_OPPONENT_MODE"
+SEARCH_SIMULATIONS_ENV = "DRACULA_SEARCH_SIMULATIONS"
+SEARCH_EXPLORATION_ENV = "DRACULA_SEARCH_EXPLORATION"
+DEFAULT_SEARCH_SIMULATIONS = 500
+DEFAULT_SEARCH_EXPLORATION = math.sqrt(2.0)
 
 
 def _environment_flag(name: str, *, default: bool) -> bool:
@@ -60,6 +66,32 @@ def _default_repository() -> GameRepository:
     return SQLiteGameRepository(database_path)
 
 
+def _positive_integer_environment(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _nonnegative_float_environment(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a non-negative finite number") from error
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be a non-negative finite number")
+    return value
+
+
 def _json(response: ServiceResponse) -> JSONResponse:
     return JSONResponse(status_code=response.status_code, content=response.body)
 
@@ -79,23 +111,45 @@ def create_app(
     resolved_executor = policy_executor
     resolved_descriptor = policy_descriptor
     archive_path = os.getenv(LOCAL_POLICY_ARCHIVE_ENV)
+    opponent_mode = os.getenv(LOCAL_OPPONENT_MODE_ENV)
+    if opponent_mode is not None:
+        opponent_mode = opponent_mode.strip().lower()
+        if opponent_mode not in {"search", "archive"}:
+            raise ValueError(f"{LOCAL_OPPONENT_MODE_ENV} must be search or archive")
+    elif archive_path is not None:
+        opponent_mode = "archive"
     local_game_seed = os.getenv(LOCAL_GAME_SEED_ENV)
     if local_game_seed is not None and not local_game_seed:
         raise ValueError(f"{LOCAL_GAME_SEED_ENV} must be a nonempty value")
-    if resolved_executor is None and archive_path is not None:
-        if not archive_path.strip():
-            raise ValueError(f"{LOCAL_POLICY_ARCHIVE_ENV} must be a nonempty path")
-        # PyTorch remains outside the ordinary API import path unless a local
-        # candidate is explicitly selected.
-        from dracula.local_policy import InlinePolicyExecutor
+    if resolved_executor is None:
+        if opponent_mode == "search":
+            from dracula.search_policy import InlineSearchExecutor
 
-        resolved_executor = InlinePolicyExecutor.from_archive(
-            archive_path,
-            os.getenv(
-                LOCAL_INFERENCE_PROFILE_ENV, DEFAULT_LOCAL_INFERENCE_PROFILE
-            ),
-        )
-        resolved_descriptor = resolved_executor.descriptor
+            resolved_executor = InlineSearchExecutor.from_values(
+                _positive_integer_environment(
+                    SEARCH_SIMULATIONS_ENV, DEFAULT_SEARCH_SIMULATIONS
+                ),
+                _nonnegative_float_environment(
+                    SEARCH_EXPLORATION_ENV, DEFAULT_SEARCH_EXPLORATION
+                ),
+            )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "archive":
+            if archive_path is None or not archive_path.strip():
+                raise ValueError(
+                    f"{LOCAL_POLICY_ARCHIVE_ENV} must be a nonempty path"
+                )
+            # PyTorch remains outside the ordinary API import path unless a local
+            # candidate is explicitly selected.
+            from dracula.local_policy import InlinePolicyExecutor
+
+            resolved_executor = InlinePolicyExecutor.from_archive(
+                archive_path,
+                os.getenv(
+                    LOCAL_INFERENCE_PROFILE_ENV, DEFAULT_LOCAL_INFERENCE_PROFILE
+                ),
+            )
+            resolved_descriptor = resolved_executor.descriptor
 
     application = FastAPI(title="Dracula API", version=API_VERSION)
     application.state.narration_enabled = resolved_narration

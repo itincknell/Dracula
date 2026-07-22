@@ -4,34 +4,36 @@ This is the index for unfinished MVP work. Tracker IDs appear only here.
 
 ## Current item
 
-No design item is active. Local candidate gameplay is complete; narrator and
-public-release work remain deferred.
+Revalidate the round-local observation and define the shared policy/value model
+that will learn from the validated search teacher.
 
-## Remaining sequence
+## Active sequence
 
 ```text
-narrator configuration -> release
+information state -> search engine -> search validation
+    -> policy/value model -> expert iteration -> serving decision
+    -> narrator -> release
 ```
 
 | ID | Status | Work | Complete when |
 | --- | --- | --- | --- |
-| `NARRATOR-002` | Deferred | Finalize the Dracula prompt, model configuration, and narrator acceptance cases in [narrator](narrator.md), then connect it to the existing commentary hooks. | Public-only fixtures pass grounding, privacy, brevity, repetition, cadence, and tone checks |
-| `RELEASE-001` | Deferred | Finalize application acceptance, observability, security, budgets, deployment, rollback, and teardown in [evaluation and operations](evaluation-and-operations.md). | A clean environment can deploy, complete the smoke test, recover, roll back, and tear down without unstated steps |
+| `SEARCH-001` | Completed | Implement public move projection, player-relative information state, uniform determinization, and opponent-view privacy fixtures. | Equal player views produce equal information states; every sample conserves the deck; no authoritative hidden field or opponent slot enters search |
+| `SEARCH-002` | Completed | Implement deterministic POMCP-style root-sampled UCT, uniform legal opponent rollouts, exact round payoff, replay, and private diagnostics. | Exhaustive late-round fixtures agree; retries reproduce samples, visits, values, and actions |
+| `SEARCH-003` | Completed | Benchmark 100, 500, and 2,000 simulations per move and run tactical and absolute-control evaluations. | Search demonstrates constructive and defensive play and its paired 95% lower bound exceeds random legal and `policy-2-v20` on fixed role-balanced fixtures |
+| `MODEL-003` | Current | Revalidate the 875-bit projection and implement the feed-forward shared policy/value model. | Search gates pass; model encoding preserves the round-local information core; policy and value acceptance tests pass |
+| `TRAIN-008` | Gated | Implement single-model expert iteration, replay windows, policy/value optimization, recovery, and absolute checkpoint comparison. | One reproducible local cycle improves held-out fit, survives recovery tests, and does not regress against permanent controls |
+| `SERVE-002` | Gated | Compare search-only, guided-search, and standalone-model strength, latency, memory, and cost; select the production opponent profile. | One profile satisfies the competence and application latency gates with a complete deployment contract |
+| `NARRATOR-002` | Deferred | Finalize the Dracula prompt, model configuration, and narrator acceptance cases in [narrator](narrator.md). | Public-only fixtures pass grounding, privacy, brevity, repetition, cadence, and tone checks |
+| `RELEASE-001` | Deferred | Finalize deployment, observability, security, budgets, rollback, teardown, and public smoke acceptance in [evaluation and operations](evaluation-and-operations.md). | A clean environment can deploy, complete the smoke test, recover, roll back, and tear down without unstated steps |
 
 ## Completed foundations
 
-| ID | Area | Evidence |
-| --- | --- | --- |
-| `PROD-001` | Product and scope | [Product and scope](product-and-scope.md) defines the MVP and release-ready behavior |
-| `RULE-001` | Rules | [Rules](rules.md) defines the project variant and scoring examples |
-| `UX-001` | Frontend | [Frontend experience](frontend-experience.md) defines interaction, responsive layout, scoring, recovery, and assets |
-| `ARCH-001` | Application architecture | [Architecture](architecture.md) defines state, lifecycle, API, events, and persistence |
-| `ENGINE-001` | Engine–model bridge | [Engine–model contract](engine-model-contract.md) defines deterministic transitions and policy mapping |
-| `MODEL-001` | Model inputs and recurrence | [Neural model](neural-model.md) defines tensors, masks, recurrence, and forced transitions |
-| `MODEL-002` | Policy architecture | [Neural model](neural-model.md) defines the structured encoder, GRU, and action head |
-| `TRAIN-001` | Local ML stack | [Model training](model-training.md) selects PyTorch, configurable CPU/MPS optimization, float32, and the target laptop constraints |
-| `TRAIN-002` through `TRAIN-006` | Training architecture | [Model training](model-training.md) defines return, critic, PPO, collection, population, and one integrated iteration |
-| `TRAIN-007` | Local training suite | [Model training](model-training.md) defines configuration, compute and memory boundaries, checkpoints, recovery, metrics, and manual comparison reports |
-| `SERVE-001` | Policy serving | [Neural model](neural-model.md), [architecture](architecture.md), and [evaluation and operations](evaluation-and-operations.md) define the artifact, stateless inference, turn transaction, Serverless deployment, and validation |
-| `NARRATOR-001` | Narrator integration | [Narrator](narrator.md) and [architecture](architecture.md) define public-data boundaries and cadence |
-| `WEB-001` | Local gameplay | The FastAPI and React application supports complete Queen and King games against an archived policy, responsive scoring, reload recovery, SQLite persistence, and narration-disabled local operation |
+| Area | Evidence |
+| --- | --- |
+| Product and rules | [Product and scope](product-and-scope.md) and [rules](rules.md) define the game and release behavior |
+| Deterministic engine | The pure engine implements dealing, legality, scoring, lifecycle, serialization, and invariance tests |
+| Local gameplay | FastAPI, SQLite, React, responsive scoring, reload recovery, and narrator-disabled completion work against the archived controller adapter |
+| Search redesign | [Information-set search](search.md), [neural model](neural-model.md), [model training](model-training.md), [architecture](architecture.md), and [decisions](decisions.md) define the search-first contracts and gates |
+| Search information boundary | Immutable player views, deterministic hidden-card sampling, engine-validated simulation states, per-actor projections, and privacy invariance tests implement the first search gate |
+| Search validation | The 500-simulation planner passed every strategic fixture and defeated random legal play and `policy-2-v20` across the fixed 24-game role-balanced control sets |
+| Historical PPO evidence | `runs/training-001` through `runs/training-004`, the final tournament, and recorded human games are retained as regression evidence; they are not active architecture |

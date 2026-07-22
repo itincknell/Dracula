@@ -22,8 +22,8 @@ the final placement, and gives lower priority to Dracula's own moves. Events
 that do not pass the gate cause no model invocation. Every invocation expects
 commentary text.
 
-Taunts may dramatize visible events but cannot claim knowledge of the policy's
-hidden state, opponent hand, stock order, or intended strategy. The complete
+Taunts may dramatize visible events but cannot claim knowledge of search state,
+hidden cards, model tensors, or intended strategy. The complete
 trigger matrix and delayed-response behavior are defined in
 [architecture](architecture.md#narrator-scheduling).
 

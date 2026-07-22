@@ -209,6 +209,13 @@ class EngineState:
 
 
 @dataclass(frozen=True, slots=True)
+class SimulationEngineState(EngineState):
+    """Engine state whose private deck was sampled from a player's belief."""
+
+    simulation_deck: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class EngineTransition:
     previous_state: EngineState
     state: EngineState
@@ -525,6 +532,8 @@ def apply_move(state: EngineState, move: EngineMove) -> EngineTransition:
 
 def advance_after_round(state: EngineState) -> EngineState:
     validate_state(state)
+    if isinstance(state, SimulationEngineState):
+        raise InvalidLifecycleTransition("round-local simulation cannot advance rounds")
     if state.status is not EngineStatus.ROUND_COMPLETE or state.pending_round_result is None:
         raise InvalidLifecycleTransition("only a completed round can be advanced")
 
@@ -762,8 +771,22 @@ def validate_state(state: EngineState) -> None:
     if any(type(value) is not int or value < 0 for value in (totals.queen, totals.king)):
         raise MalformedState("total scores must be non-negative integers")
 
-    expected_dealer = initial_dealer(state.seed)
-    expected_deck = shuffled_deck(state.seed)
+    if isinstance(state, SimulationEngineState):
+        expected_deck = state.simulation_deck
+        if not isinstance(expected_deck, tuple) or len(expected_deck) != len(CARD_IDS):
+            raise MalformedState("a simulation deck must contain exactly 54 cards")
+        for card_id in expected_deck:
+            _validate_card_id(card_id, "simulation deck")
+        if len(set(expected_deck)) != len(CARD_IDS):
+            raise MalformedState("a simulation deck must contain every card exactly once")
+        expected_dealer = (
+            state.dealer
+            if state.round_number % 2 == 1
+            else other_player(state.dealer)
+        )
+    else:
+        expected_dealer = initial_dealer(state.seed)
+        expected_deck = shuffled_deck(state.seed)
     for round_index, result in enumerate(completed_results, start=1):
         dealer = expected_dealer if round_index % 2 == 1 else other_player(expected_dealer)
         if result.round_number != round_index or result.dealer is not dealer:

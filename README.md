@@ -1,12 +1,13 @@
 # Dracula
 
-Dracula is a six-round browser card game backed by a deterministic Python engine
-and one manually selected recurrent policy. Local gameplay uses SQLite, FastAPI,
-and the same React client contracts intended for deployment.
+Dracula is a six-round browser card game backed by a deterministic Python engine.
+Local gameplay uses SQLite, FastAPI, and the same React client contracts intended
+for deployment. The default local opponent is the validated information-set
+search controller.
 
-## Local candidate gameplay
+## Local gameplay
 
-The current local candidate is `policy-2-v20`, selected from `training-004`.
+The search opponent runs 500 simulations per learned move by default.
 
 Start the development servers:
 
@@ -20,11 +21,15 @@ Start FastAPI with a production frontend build served by Vite preview:
 make preview
 ```
 
-Select another compatible archive without changing application code:
+Adjust the search budget when measuring strength and latency:
 
 ```bash
-make preview CANDIDATE=/absolute/path/to/policy.pt
+make preview SEARCH_SIMULATIONS=100
 ```
+
+Run the archived `policy-2-v20` comparison control with `make preview-control`.
+Another compatible archive can be selected with
+`make preview-control CANDIDATE=/absolute/path/to/policy.pt`.
 
 Open <http://127.0.0.1:5173> for development or
 <http://127.0.0.1:4173> for preview. Stop either command with `Ctrl-C`; its API
@@ -49,7 +54,7 @@ npm --prefix frontend run check
 make test-e2e
 ```
 
-The local inference profile defaults to masked argmax. Set
+The archived-control inference profile defaults to masked argmax. Set
 `INFERENCE_PROFILE=sample-temperature-1-v1` only when intentionally testing the
 deterministic sampled profile.
 

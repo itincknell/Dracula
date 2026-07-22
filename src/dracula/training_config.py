@@ -14,15 +14,17 @@ import torch
 from dracula.cards import CARD_SCHEMA_VERSION
 from dracula.collection import COLLECTION_FORMAT_VERSION
 from dracula.engine import ENGINE_VERSION, RULES_VERSION
+from dracula.legacy_policy_contract import (
+    ACTION_MAP_VERSION,
+    OBSERVATION_SCHEMA_VERSION,
+    POLICY_ARCHITECTURE_VERSION,
+)
 from dracula.models import Critic, Policy
 from dracula.randomness import RANDOMNESS_SCHEMA_VERSION
 
 TRAINING_FORMAT_VERSION = "dracula-training-v1"
 CHECKPOINT_FORMAT_VERSION = "dracula-checkpoint-v1"
 EVALUATION_FORMAT_VERSION = "dracula-evaluation-v1"
-OBSERVATION_SCHEMA_VERSION = "dracula-observation-v1"
-ACTION_MAP_VERSION = "dracula-action-map-v1"
-POLICY_ARCHITECTURE_VERSION = "dracula-policy-v1"
 CRITIC_ARCHITECTURE_VERSION = "dracula-critic-v1"
 
 

@@ -1,25 +1,41 @@
 # Evaluation and operations
 
-Model training and model comparison are defined in
-[model training](model-training.md). This document covers the deployed web
-application, policy-serving integration, narrator, and operational release.
+Search and model comparison are defined in
+[model training](model-training.md). This document covers application
+verification, local operation, and the evidence required before deployment is
+designed.
 
 ## Application evaluation
 
-Deterministic tests cover dealing, legal moves, projections, scoring examples,
-state invariants, lifecycle transitions, event replay, conditional persistence,
-and idempotency. Adapter contract tests run against in-memory, SQLite, and
-DynamoDB implementations.
+Deterministic tests cover dealing, legal moves, projections, scoring, state
+invariants, lifecycle transitions, event replay, conditional persistence, and
+idempotency. Adapter contract tests run against in-memory and SQLite storage.
 
-Policy-serving tests cover observation and mask construction, pinned model
-versions, hidden-state loading and transactional advancement, stale and duplicate
-requests, invalid actions, timeouts, endpoint errors, and recovery. No failure
-may apply more than one move or advance hidden state without its accepted move.
+Opponent integration tests cover:
 
-The deployment smoke test loads the frontend, passes `/health`, creates a seeded
-game, completes all six rounds through the deployed policy and narrator, checks
-recovery from one interrupted turn, and confirms useful logs without private
-state.
+- Exact agreement between authoritative legality and the opponent action table.
+- Absence of opponent hand slots, hidden cards, stock order, seeds, and search
+  diagnostics from public responses.
+- Determinization invariance under authoritative hidden-state substitutions.
+- Deterministic retry of one claimed opponent turn.
+- Invalid, timed-out, or stale decisions leaving the engine unchanged.
+- Forced final placements bypassing search and committing exactly once.
+
+The local smoke test loads the frontend, passes `/health`, completes seeded
+Queen and King games, reloads during every lifecycle phase, and confirms that
+narration-disabled play completes without fabricated commentary.
+
+## Opponent evaluation
+
+The search-only gates, fixed fixtures, controls, statistical rule, tactical
+cases, and later neural comparisons are defined in
+[information-set search](search.md#search-only-gates) and
+[model training](model-training.md#search-fixtures-and-absolute-controls).
+
+Application acceptance additionally measures per-turn wall time, timeout rate,
+peak process memory, retained tree memory after a decision, and reproducibility
+after retry. A controller is not eligible for deployment until its worst
+supported decision budget fits a declared request-execution profile.
 
 ## Narrator and cost evaluation
 
@@ -27,94 +43,61 @@ Narrator cases use versioned public event projections. They assess factual
 grounding, private-state leakage, brevity, repetition, character, cadence, and
 graceful timeout or failure behavior.
 
-Cost reports use timestamped regional prices and raw usage. They separate model
-storage and registry artifacts, Serverless Inference, Bedrock narration, Lambda,
-API Gateway, DynamoDB, Amplify, S3, and CloudWatch. Release reports include
-expected interactive traffic and cold-start contingencies.
+Cost modeling begins after the opponent execution profile is selected. It uses
+timestamped regional prices and measured request duration, memory, concurrency,
+storage, narration tokens, and traffic. Release reports separate one-time model
+or artifact storage from per-game compute and include cold-start contingencies.
 
-## Serving validation
+## Deployment gate
 
-One manually selected policy and one action-selection profile serve the game.
-Before packaging, masked argmax and temperature-one sampling play the same
-held-out fixtures against the same opponents and roles. The profile with the
-higher victory percentage is selected; a tie selects argmax. A sampled profile
-uses the deterministic per-turn seed defined in [architecture](architecture.md).
+Deployment topology remains open until controller measurements determine:
 
-Artifact validation checks the weight digest, manifest and image versions,
-parameter count, exact state-dictionary keys and shapes, and a successful model
-load using weights-only deserialization. The custom CPU container loads one
-model in one worker and exposes `/ping` and `/invocations`.
+- Whether production runs search, network-guided search, or a standalone
+  distilled network.
+- CPU and memory required by one decision at the selected strength budget.
+- Expected warm and cold latency and the concurrency needed for public traffic.
+- Artifact size and whether a persistent model process is necessary.
+- Retry behavior and the maximum safe execution time.
 
-Parity validation replays versioned full-game policy trajectories through the
-local CPU adapter and the container. For all 24 recurrent steps it requires:
+The selected design must preserve the `OpponentEngine` boundary in
+[architecture](architecture.md#opponent-decision-contract). The browser never
+accesses persistence or opponent compute directly. Only an application worker
+may invoke the eventual opponent service.
 
-- Response versions and tensor shapes match the serving contract.
-- Logits and hidden states are finite and agree with `rtol=1e-5` and
-  `atol=1e-5`.
-- The service resolves the same masked action from both results.
-- Forced transitions advance hidden state while retaining the engine's unique
-  action.
+Infrastructure, retention, observability, rate limits, budget alerts, rollback,
+and teardown are specified after this gate. No AWS inference product or memory
+tier is an active requirement before then.
 
-The initial on-demand Serverless configuration is 1 GB memory, maximum
-concurrency five, and zero provisioned concurrency. Validation measures image
-and archive size, model-load time, observed cold starts, 500 warm sequential
-turns, and bursts of five concurrent turns. It records warm latency percentiles,
-cold-start overhead, throttling and error behavior, peak memory, and inference
-cost per turn and per 24-turn game. Memory increases one supported tier at a
-time only when the measured latency improvement justifies the additional cost.
+## Privacy and observability
 
-Integration cases cover asynchronous worker redelivery, SageMaker timeout and
-throttling, malformed and non-finite output, a stale claimed version, and a
-transaction conflict. Each case must leave either one accepted move with its
-one successor hidden state or the unchanged prior turn and hidden state.
+Public responses, browser state, narrator input, and normal logs exclude hands
+other than the human's own, opponent hand slots, hidden-card assignments, stock
+order, seeds, search determinizations, search trees, and model tensors.
 
-The MVP publishes one Model Registry package to one Serverless endpoint and
-does not rotate it while games are active. A later model replacement uses a
-maintenance boundary: game creation closes, active games finish, the endpoint
-configuration changes, parity and smoke tests run, and game creation reopens.
-Rollback restores the prior Registry package and endpoint configuration before
-reopening.
-
-## Deployment
-
-AWS CDK deploys Amplify Hosting, API Gateway, FastAPI on Lambda through Mangum,
-the asynchronous policy and narrator Lambdas, DynamoDB, IAM, CloudWatch, S3
-storage, budget alerts, and the SageMaker Serverless endpoint integration. The
-model build owns its inference image, selected artifact, and Model Registry
-version.
-
-Only the policy-worker role may invoke the account-scoped SageMaker endpoint.
-The browser has access to neither SageMaker nor DynamoDB. The Serverless endpoint
-does not depend on VPC placement or container-local sessions. Invocation, retry,
-output, and wall-time limits are configuration. Per-IP/API rate limits and AWS
-Budget alerts are active before public launch.
-
-Logs and traces include game and turn identifiers, policy and schema versions,
-endpoint latency and status, action validity, narrator model and prompt versions,
-tokens, cost, and failures. They exclude hands, hidden-card locations, stock
-order, recurrent hidden vectors, private prompts, and model internals.
+Operational records may include game and turn IDs, public engine version,
+controller and schema versions, search budget, decision latency, node count,
+result status, action validity, narrator model and prompt versions, token usage,
+and failures. Private diagnostic artifacts use restricted storage and are
+referenced by digest rather than copied into logs.
 
 ## Local development
 
-The pure Python engine runs without AWS. SQLite supplies local persistence,
-in-memory adapters support unit tests, and local policy and narrator adapters
-implement the production interfaces. A deterministic policy stub supports API
-and frontend tests. The learned-policy adapter loads the same archive and
-implements the same stateless JSON contract as the SageMaker container.
+The deterministic engine, SQLite persistence, FastAPI service, React frontend,
+and narrator-disabled mode run without AWS. In-memory adapters support unit
+tests. Local gameplay uses the validated search controller by default. The
+archived-policy adapter remains available only as the fixed PPO control.
 
-Select one manually archived candidate for local gameplay with:
+Run the search opponent with:
 
 ```bash
-DRACULA_POLICY_ARCHIVE=/absolute/path/to/policy-archive.pt make dev
+make dev
 ```
 
-`DRACULA_POLICY_ARCHIVE` is the only required candidate-selection variable. The
-local inference profile defaults to `argmax-v1`; set
-`DRACULA_POLICY_INFERENCE_PROFILE=sample-temperature-1-v1` only when explicitly
-testing the deterministic sampled profile. A configured archive is validated at
-application startup. Without one, opponent turns return a retryable dependency
-error; an invalid configured archive stops startup.
+Use `SEARCH_SIMULATIONS` and `SEARCH_EXPLORATION` to override its resolved
+configuration. Run `make preview-control` to select the historical control.
+Missing or invalid controller configuration fails at startup; it never silently
+selects another opponent.
 
-Verification covers engine rules, model-view encoding, API contracts, policy
-integration, frontend gameplay, narrator cases, deployment smoke tests, and
-seeded replay.
+Verification covers engine rules, information-state privacy, search replay,
+API contracts, opponent integration, frontend gameplay, narrator cases, and
+seeded end-to-end replay.

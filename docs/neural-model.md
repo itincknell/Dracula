@@ -1,323 +1,161 @@
-# Neural model
+# Search-guided neural model
 
-This document defines the learned opponent policy. The deterministic state,
-projection, and action bridge belong in the
-[engine–model contract](engine-model-contract.md); application serving and
-persistence belong in [architecture](architecture.md); training systems and
-model comparison belong in [model training](model-training.md).
+The learned opponent is a later optimization of the validated search player.
+The gates in [information-set search](search.md#search-only-gates) have passed.
+Model implementation begins after the remaining architecture values in this
+document are finalized.
 
-## Policy boundary
+## Role
 
-The policy is a recurrent neural network. On each turn owned by a
-policy-controlled player, it consumes the current player-relative `PolicyInput`
-and its prior hidden state. `PolicyInput` contains the observation and
-legal-action mask. The policy returns raw action logits and a new hidden state.
-The engine selects or supplies the resulting move. The policy does not receive
-a move log because the current coffin and card-status tensors encode the
-current game state.
-
-The policy never receives the human hand, stock order, authoritative hidden-card
-locations, game seed, scoring implementation, or persistence access. The game
-service generates the view and legal-action mask, validates the returned action,
-and remains the sole authority for applying it.
-
-The legal-action mask is an explicit policy input, not only a post-processing
-guard. The policy is expected to learn to suppress illegal actions from that
-input. The hard output mask remains authoritative so sampling can never select
-an illegal action.
-
-## Version 1 observation contract
-
-The observation is binary. It is player-relative: Queen uses the authoritative
-coffin orientation and King uses its transpose, so a policy player's scoring
-lines are always the three horizontal rows of its view. The action mapping uses
-the same transform. The policy therefore receives no Queen/King role field.
-
-The fixed card-index order is `AC` through `KC`, `AD` through `KD`, `AH`
-through `KH`, `AS` through `KS`, followed by `V1` and `V2`, as defined by the
-[engine–model contract](engine-model-contract.md#card-identity-and-order). The
-Vampire indexes distinguish physical cards only; they have identical game
-meaning. Every card-indexed tensor uses this order.
-
-For global grid coordinates `(row, column)`, Queen uses `(row, column)` and
-King uses `(column, row)`. In row-major index form, the King transform is
-`index -> 3 * (index % 3) + index // 3`. It is self-inverse. The center remains
-index `4`.
-
-| Field | Shape | Meaning |
-| --- | --- | --- |
-| Hand positions | `4 × 54` | One card-identity vector per canonical round hand slot; a played slot becomes all zeroes |
-| Coffin positions | `9 × 54` | One card-identity vector per player-relative grid position, including the center |
-| Played status | `54` | Cards publicly played in the current or completed rounds |
-| In-hand status | `54` | Cards currently in the policy player's hand |
-| Hidden status | `54` | Cards whose exact location is unavailable to the policy player |
-| Round | `6` | One-hot round index, zero through five |
-| Own decision progress | `4` | One-hot own decision index: `1000` first through `0001` fourth |
-| Dealer | `1` | Dealer or non-dealer |
-
-Fields concatenate in the table order into `observation: bool[875]`. The legal
-mask is a separate `bool[4, 8]` model input. At the framework boundary, Boolean
-observation and mask values convert to `float32` only where an operation requires
-floating-point inputs; their stored and fixture form remains Boolean.
-
-At the start of a round, the four cards are sorted by their fixed card indexes
-and assigned to hand rows zero through three. Rows never compact. An occupied
-row contains exactly one `true`; playing that card changes the row to all
-`false`. This is a canonical schema convention, not information learned by the
-policy.
-
-For every card index `c`, the status invariant is:
+One shared network will learn two outputs from a player-relative information
+state:
 
 ```text
-played[c] + in_hand[c] + hidden[c] == 1
+policy logits p: float32[32]
+round value v:   float32 scalar in [-1, 1]
 ```
 
-`played` contains completed-round cards and cards currently in the coffin.
-`hidden` contains the stock and the other player's hand. The positional tensors
-deliberately overlap with status information: status identifies the policy-visible
-class, while hand and coffin tensors identify positions. All mappings are
-versioned with the model.
+The policy head approximates the root visit distribution produced by search.
+The value head approximates the normalized terminal round-score differential
+from the acting player's perspective. The heads share one encoder; there is no
+independent critic.
 
-## Action tensor
+The network does not own legality, state transition, determinization, scoring,
+or action selection. The engine-derived mask is applied outside the model. The
+model receives no opponent hand, stock order, seed, authoritative state,
+search determinization, or private diagnostics.
 
-The action space is the fixed Cartesian product of four hand slots and eight
-non-center coffin positions:
+## Information-state input
+
+The model input is derived from `SearchInformationState` in the
+[engine–opponent contract](engine-model-contract.md#player-relative-information-state).
+The current 875-bit observation plus its separate legal mask is a valid starting
+point for the first round-local model:
+
+- Four stable positions for the acting player's current hand.
+- The player-relative 3×3 coffin with card identity.
+- Played, in-hand, and unseen status for every canonical card.
+- Dealer and current decision progress.
+- The 32-entry legal mask.
+
+Queen uses the authoritative orientation and King uses its transpose, including
+public move destinations and action indexes. The input therefore does not need
+a Queen/King feature.
+
+The projection is Markov-sufficient for the version 1 uniform belief and
+opponent model. Public move history remains in the search decision record for
+engine reconstruction and audit but is not a neural feature unless the search
+begins conditioning hidden-card beliefs or opponent behavior on that history.
+Completed-round layouts and cumulative scores remain outside the first
+round-local model. If deployment later optimizes game-win probability rather
+than additive score differential, that is a new model contract.
+
+The tensor contract must be mechanically revalidated against the typed
+information state before implementation. The shared architecture and exact
+parameter count remain to be finalized from the measured search dataset shape
+and throughput.
+
+## Action contract
+
+The action space remains the fixed Cartesian product of four own hand slots and
+eight non-center coffin positions:
 
 ```text
-policy logits: 4 × 8
-legal mask:    4 × 8
+action_index = 8 * hand_slot + policy_position_index
+policy positions = [0, 1, 2, 3, 5, 6, 7, 8]
 ```
 
-The eight policy-grid positions are `[0, 1, 2, 3, 5, 6, 7, 8]` in the
-player-relative grid. `action_index = 8 * hand_slot + policy_position_index`.
-The service transforms the selected policy position back to the authoritative
-grid before validation and application.
+The network returns unmasked logits. Training and inference replace illegal
+logits with negative infinity before softmax. A forced final placement bypasses
+search and model inference and supplies no policy-loss sample.
 
-The policy produces `raw_logits: float32[4, 8]`. The raw values remain available
-to the training loss. For action selection, illegal logits are replaced with
-negative infinity, the result is flattened, and one `float32` softmax is applied
-across all 32 positions. An active policy turn must have at least one legal
-action; the legal mask must exactly match the deterministic engine's legal moves.
+## Feed-forward architecture
 
-The eighth placement has exactly one legal action. The policy runs on that turn
-to advance the dealer's hidden state, and the engine applies the unique action.
-A round therefore has eight recurrent state updates: four for each player. The
-non-dealer's four updates and the dealer's first three are learned decisions.
-The dealer's fourth update has `own_decision_progress = 0001` and is a forced
-recurrent transition. It contributes no actor, entropy, critic, or
-illegal-action loss.
+The first search-guided model is feed-forward. Its encoder will use shared card
+embeddings and structured encoders for hand positions, coffin positions,
+unseen-card status, and context. A shared fused body feeds:
 
-## Recurrence
+- A 32-logit policy head.
+- A bounded scalar value head.
 
-The production policy retains one hidden state for Dracula. Self-play maintains
-separate hidden states for both players even when they share network weights.
-Each state begins as the all-zero model state when its game begins and persists
-through all six rounds. It receives a view only when that player is active; the
-updated coffin is present when the player receives its next view.
+Recurrence is not justified in the first model. The explicit information state
+contains the current round history needed by search, and the round-local target
+does not reward adaptation across rounds. Removing recurrence also removes
+game-scoped hidden-state persistence, 24-step replay, and backpropagation through
+game trajectories. Recurrent opponent adaptation requires separate evidence and
+a new contract.
 
-Each player receives four recurrent updates in every round. The non-dealer's
-fourth update precedes the dealer's final placement. The dealer's fourth update
-precedes its own unique final placement. The next round uses the retained state
-from that player's fourth update; no round-result feature is injected into the
-policy input.
+Exact embedding widths, body width, normalization, parameter budget, and
+initialization are selected after search throughput and dataset shape are
+measured. The initial model must remain small enough for batched local training
+and low-latency CPU inference on the target laptop.
 
-The hidden-state shape and serialization format are part of the model artifact.
-A hidden state is valid only for the exact model version that produced it. It is
-updated only when the corresponding move is accepted.
+## Training targets
 
-Serving invokes the policy once for each policy-controlled turn, including a
-forced recurrent transition. Training replays ordered 24-step player-game
-trajectories. Its state-update mask is true at every step; its actor-loss mask
-is false at the three forced recurrent transitions.
-
-Collection records the behavior policy's hidden input and output at every step.
-During PPO, the current policy begins from the all-zero state and recomputes its
-own hidden sequence across all 24 steps for backpropagation through time. Stored
-behavior hidden states validate deterministic replay and are not recurrent
-inputs to the updated policy.
-
-## Validation
-
-The encoder rejects a view when its shape or Boolean dtype is wrong; card IDs or
-hand-slot occupancy are inconsistent; card statuses do not partition the deck;
-the player-relative coffin conflicts with authoritative state; round, dealer, or
-own-decision fields disagree with the lifecycle; or the legal mask differs from
-engine legality. A forced recurrent transition requires exactly one legal action
-and a dealer progress value of `0001`.
-
-## Serving artifact
-
-The single manually selected policy is exported as:
+For a non-forced decision with legal root visit counts `N(a)`:
 
 ```text
-model.tar.gz
-  manifest.json
-  policy_state.pt
+pi(a) = N(a) / sum_b N(b)
+z = (round_score[player] - round_score[other]) / 150
+
+L = -sum_a pi(a) * log softmax(masked_logits)(a)
+    + value_weight * (v - z)^2
+    + l2_weight * ||parameters||^2
 ```
 
-`policy_state.pt` is the policy `state_dict`. The CPU inference image contains
-the corresponding model class and loads weights only. `manifest.json` contains:
+Only legal actions have nonzero `pi`. The target is the search distribution,
+not the sampled move and not a hand-authored move score. The same exact terminal
+`z` is attached to every non-forced decision by that player in the round.
 
-- Artifact and policy IDs, policy architecture version, and parameter count.
-- Observation, action, card-order, grid-order, and hidden-state schema versions.
-- PyTorch version, inference-image digest, source revision, and training-run ID.
-- Weight-file SHA-256 digest and the selected model's comparison-report reference.
-- Supported request contract and the all-zero initial hidden state definition.
+Search reaches the end of the round during the first expert-iteration phase, so
+its backups use exact engine scoring rather than the network value. After the
+model is demonstrably accurate, its value may evaluate cut-off leaves and its
+policy may supply search priors. That change requires a comparison showing
+equal or stronger play at lower measured cost.
 
-The Model Registry package binds the immutable S3 model archive to the immutable
-ECR image digest. The package ARN, package version, artifact ID, archive digest,
-and schema versions identify the deployed policy and are recorded on every game.
+## Dataset boundary
 
-## Serving inference contract
-
-The container is stateless. Every request supplies the prior hidden state and
-every successful response returns its successor:
-
-```python
-class PolicyInferenceRequest:
-    contract_version: Literal["policy-inference-v1"]
-    artifact_id: str
-    observation: list[bool]       # exactly 875 values
-    legal_mask: list[list[bool]]  # exactly 4 rows of 8 values
-    hidden_state: str             # base64 little-endian float32[128]
-
-
-class PolicyInferenceResponse:
-    contract_version: Literal["policy-inference-v1"]
-    artifact_id: str
-    raw_logits: list[list[float]] # exactly 4 rows of 8 values
-    next_hidden_state: str        # base64 little-endian float32[128]
-```
-
-The application uses `application/json`. It stores hidden state in the same
-512-byte representation used by the request and response. At game creation it
-uses 512 zero bytes. The hidden bytes are valid only with the package and hidden
-schema versions stored in the game's policy session.
-
-The container verifies the contract and artifact IDs, exact tensor shapes,
-Boolean input values, at least one legal action, and finite hidden-state values.
-It adds a batch dimension, converts model inputs to CPU `float32`, and runs the
-policy in evaluation and inference modes. It returns unmasked logits and the
-next hidden state after checking both for finite values.
-
-The game service compares the legal mask with engine legality before invocation.
-After invocation it verifies response versions, shapes, encoding, and finite
-values; applies the authoritative hard mask; and resolves the action with the
-deployment's fixed inference profile. A forced transition still invokes the
-model to advance hidden state, while the engine supplies its unique action.
-
-## Policy architecture version 1
-
-The policy uses a structured state encoder, one 128-unit GRU layer, and a
-pair-scoring action head. It transforms `PolicyInput` and the prior recurrent
-state into `raw_logits: float32[4,8]` and the next recurrent state.
-
-### Structured encoder
-
-The encoder has a shared learned card embedding matrix `E_card[54,32]`. A
-one-hot card vector selects its 32-feature representation. The two Vampires
-retain their independent card indexes and learn their representations from
-training data.
-
-For each hand slot `i`, the encoder creates:
+Each example contains:
 
 ```text
-H_i = GELU(Linear_41_to_64(
-    card_embedding(hand[i]) || hand_slot_embedding[i] || occupied(hand[i])
-))
+contract versions and search configuration digest
+information-state tensor and digest
+legal mask
+search visit distribution
+selected action
+exact terminal round return
+fixture, role, dealer, round, and decision indexes
 ```
 
-`hand_slot_embedding` has shape `4 × 8`. An empty hand row supplies a zero card
-embedding and an occupied value of zero.
+Examples come from actual self-play decision roots. Internal determinizations,
+opponent private hands, stock orders, and tree nodes are not training examples.
+Rows are immutable after sealing and split by fixture seed so no deck fixture
+appears in both training and validation.
 
-For each player-relative coffin cell `j`, it creates:
+## Acceptance
 
-```text
-G_j = GELU(Linear_41_to_64(
-    card_embedding(coffin[j]) || grid_position_embedding[j] || occupied(coffin[j])
-))
-```
+Before neural guidance can affect search or gameplay:
 
-`grid_position_embedding` has shape `9 × 8`. The hand and grid encoders use
-separate linear layers. Their shared card embedding preserves card identity
-across both surfaces.
+- Tensor encoding is invariant under Queen/King normalization and hidden-card
+  substitutions outside the player's information set.
+- Masked policy probabilities are finite, normalized, and zero for illegal
+  actions.
+- Value outputs are finite and bounded.
+- Policy and value losses train the shared body in one backward pass.
+- Batch and individual forwards agree within device tolerances.
+- CPU and MPS optimization are benchmarked; the faster sustained device with no
+  unsafe memory or swap growth is selected.
+- A fixed control evaluation shows guided search is no weaker than the
+  search-only teacher at the selected latency budget.
 
-The three 54-bit status vectors remain explicit card-indexed inputs:
+## Artifact boundary
 
-```text
-S = GELU(Linear_162_to_96(played || in_hand || hidden))
-C = GELU(Linear_11_to_16(round || own_decision_progress || dealer))
-```
+A candidate artifact contains its state dictionary, architecture and tensor
+schemas, card and action order, source revision, dataset and search-report
+digests, training configuration, and weight digest. One checkpoint is selected
+manually from absolute evaluation evidence.
 
-The fused state is:
-
-```text
-F = H_0 || H_1 || H_2 || H_3 || G_0 || ... || G_8 || S || C   # 944 features
-Z = GELU(Linear_256_to_128(LayerNorm_256(GELU(Linear_944_to_256(F)))))
-```
-
-`S` retains a distinct learned weight for every card and status coordinate. The
-encoder therefore carries card identity through status information as well as
-through hand and coffin positions.
-
-### Recurrent core
-
-The GRU input concatenates the fused state and the legal mask:
-
-```text
-U_t = Z_t || flatten(legal_mask_t)    # 160 features
-R_t = GRUCell_160_to_128(U_t, R_(t-1))
-```
-
-`R_0` is the all-zero 128-feature hidden state defined by the recurrence
-contract. The GRU advances on every policy-controlled turn. Training unrolls a
-complete 24-step player-game trajectory without detaching at a round boundary.
-
-### Pair-scoring action head
-
-For each hand slot `i` and policy-grid position `k`, let
-`j = [0, 1, 2, 3, 5, 6, 7, 8][k]`. The shared pair head produces:
-
-```text
-P_i,k = H_i || G_j || R_t || legal_mask[i,k]        # 257 features
-raw_logit_i,k = Linear_128_to_1(
-    LayerNorm_128(GELU(Linear_257_to_128(P_i,k)))
-)
-```
-
-The 32 raw logits flatten in hand-slot-major order. Action selection replaces
-masked logits with negative infinity and applies one softmax across all 32
-positions. The raw logits remain available to the thresholded illegal-probability
-loss.
-
-### Parameters and initialization
-
-The policy has **443,145 trainable parameters**:
-
-| Component | Parameters |
-| --- | ---: |
-| Card, hand-slot, and grid-position embeddings | 1,832 |
-| Hand and coffin encoders | 5,376 |
-| Status and context encoders | 15,840 |
-| Fusion layers and normalization | 275,328 |
-| GRU cell | 111,360 |
-| Pair-scoring head and normalization | 33,409 |
-
-Linear matrices use Xavier-uniform initialization and zero biases. Card and
-position embeddings sample from a zero-mean normal distribution with standard
-deviation `1 / sqrt(embedding_width)`. GRU input matrices use Xavier-uniform
-initialization, recurrent matrices use orthogonal initialization per gate, and
-GRU biases initialize to zero. Layer-normalization scales initialize to one and
-biases to zero. Dropout is zero. Each model receives its deterministic
-initialization seed from the `dracula-model-initialization-v1` namespace defined
-in [model training](model-training.md#deterministic-seed-namespaces).
-
-### Acceptance
-
-The required tests cover exact forward-pass shapes, parameter count,
-Queen/King transpose equivalence, canonical-hand permutation equivalence,
-action-table and legal-mask agreement, forced-transition routing, game-scoped
-hidden-state continuity, behavior-hidden replay validation, current-policy
-hidden recomputation from zero, finite forward/backward values, and actor-loss
-masking for 24-step player-game batches. The local benchmark measures
-full-iteration throughput and memory on the target laptop.
+The deployment contract is not selected yet. Search latency and strength will
+determine whether the application serves search, search guided by the network,
+or a distilled network alone. No deployment-specific hidden state or endpoint
+shape is part of the model design.
