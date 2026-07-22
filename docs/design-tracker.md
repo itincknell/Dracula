@@ -4,19 +4,17 @@ This is the index for unfinished MVP work. Tracker IDs appear only here.
 
 ## Current item
 
-`WEB-001` builds the playable browser application from the completed frontend
-and API contracts. The React application and FastAPI boundary must support local
-development and the deployed application without separate gameplay code paths.
+No design item is active. Local candidate gameplay is complete; narrator and
+public-release work remain deferred.
 
 ## Remaining sequence
 
 ```text
-playable web application -> narrator configuration -> release
+narrator configuration -> release
 ```
 
 | ID | Status | Work | Complete when |
 | --- | --- | --- | --- |
-| `WEB-001` | Open | Implement the React, TypeScript, and Vite gameplay surface and the local FastAPI application boundary defined in [frontend experience](frontend-experience.md) and [architecture](architecture.md). Keep the API client configurable so the same browser build can use local FastAPI or the deployed API. | A user can select Queen or King, complete a six-round game through drag and drop, follow scoring, resize between desktop and mobile layouts, reload into the current game, and run locally with narration disabled |
 | `NARRATOR-002` | Deferred | Finalize the Dracula prompt, model configuration, and narrator acceptance cases in [narrator](narrator.md), then connect it to the existing commentary hooks. | Public-only fixtures pass grounding, privacy, brevity, repetition, cadence, and tone checks |
 | `RELEASE-001` | Deferred | Finalize application acceptance, observability, security, budgets, deployment, rollback, and teardown in [evaluation and operations](evaluation-and-operations.md). | A clean environment can deploy, complete the smoke test, recover, roll back, and tear down without unstated steps |
 
@@ -36,3 +34,4 @@ playable web application -> narrator configuration -> release
 | `TRAIN-007` | Local training suite | [Model training](model-training.md) defines configuration, compute and memory boundaries, checkpoints, recovery, metrics, and manual comparison reports |
 | `SERVE-001` | Policy serving | [Neural model](neural-model.md), [architecture](architecture.md), and [evaluation and operations](evaluation-and-operations.md) define the artifact, stateless inference, turn transaction, Serverless deployment, and validation |
 | `NARRATOR-001` | Narrator integration | [Narrator](narrator.md) and [architecture](architecture.md) define public-data boundaries and cadence |
+| `WEB-001` | Local gameplay | The FastAPI and React application supports complete Queen and King games against an archived policy, responsive scoring, reload recovery, SQLite persistence, and narration-disabled local operation |

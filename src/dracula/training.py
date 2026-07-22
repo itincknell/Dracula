@@ -39,6 +39,11 @@ from dracula.optimization import (
     OptimizationResult,
     optimize_collection,
 )
+from dracula.policy_adapter import (
+    HIDDEN_STATE_SCHEMA_VERSION,
+    POLICY_ARCHIVE_FORMAT_VERSION,
+    POLICY_INFERENCE_CONTRACT_VERSION,
+)
 from dracula.randomness import derive_pytorch_seed
 from dracula.training_config import (
     CHECKPOINT_FORMAT_VERSION,
@@ -52,7 +57,7 @@ from dracula.training_config import (
 MODEL_INITIALIZATION_NAMESPACE = "dracula-model-initialization-v1"
 RUN_STATE_FORMAT_VERSION = "dracula-run-state-v1"
 METRICS_FORMAT_VERSION = "dracula-metrics-v1"
-ARCHIVE_FORMAT_VERSION = "dracula-policy-archive-v1"
+ARCHIVE_FORMAT_VERSION = POLICY_ARCHIVE_FORMAT_VERSION
 
 
 class TrainingPhase(StrEnum):
@@ -219,6 +224,15 @@ class TrainingSuite:
                 "state_dict": _cpu_state_dict(snapshot.policies[identity]),
             },
             "contracts": self.config.manifest()["versions"],
+            "serving_contract": {
+                "inference_contract_version": POLICY_INFERENCE_CONTRACT_VERSION,
+                "policy_architecture_version": self.config.versions.policy,
+                "observation_schema_version": self.config.versions.observation,
+                "action_schema_version": self.config.versions.action_map,
+                "hidden_state_schema_version": HIDDEN_STATE_SCHEMA_VERSION,
+                "parameter_count": Policy.parameter_count,
+                "initial_hidden_state": "little-endian-float32[128]-all-zero",
+            },
             "resolved_manifest": self.config.manifest(),
             "resolved_manifest_hash": self.state["manifest_hash"],
             "comparison_report": comparison_report,

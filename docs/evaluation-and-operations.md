@@ -102,6 +102,19 @@ implement the production interfaces. A deterministic policy stub supports API
 and frontend tests. The learned-policy adapter loads the same archive and
 implements the same stateless JSON contract as the SageMaker container.
 
+Select one manually archived candidate for local gameplay with:
+
+```bash
+DRACULA_POLICY_ARCHIVE=/absolute/path/to/policy-archive.pt make dev
+```
+
+`DRACULA_POLICY_ARCHIVE` is the only required candidate-selection variable. The
+local inference profile defaults to `argmax-v1`; set
+`DRACULA_POLICY_INFERENCE_PROFILE=sample-temperature-1-v1` only when explicitly
+testing the deterministic sampled profile. A configured archive is validated at
+application startup. Without one, opponent turns return a retryable dependency
+error; an invalid configured archive stops startup.
+
 Verification covers engine rules, model-view encoding, API contracts, policy
 integration, frontend gameplay, narrator cases, deployment smoke tests, and
 seeded replay.

@@ -1,0 +1,56 @@
+{
+  "schema_version": "dracula-human-game-view-v1",
+  "game_id": "00000000-0000-4000-8000-000000000001",
+  "version": 0,
+  "status": "playing",
+  "round_number": 1,
+  "turn_number": 0,
+  "dealer": "queen",
+  "active_player": "king",
+  "human_role": "queen",
+  "opponent_role": "king",
+  "coffin": [null, null, null, null, "4C", null, null, null, null],
+  "current_round_moves": [],
+  "pending_round_result": null,
+  "completed_rounds": [],
+  "total_scores": {
+    "human": 0,
+    "opponent": 0
+  },
+  "phase": {
+    "kind": "opponent_turn",
+    "status": "ready",
+    "job_id": null,
+    "retryable": true
+  },
+  "latest_event_sequence": 2,
+  "narration_enabled": false,
+  "human_hand": ["2C", "10D", "QH", "KS"],
+  "legal_moves": [],
+  "events": [
+    {
+      "schema_version": "dracula-public-event-v1",
+      "game_id": "00000000-0000-4000-8000-000000000001",
+      "event_id": "event-0001",
+      "sequence": 1,
+      "event_type": "game_created",
+      "occurred_at": "2026-07-22T12:00:00Z",
+      "prior_version": 0,
+      "resulting_version": 0,
+      "request_id": null,
+      "payload": {"human_role": "queen", "opponent_role": "king"}
+    },
+    {
+      "schema_version": "dracula-public-event-v1",
+      "game_id": "00000000-0000-4000-8000-000000000001",
+      "event_id": "event-0002",
+      "sequence": 2,
+      "event_type": "round_started",
+      "occurred_at": "2026-07-22T12:00:00Z",
+      "prior_version": 0,
+      "resulting_version": 0,
+      "request_id": null,
+      "payload": {"round_number": 1, "center_card": "4C", "first_player": "king"}
+    }
+  ]
+}

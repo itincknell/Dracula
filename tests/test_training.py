@@ -392,6 +392,11 @@ def test_manual_archive_and_random_replacement_preserve_shared_critic(tmp_path) 
     archive_path = suite.archive_policy("policy-0")
     archive = torch.load(archive_path, map_location="cpu", weights_only=True)
     assert archive["format_version"] == "dracula-policy-archive-v1"
+    assert archive["serving_contract"]["parameter_count"] == 443_145
+    assert (
+        archive["serving_contract"]["hidden_state_schema_version"]
+        == "dracula-hidden-state-v1"
+    )
     assert archive["comparison_report"]["path"].endswith("reports/000000.md")
     assert archive["comparison_report"]["markdown"].startswith("# Training iteration")
     assert archive["resolved_manifest"] == config.manifest()

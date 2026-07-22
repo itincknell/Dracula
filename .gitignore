@@ -5,6 +5,12 @@ __pycache__/
 *.egg-info/
 /build/
 /dist/
+/frontend/dist/
+/frontend/node_modules/
+/frontend/playwright-report/
+/frontend/test-results/
+/frontend/.env*.local
+/.local/
 /runs/
 /output*
 
