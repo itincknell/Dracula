@@ -41,8 +41,14 @@ LOCAL_GAME_SEED_ENV = "DRACULA_LOCAL_GAME_SEED"
 LOCAL_OPPONENT_MODE_ENV = "DRACULA_OPPONENT_MODE"
 SEARCH_SIMULATIONS_ENV = "DRACULA_SEARCH_SIMULATIONS"
 SEARCH_EXPLORATION_ENV = "DRACULA_SEARCH_EXPLORATION"
+SEARCH_RESPONSE_COMPLETIONS_ENV = "DRACULA_SEARCH_RESPONSE_COMPLETIONS"
+RESPONSE_RANKER_ARTIFACT_ENV = "DRACULA_RESPONSE_RANKER_ARTIFACT"
+GUIDED_ARTIFACT_ENV = "DRACULA_POLICY_VALUE_ARTIFACT"
+GUIDED_SIMULATIONS_ENV = "DRACULA_GUIDED_SIMULATIONS"
 DEFAULT_SEARCH_SIMULATIONS = 500
 DEFAULT_SEARCH_EXPLORATION = math.sqrt(2.0)
+DEFAULT_SEARCH_RESPONSE_COMPLETIONS = 1
+DEFAULT_GUIDED_SIMULATIONS = 100
 
 
 def _environment_flag(name: str, *, default: bool) -> bool:
@@ -92,6 +98,16 @@ def _nonnegative_float_environment(name: str, default: float) -> float:
     return value
 
 
+def _search_response_completions_environment() -> int:
+    value = _positive_integer_environment(
+        SEARCH_RESPONSE_COMPLETIONS_ENV,
+        DEFAULT_SEARCH_RESPONSE_COMPLETIONS,
+    )
+    if value not in {1, 2, 4}:
+        raise ValueError(f"{SEARCH_RESPONSE_COMPLETIONS_ENV} must be 1, 2, or 4")
+    return value
+
+
 def _json(response: ServiceResponse) -> JSONResponse:
     return JSONResponse(status_code=response.status_code, content=response.body)
 
@@ -114,8 +130,18 @@ def create_app(
     opponent_mode = os.getenv(LOCAL_OPPONENT_MODE_ENV)
     if opponent_mode is not None:
         opponent_mode = opponent_mode.strip().lower()
-        if opponent_mode not in {"search", "archive"}:
-            raise ValueError(f"{LOCAL_OPPONENT_MODE_ENV} must be search or archive")
+        if opponent_mode not in {
+            "search",
+            "search-v2",
+            "search-v2-student-direct",
+            "search-v2-student-top-2",
+            "search-v2-student-top-3",
+            "guided",
+            "archive",
+        }:
+            raise ValueError(
+                f"{LOCAL_OPPONENT_MODE_ENV} must select a documented opponent mode"
+            )
     elif archive_path is not None:
         opponent_mode = "archive"
     local_game_seed = os.getenv(LOCAL_GAME_SEED_ENV)
@@ -131,6 +157,69 @@ def create_app(
                 ),
                 _nonnegative_float_environment(
                     SEARCH_EXPLORATION_ENV, DEFAULT_SEARCH_EXPLORATION
+                ),
+            )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode in {
+            "search-v2",
+            "search-v2-student-direct",
+            "search-v2-student-top-2",
+            "search-v2-student-top-3",
+        }:
+            from dracula.search_policy import InlineStrategicSearchExecutor
+            from dracula.search import StrategicResponseMode
+
+            response_mode = {
+                "search-v2": StrategicResponseMode.PURE,
+                "search-v2-student-direct": (
+                    StrategicResponseMode.STUDENT_DIRECT
+                ),
+                "search-v2-student-top-2": (
+                    StrategicResponseMode.STUDENT_TOP_2
+                ),
+                "search-v2-student-top-3": (
+                    StrategicResponseMode.STUDENT_TOP_3
+                ),
+            }[opponent_mode]
+            response_ranker_artifact = os.getenv(
+                RESPONSE_RANKER_ARTIFACT_ENV
+            )
+            if (
+                response_mode is not StrategicResponseMode.PURE
+                and (
+                    response_ranker_artifact is None
+                    or not response_ranker_artifact.strip()
+                )
+            ):
+                raise ValueError(
+                    f"{RESPONSE_RANKER_ARTIFACT_ENV} must be a nonempty path"
+                )
+
+            resolved_executor = InlineStrategicSearchExecutor.from_values(
+                _positive_integer_environment(
+                    SEARCH_SIMULATIONS_ENV, DEFAULT_SEARCH_SIMULATIONS
+                ),
+                _search_response_completions_environment(),
+                _nonnegative_float_environment(
+                    SEARCH_EXPLORATION_ENV, DEFAULT_SEARCH_EXPLORATION
+                ),
+                response_mode=response_mode,
+                response_ranker_artifact=response_ranker_artifact,
+            )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "guided":
+            artifact_path = os.getenv(GUIDED_ARTIFACT_ENV)
+            if artifact_path is None or not artifact_path.strip():
+                raise ValueError(f"{GUIDED_ARTIFACT_ENV} must be a nonempty path")
+            from dracula.guided_policy import InlineGuidedSearchExecutor
+            from dracula.search import GuidedSearchConfig
+
+            resolved_executor = InlineGuidedSearchExecutor(
+                artifact_path,
+                GuidedSearchConfig(
+                    simulation_budget=_positive_integer_environment(
+                        GUIDED_SIMULATIONS_ENV, DEFAULT_GUIDED_SIMULATIONS
+                    )
                 ),
             )
             resolved_descriptor = resolved_executor.descriptor

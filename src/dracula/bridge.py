@@ -18,8 +18,10 @@ from dracula.engine import (
     EngineState,
     EngineStatus,
     EngineTransition,
+    SimulationEngineState,
     apply_move,
     legal_moves,
+    legal_simulation_moves,
     other_player,
     state_fingerprint,
     validate_state,
@@ -454,6 +456,36 @@ def build_policy_turn_context(
         input=PolicyInput(observation, legal_mask),
         action_table=tuple(action_table),
         forced_move=forced_move,
+    )
+
+
+def build_simulation_policy_input(
+    state: SimulationEngineState, player: EnginePlayer
+) -> PolicyInput:
+    """Project a trusted sampled state without whole-deck validation."""
+
+    if not isinstance(state, SimulationEngineState):
+        raise BridgeContractViolation(
+            "simulation policy input requires a sampled engine state"
+        )
+    player = _coerce_player(player)
+    if state.status is not EngineStatus.PLAYING or state.active_player is not player:
+        raise BridgeContractViolation(
+            "simulation policy input requires the active player"
+        )
+    action_table: list[EngineMove | None] = [None] * ACTION_COUNT
+    for move in legal_simulation_moves(state, player):
+        action_index = action_index_for_move(move, player)
+        if action_table[action_index] is not None:
+            raise BridgeContractViolation(
+                "simulation legal moves collide in the action table"
+            )
+        action_table[action_index] = move
+    return PolicyInput(
+        _encode_observation_unchecked(state, player),
+        torch.tensor(
+            [move is not None for move in action_table], dtype=torch.bool
+        ).reshape(HAND_SLOT_COUNT, POLICY_POSITION_COUNT),
     )
 
 

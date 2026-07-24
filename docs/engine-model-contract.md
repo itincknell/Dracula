@@ -17,6 +17,7 @@ information_state_schema_version
 action_schema_version
 search_schema_version
 model_schema_version when applicable
+value_schema_version when applicable
 ```
 
 The engine fingerprint is the SHA-256 digest of the UTF-8 canonical JSON
@@ -182,12 +183,16 @@ class SearchInformationState:
     round_number: int
     dealer: EnginePlayer
     active_player: EnginePlayer
+    turn_number: int
     total_scores: PlayerValues[int]
     completed_rounds: tuple[PublicRoundRecord, ...]
     own_hand: tuple[str | None, str | None, str | None, str | None]
     coffin: tuple[str | None, ...]                 # player-relative
     current_round_moves: tuple[PublicPlayedMove, ...]
+    played_card_ids: tuple[str, ...]               # canonical membership
     unseen_card_ids: tuple[str, ...]               # canonical order
+    opponent_remaining_count: int
+    stock_count: int
     legal_mask: BoolTensor[4, 8]
 ```
 
@@ -196,8 +201,8 @@ class SearchInformationState:
 and stock. It identifies a belief support, not a location for any card.
 
 Own hand, coffin, unseen-card membership, dealer and decision progress, and
-legal actions form the Markov-sufficient core for the version 1 round-local
-planner. Public move history additionally supports validated engine-state
+legal actions form the Markov-sufficient core for the round-local planners.
+Public move history additionally supports validated engine-state
 reconstruction and privacy audit; the initial uniform belief does not infer
 hidden cards from its order.
 
@@ -214,6 +219,28 @@ The information state validates these properties:
 - Current moves have contiguous turn numbers and alternate from the non-dealer.
 - No opponent slot, opponent remaining card, stock order, seed, or private
   fingerprint is present.
+
+## Neural observation
+
+The shared policy/value model uses the existing player-relative Boolean
+projection and a separate legal mask:
+
+```text
+observation[0:216]     = own hand, bool[4, 54]
+observation[216:702]   = player-relative coffin, bool[9, 54]
+observation[702:756]   = played cards, bool[54]
+observation[756:810]   = own remaining hand membership, bool[54]
+observation[810:864]   = unseen cards, bool[54]
+observation[864:870]   = round index, one-hot bool[6]
+observation[870:874]   = own decision index, one-hot bool[4]
+observation[874]       = acting player is dealer, bool
+legal_mask             = bool[4, 8]
+```
+
+The observation has exactly 875 elements. The three status vectors XOR to 54
+true values. Player identity, public move order, completed-round layouts,
+cumulative scores, and authoritative state are absent. Search retains the
+public history required for determinization separately.
 
 ## Action mapping
 
@@ -261,10 +288,24 @@ conservation. It supports normal moves through completion of the current round
 and cannot advance into another round. Its deck provenance never enters a
 player information state, public response, or model input.
 
-During a rollout, an opponent decision receives a newly projected
-`SearchInformationState` from the sampled world. The root player's remaining
-hand is hidden from that projection. The opponent policy returns an action
-index, which resolves through its own action table before `apply_move`.
+During a rollout, every acting player receives a newly projected
+`SearchInformationState` from the sampled world. The other player's remaining
+hand is hidden from that projection. Version 1 selects simulated opponent
+actions with its uniform legal policy. Teacher v2 passes the projection to the
+shallow greedy response evaluator.
+
+For each response completion index, Teacher v2 samples one world from the actor
+projection and evaluates every legal candidate action from that same world.
+Each candidate is applied to an immutable copy and completed with uniform legal
+play. The response evaluator selects the maximum mean exact round
+differential. Response worlds are discarded; only the selected action is
+applied to the unchanged outer simulation state.
+
+The Teacher v2 response seed and cache key are functions of the actor
+information-state digest and response configuration, never the enclosing
+sampled world. Equal actor views therefore produce equal response samples,
+mean values, and actions. This invariance is required even when the enclosing
+root hand and stock differ.
 
 ## Search and neural samples
 
@@ -276,23 +317,38 @@ class SearchDecision:
     action_table: tuple[EngineMove | None, ...]
     selected_action_index: int
     visits: tuple[int, ...]            # length 32
-    mean_returns: tuple[float, ...]    # length 32
-    simulation_count: int
+    mean_returns: tuple[float | None, ...]  # length 32
+    simulation_count: int                  # outer root simulations
     search_config_digest: str
 
 
 class SearchTrainingSample:
-    information_state: SearchInformationState
+    observation: BoolTensor[875]
     legal_mask: BoolTensor[4, 8]
     search_policy: FloatTensor[32]
+    selected_action_index: int
     round_return: float
+    information_state_digest: str
+    search_config_digest: str
+    fixture_id: str
+    player: EnginePlayer
+    dealer: EnginePlayer
+    round_number: int
+    placement_number: int
 ```
 
 `search_policy` is derived only from legal root visit counts. `round_return` is
-attached after the engine completes that round. Forced placements have no
-`SearchTrainingSample`. Search diagnostics and determinizations are private
-artifacts; application events retain only the accepted public move and resolved
-opponent configuration.
+attached after the engine completes that round. Contract versions accompany the
+serialized row. Forced placements have no `SearchTrainingSample`. The full
+information state, public history, search diagnostics, and determinizations are
+not serialized into model datasets; application events retain only the accepted
+public move and resolved opponent configuration.
+
+Teacher v2 retains this boundary unchanged. Response samples, action values,
+cache entries, and terminal evaluations are private search diagnostics; they
+do not become model rows. Its `search_config_digest` commits to the outer
+budget, response completions per action, selection profiles, and seed
+namespaces.
 
 ## Contract fixtures
 
@@ -306,6 +362,9 @@ Fixtures cover:
 | Action table | Engine legality, mask, table, and inverse mapping form one exact bijection |
 | Determinization | Every sample conserves 54 cards, preserves public facts and root hand, and varies only hidden assignments |
 | Opponent view | Root-private substitutions do not alter opponent inputs or seeded opponent decisions |
+| Shallow response | Equal actor views in different outer worlds reproduce shared candidate samples, mean values, and actions |
+| Candidate fairness | Every legal response action uses the same determinization at one completion index |
+| World isolation | Response sampled cards never replace cards in the outer trajectory; both worlds remain independently engine-valid |
 | Terminal result | Search payoff equals the engine round-score differential divided by 150 and changes sign by player |
 | Replay | Search seeds, samples, actions, terminal scores, and report digests reproduce exactly on CPU |
 

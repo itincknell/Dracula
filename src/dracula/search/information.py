@@ -6,18 +6,23 @@ import hashlib
 import json
 from dataclasses import dataclass
 
+import torch
+
 from dracula.bridge import (
+    COFFIN_START,
     COFFIN_POSITION_COUNT,
     DEALER_INDEX,
     HAND_SLOT_COUNT,
     HIDDEN_STATUS_START,
     IN_HAND_STATUS_START,
+    OBSERVATION_SIZE,
     PLAYED_STATUS_START,
     POLICY_POSITION_COUNT,
     PROGRESS_START,
     ROUND_START,
     PolicyInput,
     build_policy_turn_context,
+    build_simulation_policy_input,
     global_grid_index,
     player_relative_grid_index,
 )
@@ -279,10 +284,7 @@ def _public_round(result: EngineRoundResult) -> PublicRoundRecord:
     )
 
 
-def public_history_from_engine(state: EngineState) -> PublicGameHistory:
-    """Project public history without returning any private engine location."""
-
-    validate_state(state)
+def _public_history_from_validated_engine(state: EngineState) -> PublicGameHistory:
     if state.status is not EngineStatus.PLAYING or state.active_player is None:
         raise InformationContractViolation("search information requires the active player")
     return PublicGameHistory(
@@ -295,6 +297,13 @@ def public_history_from_engine(state: EngineState) -> PublicGameHistory:
         current_coffin=state.coffin,
         current_round_moves=tuple(_public_move(move) for move in state.current_round_moves),
     )
+
+
+def public_history_from_engine(state: EngineState) -> PublicGameHistory:
+    """Project public history without returning any private engine location."""
+
+    validate_state(state)
+    return _public_history_from_validated_engine(state)
 
 
 def _decode_slots(bits: list[list[bool]], label: str) -> tuple[str | None, ...]:
@@ -422,7 +431,26 @@ def information_state_from_engine(
     if selected is None:
         raise InformationContractViolation("search information requires the active player")
     context = build_policy_turn_context(state, selected)
-    return build_information_state(context.input, public_history_from_engine(state), selected)
+    return build_information_state(
+        context.input, _public_history_from_validated_engine(state), selected
+    )
+
+
+def project_simulation_information_state(
+    state: SimulationEngineState,
+) -> SearchInformationState:
+    """Project an engine-created simulation state without whole-deck revalidation."""
+
+    if not isinstance(state, SimulationEngineState):
+        raise InformationContractViolation("simulation projection requires sampled state")
+    if state.active_player is None:
+        raise InformationContractViolation("simulation projection requires an active player")
+    policy_input = build_simulation_policy_input(state, state.active_player)
+    return build_information_state(
+        policy_input,
+        _public_history_from_validated_engine(state),
+        state.active_player,
+    )
 
 
 def information_state_from_simulation(
@@ -432,7 +460,39 @@ def information_state_from_simulation(
 
     if not isinstance(state, SimulationEngineState):
         raise InformationContractViolation("simulation projection requires sampled state")
-    return information_state_from_engine(state)
+    validate_state(state)
+    return project_simulation_information_state(state)
+
+
+def policy_input_from_information_state(
+    state: SearchInformationState,
+) -> PolicyInput:
+    """Encode the typed player view without consulting a sampled or private world."""
+
+    _validate_information_state(state)
+    observation = torch.zeros(OBSERVATION_SIZE, dtype=torch.bool)
+    for hand_slot, card_id in enumerate(state.own_hand):
+        if card_id is not None:
+            observation[hand_slot * CARD_COUNT + CARD_INDEX_BY_ID[card_id]] = True
+    for position, card_id in enumerate(state.coffin):
+        if card_id is not None:
+            observation[
+                COFFIN_START + position * CARD_COUNT + CARD_INDEX_BY_ID[card_id]
+            ] = True
+    for card_id in state.played_card_ids:
+        observation[PLAYED_STATUS_START + CARD_INDEX_BY_ID[card_id]] = True
+    for card_id in _card_ids(state.own_hand):
+        observation[IN_HAND_STATUS_START + CARD_INDEX_BY_ID[card_id]] = True
+    for card_id in state.unseen_card_ids:
+        observation[HIDDEN_STATUS_START + CARD_INDEX_BY_ID[card_id]] = True
+    own_decision_index = sum(
+        move.player is state.player for move in state.current_round_moves
+    )
+    observation[ROUND_START + state.round_number - 1] = True
+    observation[PROGRESS_START + own_decision_index] = True
+    observation[DEALER_INDEX] = state.player is state.dealer
+    legal_mask = torch.tensor(state.legal_mask, dtype=torch.bool)
+    return PolicyInput(observation, legal_mask)
 
 
 def _expected_legal_mask(state: SearchInformationState) -> LegalMask:
@@ -836,8 +896,7 @@ def sample_determinization(
         total_scores=information.total_scores,
         simulation_deck=simulation_deck,
     )
-    validate_state(state)
-    if information_state_from_simulation(state) != information:
+    if project_simulation_information_state(state) != information:
         raise InformationContractViolation("sample does not reproduce its root information state")
     return SampledDeterminization(
         root_player=root,

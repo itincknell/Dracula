@@ -321,8 +321,9 @@ def _has_occupied_neighbor(coffin: Sequence[str | None], grid_index: int) -> boo
     )
 
 
-def legal_moves(state: EngineState, player: EnginePlayer) -> tuple[EngineMove, ...]:
-    validate_state(state)
+def _legal_moves_for_active_player(
+    state: EngineState, player: EnginePlayer
+) -> tuple[EngineMove, ...]:
     if state.status is not EngineStatus.PLAYING:
         raise InvalidLifecycleTransition("moves are available only while a round is playing")
     try:
@@ -343,6 +344,21 @@ def legal_moves(state: EngineState, player: EnginePlayer) -> tuple[EngineMove, .
         if card_id is not None
         for grid_index in destinations
     )
+
+
+def legal_moves(state: EngineState, player: EnginePlayer) -> tuple[EngineMove, ...]:
+    validate_state(state)
+    return _legal_moves_for_active_player(state, player)
+
+
+def legal_simulation_moves(
+    state: SimulationEngineState, player: EnginePlayer
+) -> tuple[EngineMove, ...]:
+    """Return legal moves without repeating whole-deck validation."""
+
+    if not isinstance(state, SimulationEngineState):
+        raise TypeError("fast simulation legality requires SimulationEngineState")
+    return _legal_moves_for_active_player(state, player)
 
 
 def _line_values(cards: Sequence[Card], orientation: LineOrientation) -> tuple[int, int, int]:
@@ -461,8 +477,9 @@ def _make_round_result(state: EngineState) -> EngineRoundResult:
     )
 
 
-def apply_move(state: EngineState, move: EngineMove) -> EngineTransition:
-    validate_state(state)
+def _apply_move_state(
+    state: EngineState, move: EngineMove
+) -> tuple[EngineState, EnginePlayedMove, EngineRoundResult | None]:
     if state.status is not EngineStatus.PLAYING:
         raise InvalidLifecycleTransition("a move cannot be applied outside active play")
     if not isinstance(move, EngineMove):
@@ -519,6 +536,12 @@ def apply_move(state: EngineState, move: EngineMove) -> EngineTransition:
                 king=state.total_scores.king + round_result.round_scores.king,
             ),
         )
+    return next_state, played_move, round_result
+
+
+def apply_move(state: EngineState, move: EngineMove) -> EngineTransition:
+    validate_state(state)
+    next_state, played_move, round_result = _apply_move_state(state, move)
     validate_state(next_state)
     return EngineTransition(
         previous_state=state,
@@ -528,6 +551,19 @@ def apply_move(state: EngineState, move: EngineMove) -> EngineTransition:
         round_result=round_result,
         state_fingerprint=state_fingerprint(next_state),
     )
+
+
+def apply_simulation_move(
+    state: SimulationEngineState, move: EngineMove
+) -> SimulationEngineState:
+    """Apply one search transition without repeating whole-deck validation."""
+
+    if not isinstance(state, SimulationEngineState):
+        raise TypeError("fast simulation transitions require SimulationEngineState")
+    next_state, _, _ = _apply_move_state(state, move)
+    if not isinstance(next_state, SimulationEngineState):
+        raise MalformedState("simulation transition lost its sampled-deck provenance")
+    return next_state
 
 
 def advance_after_round(state: EngineState) -> EngineState:

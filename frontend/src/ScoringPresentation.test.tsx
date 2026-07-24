@@ -172,7 +172,7 @@ describe("scoring presentation frames", () => {
       (frame) => frame.kind === "reveal_value" && frame.orientationIndex === 1,
     );
     await advanceFrames(second - ranked);
-    expect(screen.getByText("My Score")).toBeInTheDocument();
+    expect(screen.getByText("Dracula's Score")).toBeInTheDocument();
     expect(document.querySelector(".ranked-line-totals")).not.toBeInTheDocument();
   });
 

@@ -23,7 +23,7 @@ Search must demonstrate constructive and defensive play and beat uniform random
 legal play and the archived `policy-2-v20` PPO candidate on fixed role-balanced
 fixtures before neural training continues.
 
-## Initial search uses POMCP-style root sampling
+## Version 1 search uses POMCP-style root sampling
 
 The first implementation treats the other player as an explicit stochastic
 environment policy. Root-player choices use a history tree and UCT; simulated
@@ -34,6 +34,41 @@ This is a testable best-response planner, not an equilibrium solver. SO-ISMCTS
 does not model the opponent's information directly, multi-observer search adds
 opponent-tree leakage and complexity, and ReBeL's public-belief subgame solving
 is deferred until evidence requires it.
+
+The validated 500-simulation implementation is frozen as a permanent baseline.
+Recorded human play showed that its uniformly random simulated opponent can
+still allow strong opposing constructions despite its fixture and control
+results.
+
+## Teacher v2 uses shallow greedy responses
+
+Teacher v2 retains version 1 root sampling and outer UCT. At each non-forced
+continuation decision, it compares every legal action from the acting player's
+information state. Each candidate uses the same indexed hidden-card samples,
+completes the round with uniform legal play, and receives the engine's exact
+actor-relative round differential. The highest mean action wins with a
+canonical tie-break.
+
+The response policy has no tree, exploration term, recursion, or incomplete
+board score. Response hidden assignments are sampled independently from the
+actor's unseen-card pool and discarded after evaluation. Only the selected
+legal action is applied to the unchanged outer world.
+
+The earlier nested actor-local UCT prototype was information-safe but improved
+the defensive fixture pass rate only from 78.3% to 83.3% while increasing
+fixture p95 latency from 19.4 to 88.1 seconds in its 32-outer/32-response
+validation profile. It is retained only as historical evidence. Shallow
+response counts of one, two, and four completions per action are evaluated
+before one configuration is selected.
+
+Multi-observer ISMCTS remains rejected because opponent statistics can absorb
+the root's fixed private hand. Re-determinizing one shared trajectory remains
+rejected because it can create incompatible hidden-card histories.
+
+Version 1 remains the default local controller and permanent comparison
+control. The user approved the 32×4 Teacher v2 controller after direct browser
+play. Its shallow response policy may supply neural teacher data after the
+outer visit budget is shown to produce informative distillation targets.
 
 ## Search payoff is round-local score differential
 
@@ -51,16 +86,19 @@ legal actions. King views transpose the coffin and actions; Queen views retain
 the authoritative orientation.
 
 Opponent hand-slot indexes are private. The current 875-bit observation retains
-the Markov-sufficient core for version 1 round-local decisions. Public move
-history remains a typed search and replay field because it is required to
-reconstruct engine-valid determinizations and audit the information boundary.
+the Markov-sufficient core for the round-local planners. Public move history
+remains a typed search and replay field because it is required to reconstruct
+engine-valid determinizations and audit the information boundary.
 
-## One feed-forward policy/value model may follow search
+## One feed-forward policy/value model guides later search
 
-After search passes its gates, one shared feed-forward network will learn policy
-targets from search visit distributions and value targets from exact normalized
-round results. The policy and value heads share an encoder. There is no separate
-critic, recurrent state, PPO update, policy population, or critic burn-in.
+The approved Teacher v2 search supplies visit distributions and exact
+normalized round results to one 339,978-parameter feed-forward policy/value
+network. Its policy and value heads share the structured 875-bit encoder.
+Guided search uses
+the learned policy as a PUCT prior while retaining full-round exact scoring.
+There is no separate critic, recurrent state, PPO update, policy population, or
+critic burn-in.
 
 Recurrence is omitted because the explicit current-round information state is
 sufficient for the chosen objective. Cross-round opponent adaptation is not
@@ -68,10 +106,12 @@ part of the first learned model.
 
 ## Absolute controls determine strength
 
-Uniform random legal play, the archived PPO candidate, and the first validated
-search configuration are permanent controls. Comparisons reuse fixed decks,
-balance Queen and King, report paired uncertainty, and retain role and dealer
-splits. Relative self-play rank and training loss cannot establish competence.
+Uniform random legal play, the archived PPO candidate, and the frozen version 1
+search configuration are permanent controls. Approved Teacher v2 becomes the
+additional search reference for neural candidates. Comparisons reuse fixed
+decks, balance Queen and King, report paired uncertainty, and retain role and
+dealer splits. Relative self-play rank and training loss cannot establish
+competence.
 
 ## Training is local; deployment is deferred
 

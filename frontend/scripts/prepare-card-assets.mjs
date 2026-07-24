@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = path.resolve(frontendRoot, "..", "Cards (large)");
+const customRoot = path.join(frontendRoot, "assets", "cards");
 const destinationRoot = path.join(frontendRoot, "public", "cards");
 const manifestPath = path.join(frontendRoot, "card-assets.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -51,4 +52,11 @@ if (!(await exists(sourceRoot))) {
       path.join(destinationRoot, asset.destination),
     );
   }
+}
+
+for (const vampireId of ["V1", "V2"]) {
+  await copyFile(
+    path.join(customRoot, `${vampireId}.svg`),
+    path.join(destinationRoot, `${vampireId}.svg`),
+  );
 }

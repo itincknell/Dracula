@@ -1,0 +1,26 @@
+[run]
+run_id = "search-warmstart-smoke-001"
+root_seed = "dracula-search-warmstart-smoke-v1"
+output_directory = "runs/search-warmstart-smoke-001"
+source_revision = "b1d6ddac1ea8152a0c357b87a1634a1713a94a45"
+
+[dataset]
+teacher_directory = "runs/search-teacher-warmstart-smoke-500"
+search_report_digest = "873c67800f259e96d980f99da42a52f50c0515d834c211824fddcd0294845433"
+
+[model]
+model_id = "dracula-policy-value-warmstart-smoke"
+initialization_ordinal = 0
+
+[optimization]
+device = "auto"
+batch_size = 256
+learning_rate = 0.0003
+betas = [0.9, 0.999]
+epsilon = 0.00000001
+weight_decay = 0.0001
+gradient_norm = 1.0
+minimum_epochs = 8
+maximum_epochs = 50
+early_stop_patience = 5
+minimum_improvement = 0.0001

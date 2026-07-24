@@ -44,6 +44,11 @@ from dracula.search.information import (
     sample_determinization,
 )
 from dracula.search.planner import InformationSetSearch, SearchConfig
+from dracula.search.strategic import (
+    StrategicInformationSetSearch,
+    StrategicSearchConfig,
+    derive_strategic_search_request_seed,
+)
 from dracula.search.strategic_fixtures import (
     FIXTURE_TARGET_ROUND,
     STRATEGIC_FIXTURE_SCHEMA_VERSION,
@@ -144,6 +149,7 @@ class GameComparisonRecord:
 class _ControllerSpec:
     kind: str
     budget: int | None = None
+    response_completions: int | None = None
     archive_path: str | None = None
 
 
@@ -154,6 +160,15 @@ class _Controller:
         self.planner = (
             InformationSetSearch(SearchConfig(spec.budget))
             if spec.kind == "search" and spec.budget is not None
+            else None
+        )
+        self.strategic_planner = (
+            StrategicInformationSetSearch(
+                StrategicSearchConfig(spec.budget, spec.response_completions)
+            )
+            if spec.kind == "strategic"
+            and spec.budget is not None
+            and spec.response_completions is not None
             else None
         )
         self.adapter = (
@@ -196,6 +211,38 @@ class _Controller:
                 state.round_number,
                 len(state.current_round_moves),
                 result.simulation_count,
+                elapsed,
+            )
+        if self.spec.kind == "strategic":
+            if len(moves) == 1:
+                return moves[0], None
+            if (
+                self.strategic_planner is None
+                or self.spec.budget is None
+                or self.spec.response_completions is None
+            ):
+                raise SearchValidationError("strategic controller is not configured")
+            information = information_state_from_engine(state)
+            request_seed = derive_strategic_search_request_seed(
+                (
+                    f"{self.game_id}:{actor.value}:{state.round_number}:"
+                    f"{len(state.current_round_moves)}"
+                ),
+                information,
+                self.strategic_planner.config.digest,
+            )
+            started = time.perf_counter()
+            result = self.strategic_planner.search(information, request_seed)
+            elapsed = time.perf_counter() - started
+            move = context.action_table[result.selected_action_index]
+            if move is None:
+                raise SearchValidationError("strategic search selected a masked action")
+            return move, DecisionTiming(
+                "strategic",
+                self.spec.budget,
+                state.round_number,
+                len(state.current_round_moves),
+                result.total_terminal_evaluation_count,
                 elapsed,
             )
         if self.spec.kind == "random":

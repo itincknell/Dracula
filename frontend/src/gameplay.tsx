@@ -7,7 +7,9 @@ import type { HumanGameView } from "./contracts";
 import { GameController, useGameStore } from "./gameStore";
 
 export function TurnStatus({ view, pending }: { view: HumanGameView; pending: string | null }) {
-  let message = "Your turn";
+  const humanRole = view.human_role === "queen" ? "Queen" : "King";
+  const orientation = view.human_role === "queen" ? "Rows" : "Columns";
+  let message = `Your turn — ${humanRole} · ${orientation}`;
   if (pending === "human_move") message = "Playing your card…";
   else if (pending === "opponent_turn" || view.phase.kind === "opponent_turn") {
     message = "Dracula is deciding…";
@@ -86,7 +88,6 @@ export function CardGrid({ controller }: { controller: GameController }) {
               }}
             >
               <span aria-hidden="true">+</span>
-              <small>Legal</small>
             </button>
           );
         }

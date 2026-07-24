@@ -1,161 +1,197 @@
 # Search-guided neural model
 
-The learned opponent is a later optimization of the validated search player.
-The gates in [information-set search](search.md#search-only-gates) have passed.
-Model implementation begins after the remaining architecture values in this
-document are finalized.
+The learned opponent will compress the approved Teacher v2 search player. One
+feed-forward network predicts a policy over the fixed action space and a
+player-relative round value. It has no recurrent state and does not own
+legality, transitions, determinization, scoring, or final action selection.
 
-## Role
+## Contract versions
 
-One shared network will learn two outputs from a player-relative information
-state:
-
-```text
-policy logits p: float32[32]
-round value v:   float32 scalar in [-1, 1]
-```
-
-The policy head approximates the root visit distribution produced by search.
-The value head approximates the normalized terminal round-score differential
-from the acting player's perspective. The heads share one encoder; there is no
-independent critic.
-
-The network does not own legality, state transition, determinization, scoring,
-or action selection. The engine-derived mask is applied outside the model. The
-model receives no opponent hand, stock order, seed, authoritative state,
-search determinization, or private diagnostics.
-
-## Information-state input
-
-The model input is derived from `SearchInformationState` in the
-[engine–opponent contract](engine-model-contract.md#player-relative-information-state).
-The current 875-bit observation plus its separate legal mask is a valid starting
-point for the first round-local model:
-
-- Four stable positions for the acting player's current hand.
-- The player-relative 3×3 coffin with card identity.
-- Played, in-hand, and unseen status for every canonical card.
-- Dealer and current decision progress.
-- The 32-entry legal mask.
-
-Queen uses the authoritative orientation and King uses its transpose, including
-public move destinations and action indexes. The input therefore does not need
-a Queen/King feature.
-
-The projection is Markov-sufficient for the version 1 uniform belief and
-opponent model. Public move history remains in the search decision record for
-engine reconstruction and audit but is not a neural feature unless the search
-begins conditioning hidden-card beliefs or opponent behavior on that history.
-Completed-round layouts and cumulative scores remain outside the first
-round-local model. If deployment later optimizes game-win probability rather
-than additive score differential, that is a new model contract.
-
-The tensor contract must be mechanically revalidated against the typed
-information state before implementation. The shared architecture and exact
-parameter count remain to be finalized from the measured search dataset shape
-and throughput.
-
-## Action contract
-
-The action space remains the fixed Cartesian product of four own hand slots and
-eight non-center coffin positions:
+The initial artifact records:
 
 ```text
-action_index = 8 * hand_slot + policy_position_index
-policy positions = [0, 1, 2, 3, 5, 6, 7, 8]
+model_schema_version       = dracula-policy-value-v1
+observation_schema_version = dracula-observation-v1
+action_schema_version      = dracula-action-map-v1
+value_schema_version       = dracula-round-value-v1
 ```
 
-The network returns unmasked logits. Training and inference replace illegal
-logits with negative infinity before softmax. A forced final placement bypasses
-search and model inference and supplies no policy-loss sample.
+The model receives `observation: bool[875]` and returns:
 
-## Feed-forward architecture
+```text
+policy_logits: float32[4, 8]
+round_value:   float32 scalar in [-1, 1]
+```
 
-The first search-guided model is feed-forward. Its encoder will use shared card
-embeddings and structured encoders for hand positions, coffin positions,
-unseen-card status, and context. A shared fused body feeds:
+Batch input is `bool[B, 875]`; batch output is `float32[B, 4, 8]` and
+`float32[B]`. The legal mask is a separate `bool[4, 8]` or `bool[B, 4, 8]`
+value applied outside the model.
 
-- A 32-logit policy head.
-- A bounded scalar value head.
+## Observation
 
-Recurrence is not justified in the first model. The explicit information state
-contains the current round history needed by search, and the round-local target
-does not reward adaptation across rounds. Removing recurrence also removes
-game-scoped hidden-state persistence, 24-step replay, and backpropagation through
-game trajectories. Recurrent opponent adaptation requires separate evidence and
-a new contract.
+The observation is the player-relative round-local projection already produced
+by the engine bridge:
 
-Exact embedding widths, body width, normalization, parameter budget, and
-initialization are selected after search throughput and dataset shape are
-measured. The initial model must remain small enough for batched local training
-and low-latency CPU inference on the target laptop.
+| Range | Shape | Meaning |
+| --- | --- | --- |
+| `0:216` | `4 × 54` | Acting player's stable hand slots |
+| `216:702` | `9 × 54` | Player-relative coffin positions |
+| `702:756` | `54` | Played cards |
+| `756:810` | `54` | Cards remaining in the acting player's hand |
+| `810:864` | `54` | Unseen cards |
+| `864:870` | `6` | One-hot round index |
+| `870:874` | `4` | One-hot acting-player decision index |
+| `874` | `1` | Acting player is dealer |
 
-## Training targets
+The three card-status vectors partition all 54 cards. Empty hand and coffin
+positions contain all zeros. Queen uses authoritative grid orientation; King
+uses the existing transpose so the acting player's scoring lines are always
+rows. Player identity is therefore not a feature.
 
-For a non-forced decision with legal root visit counts `N(a)`:
+The layout totals `216 + 486 + 162 + 11 = 875` bits. It was revalidated against
+`SearchInformationState` across 3,072 active states from 64 complete seeded
+games: 2,688 learned decisions and 384 forced placements. Hand slots, coffin
+positions, card partitions, lifecycle fields, and legal masks agreed at every
+state.
+
+The projection is sufficient for the uniform belief and round-local objective.
+Public move history remains available to search for determinization and audit,
+but it is not a model feature. Completed rounds and cumulative scores do not
+affect the additive round-value target.
+
+## Architecture
+
+One card embedding is shared by separate hand and coffin encoders:
+
+```text
+card embedding:          54 × 32
+hand-slot embedding:      4 × 8
+coffin-position embedding:9 × 8
+
+hand position:    (32 card + 8 slot + 1 occupied) -> Linear(41, 64) -> GELU
+coffin position:  (32 card + 8 position + 1 occupied) -> Linear(41, 64) -> GELU
+card status:      162 -> Linear(162, 96) -> GELU
+context:           11 -> Linear(11, 16) -> GELU
+
+fusion: 4×64 + 9×64 + 96 + 16 = 944
+shared body: Linear(944, 256) -> GELU -> LayerNorm(256)
+             -> Linear(256, 128) -> GELU
+```
+
+For each position, matrix multiplication of its one-hot card row by the shared
+card-embedding table produces the card vector; an empty row produces a zero
+vector. The slot or grid-position embedding and occupied flag remain present.
+The status and context inputs use their flattened table order. The fusion order
+is the four hand features, nine coffin features, status feature, then context
+feature.
+
+The policy head scores each hand-slot and destination pair with shared weights:
+
+```text
+pair = hand_feature[64] + destination_feature[64] + shared_state[128]
+pair -> Linear(256, 128) -> GELU -> LayerNorm(128)
+     -> Linear(128, 1)
+```
+
+Applying the pair head to four hand slots and the eight non-center positions
+produces 32 raw logits. It receives no legal-mask bit. External masking replaces
+illegal logits with negative infinity before log-softmax or softmax.
+
+For the bounded response-distillation experiment, the same shared body and
+policy head rank Teacher v2 strategic action groups. A group score is the
+arithmetic mean of its concrete member logits. Training uses weighted pairwise
+logistic ranking: each non-tied group pair is weighted by the absolute
+difference between its four-completion mean terminal differentials. Exact ties
+contribute zero. Inference selects the highest legal group score and then the
+lowest canonical representative index. Paired destinations continue to use the
+search layer's derived fair coin. No softmax, root visits, or value prediction
+participates in this experiment.
+
+The value head is:
+
+```text
+shared_state[128] -> Linear(128, 64) -> GELU -> Linear(64, 1) -> tanh
+```
+
+There is no dropout, recurrence, attention, or batch normalization. The exact
+trainable parameter count is **339,978**:
+
+| Component | Parameters |
+| --- | ---: |
+| Shared embeddings | 1,832 |
+| Local encoders | 21,216 |
+| Shared body | 275,328 |
+| Policy head | 33,281 |
+| Value head | 8,321 |
+
+## Initialization
+
+The model seed is the unsigned big-endian integer represented by the first
+eight bytes of:
+
+```text
+derive_seed(
+    "dracula-model-initialization-v2",
+    run_root_seed,
+    model_id,
+    decimal(initialization_ordinal),
+)
+```
+
+Linear weights use Xavier uniform initialization with gain `1.0` and zero
+biases. Embeddings use
+a zero-mean normal distribution with standard deviation
+`1 / sqrt(embedding_width)`. Layer-normalization weights initialize to one and
+biases to zero. Initialization uses an isolated PyTorch generator and does not
+change global random state.
+
+## Targets and loss
+
+For a non-forced decision with root visit counts `N(a)`:
 
 ```text
 pi(a) = N(a) / sum_b N(b)
 z = (round_score[player] - round_score[other]) / 150
 
-L = -sum_a pi(a) * log softmax(masked_logits)(a)
-    + value_weight * (v - z)^2
-    + l2_weight * ||parameters||^2
+L_policy = -sum_a pi(a) * log_softmax(masked_logits)(a)
+L_value  = (v - z)^2
+L        = L_policy + L_value
 ```
 
-Only legal actions have nonzero `pi`. The target is the search distribution,
-not the sampled move and not a hand-authored move score. The same exact terminal
-`z` is attached to every non-forced decision by that player in the round.
+Illegal actions have zero target probability. A malformed target with positive
+illegal mass is rejected before loss calculation. The exact completed-round
+`z` attaches to every non-forced decision made by that player during the round.
+Forced placements produce no training example.
 
-Search reaches the end of the round during the first expert-iteration phase, so
-its backups use exact engine scoring rather than the network value. After the
-model is demonstrably accurate, its value may evaluate cut-off leaves and its
-policy may supply search priors. That change requires a comparison showing
-equal or stronger play at lower measured cost.
-
-## Dataset boundary
-
-Each example contains:
-
-```text
-contract versions and search configuration digest
-information-state tensor and digest
-legal mask
-search visit distribution
-selected action
-exact terminal round return
-fixture, role, dealer, round, and decision indexes
-```
-
-Examples come from actual self-play decision roots. Internal determinizations,
-opponent private hands, stock orders, and tree nodes are not training examples.
-Rows are immutable after sealing and split by fixture seed so no deck fixture
-appears in both training and validation.
+Both loss weights are `1.0`. Regularization is AdamW decoupled weight decay of
+`1e-4` applied to every trainable parameter; it is not added a second time to
+the reported loss.
 
 ## Acceptance
 
-Before neural guidance can affect search or gameplay:
+Implementation acceptance requires:
 
-- Tensor encoding is invariant under Queen/King normalization and hidden-card
-  substitutions outside the player's information set.
-- Masked policy probabilities are finite, normalized, and zero for illegal
-  actions.
-- Value outputs are finite and bounded.
-- Policy and value losses train the shared body in one backward pass.
-- Batch and individual forwards agree within device tolerances.
-- CPU and MPS optimization are benchmarked; the faster sustained device with no
-  unsafe memory or swap growth is selected.
-- A fixed control evaluation shows guided search is no weaker than the
-  search-only teacher at the selected latency budget.
+- Exact tensor and parameter counts.
+- Deterministic initialization and CPU inference.
+- Batch and individual forward equivalence.
+- Queen/King normalized-input equivalence.
+- Invariance under authoritative hidden-card substitutions.
+- Finite outputs, losses, and gradients.
+- Policy probability zero on illegal actions and unit mass on legal actions.
+- Player-relative values that reverse sign with the target perspective.
+- Policy and value losses both updating the shared body.
+- CPU and MPS agreement within `1e-5` absolute and `1e-4` relative tolerance.
+- No engine scoring, private state, determinization, or action selection in the
+  model package.
 
-## Artifact boundary
+## Artifact
 
-A candidate artifact contains its state dictionary, architecture and tensor
-schemas, card and action order, source revision, dataset and search-report
-digests, training configuration, and weight digest. One checkpoint is selected
-manually from absolute evaluation evidence.
+A model artifact contains the state dictionary, exact parameter count, all
+contract versions, card and action order, initialization identity, source
+revision, training configuration, dataset and search-report digests, optimizer
+compatibility version, and state-dictionary digest. Loading rejects missing,
+extra, incorrectly shaped, or non-finite parameters.
 
-The deployment contract is not selected yet. Search latency and strength will
-determine whether the application serves search, search guided by the network,
-or a distilled network alone. No deployment-specific hidden state or endpoint
-shape is part of the model design.
+The artifact has no hidden-state field. Deployment remains undecided until
+search-only, guided-search, and standalone-model strength and latency are
+measured.

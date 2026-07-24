@@ -1,6 +1,7 @@
 :root {
   --narrow-breakpoint: 900px;
   --minimum-card-size: 64px;
+  --minimum-hand-card-size: 72px;
   --dracula-portrait-aspect: 4 / 3;
   --dracula-avatar-size: 64px;
   --mobile-commentary-height: 160px;
@@ -181,7 +182,7 @@ button {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 150px;
-  grid-template-rows: auto minmax(0, 1fr) 112px;
+  grid-template-rows: auto minmax(0, 1fr) 138px;
   gap: 16px;
   aspect-ratio: 4 / 3;
   min-height: 0;
@@ -284,22 +285,20 @@ button.hand-card {
   line-height: 1;
 }
 
-.legal-target small {
-  font-size: 14px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
 .hand {
   grid-column: 1;
   grid-row: 3;
   display: grid;
-  grid-template-columns: repeat(4, minmax(64px, 92px));
+  grid-template-columns: repeat(4, minmax(var(--minimum-hand-card-size), 110px));
   justify-content: center;
   gap: 10px;
 }
 
 .hand-card {
+  align-self: center;
+  min-width: var(--minimum-hand-card-size);
+  min-height: var(--minimum-hand-card-size);
+  aspect-ratio: 1;
   border-style: solid;
   border-color: transparent;
   transition: transform 120ms ease, box-shadow 120ms ease;
@@ -770,7 +769,7 @@ button.hand-card {
   .main-display {
     grid-row: 2;
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto minmax(300px, 1fr) 108px;
+    grid-template-rows: auto auto minmax(300px, 1fr) 132px;
     aspect-ratio: auto;
   }
 
@@ -821,7 +820,7 @@ button.hand-card {
     .portrait-placeholder { align-self: center; width: 64px; height: 64px; margin-left: 8px; font-size: 32px; aspect-ratio: 1; }
     .commentary-stream { align-self: center; max-height: none; overflow: hidden; padding: 16px; }
     .commentary-stream > :not(:last-child) { display: none; }
-    .main-display { grid-row: 2; grid-template-columns: 1fr; grid-template-rows: auto auto minmax(300px, 1fr) 108px; aspect-ratio: auto; }
+    .main-display { grid-row: 2; grid-template-columns: 1fr; grid-template-rows: auto auto minmax(300px, 1fr) 132px; aspect-ratio: auto; }
     .turn-status, .scoreboard, .coffin, .hand { grid-column: 1; }
     .scoreboard { grid-row: 2; width: 100%; }
     .coffin { grid-row: 3; width: min(100%, 480px); height: auto; }

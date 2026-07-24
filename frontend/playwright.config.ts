@@ -8,7 +8,17 @@ const candidate = path.resolve(
   process.env.DRACULA_POLICY_ARCHIVE ??
     path.join(projectRoot, "runs/training-004/archives/policy-2-policy-2-v20.pt"),
 );
-const database = path.join(projectRoot, ".local", "dracula-e2e.sqlite3");
+const guidedArtifact = path.resolve(
+  process.env.DRACULA_POLICY_VALUE_ARTIFACT ??
+    path.join(projectRoot, "runs/search-warmstart-smoke-001/warm-start-smoke.pt"),
+);
+const opponentMode = process.env.DRACULA_E2E_OPPONENT ?? "archive";
+if (!new Set(["archive", "guided"]).has(opponentMode)) {
+  throw new Error("DRACULA_E2E_OPPONENT must be archive or guided");
+}
+const database = path.resolve(
+  process.env.DRACULA_E2E_DATABASE ?? path.join(projectRoot, ".local", "dracula-e2e.sqlite3"),
+);
 
 function shellValue(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
@@ -41,7 +51,10 @@ export default defineConfig({
         `DRACULA_DATABASE_PATH=${shellValue(database)}`,
         `DRACULA_LOCAL_GAME_SEED=${shellValue("dracula-browser-e2e-v1")}`,
         "DRACULA_NARRATION_ENABLED=false",
+        `DRACULA_OPPONENT_MODE=${shellValue(opponentMode)}`,
         `DRACULA_POLICY_ARCHIVE=${shellValue(candidate)}`,
+        `DRACULA_POLICY_VALUE_ARTIFACT=${shellValue(guidedArtifact)}`,
+        `DRACULA_GUIDED_SIMULATIONS=${shellValue(process.env.DRACULA_GUIDED_SIMULATIONS ?? "20")}`,
         "DRACULA_POLICY_INFERENCE_PROFILE=argmax-v1",
         ".venv/bin/uvicorn dracula.api.app:app --host 127.0.0.1 --port 8011 --no-access-log",
       ].join(" "),

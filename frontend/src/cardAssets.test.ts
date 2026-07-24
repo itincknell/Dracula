@@ -10,6 +10,7 @@ import { CANONICAL_CARD_IDS, cardAsset, cardName } from "./cardAssets";
 const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const projectRoot = path.resolve(frontendRoot, "..");
 const sourceRoot = path.join(projectRoot, "Cards (large)");
+const customRoot = path.join(frontendRoot, "assets", "cards");
 const copiedRoot = path.join(frontendRoot, "public", "cards");
 
 const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
@@ -24,7 +25,7 @@ describe("card assets", () => {
     expect(CANONICAL_CARD_IDS).toEqual(expectedIds);
     expect(Object.keys(sourceAssets)).toEqual(expectedIds);
     expect(cardAsset("AC")).toBe("/cards/AC.png");
-    expect(cardAsset("V2")).toBe("/cards/V2.png");
+    expect(cardAsset("V2")).toBe("/cards/V2.svg");
     expect(() => cardAsset("not-a-card")).toThrow("unknown canonical card ID");
   });
 
@@ -42,6 +43,16 @@ describe("card assets", () => {
         readFile(path.join(copiedRoot, `${cardId}.png`)),
       ]);
       expect(copied.equals(source), `${cardId} must be copied without transformation`).toBe(true);
+    }
+  });
+
+  it("copies the hand-authored Vampire faces without transforming them", async () => {
+    for (const cardId of ["V1", "V2"]) {
+      const [source, copied] = await Promise.all([
+        readFile(path.join(customRoot, `${cardId}.svg`)),
+        readFile(path.join(copiedRoot, `${cardId}.svg`)),
+      ]);
+      expect(copied.equals(source), `${cardId} must preserve its custom vector source`).toBe(true);
     }
   });
 

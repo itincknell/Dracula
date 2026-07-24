@@ -5,7 +5,10 @@ import path from "node:path";
 import type { EventsResponse, HumanGameView, Player } from "../src/contracts";
 
 const API = "http://127.0.0.1:8011";
-const candidatePath = "runs/training-004/archives/policy-2-policy-2-v20.pt";
+const opponentMode = process.env.DRACULA_E2E_OPPONENT ?? "archive";
+const candidatePath = opponentMode === "guided"
+  ? (process.env.DRACULA_POLICY_VALUE_ARTIFACT ?? "runs/search-warmstart-smoke-001/warm-start-smoke.pt")
+  : "runs/training-004/archives/policy-2-policy-2-v20.pt";
 const privateKeys = new Set([
   "seed",
   "stock",
@@ -315,12 +318,21 @@ test("health, startup, rules tab, and configured candidate identity", async ({ p
 
   const view = await startFromUi(page, "queen");
   const created = view.events.find((event) => event.event_type === "game_created");
-  expect(created?.payload).toMatchObject({
-    policy_id: "policy-2",
-    policy_version: "policy-2-v20",
-    inference_profile: "argmax-v1",
-    narration_enabled: false,
-  });
+  expect(created?.payload).toMatchObject(
+    opponentMode === "guided"
+      ? {
+          policy_id: "guided-information-set-search",
+          policy_version: "dracula-guided-information-search-v1",
+          inference_profile: "max-visits-v1",
+          narration_enabled: false,
+        }
+      : {
+          policy_id: "policy-2",
+          policy_version: "policy-2-v20",
+          inference_profile: "argmax-v1",
+          narration_enabled: false,
+        },
+  );
   await expect(page.getByText("Narration disabled")).toBeVisible();
 });
 
@@ -331,7 +343,9 @@ test("completes all six rounds as Queen on desktop", async ({ page, request }) =
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("button", { name: "Start as Queen" })).toBeVisible();
 
-  const database = path.resolve("../.local/dracula-e2e.sqlite3");
+  const database = path.resolve(
+    process.env.DRACULA_E2E_DATABASE ?? "../.local/dracula-e2e.sqlite3",
+  );
   const evidence = JSON.parse(execFileSync(
     "../.venv/bin/python",
     ["-c", [
@@ -346,7 +360,17 @@ test("completes all six rounds as Queen on desktop", async ({ page, request }) =
     ].join(";"), database, gameId],
     { cwd: process.cwd(), encoding: "utf8" },
   ));
-  expect(evidence).toEqual({ bytes: 512, nonzero: true, rounds: 6, forced: 3, version: "policy-2-v20" });
+  expect(evidence).toEqual(
+    opponentMode === "guided"
+      ? {
+          bytes: 512,
+          nonzero: false,
+          rounds: 6,
+          forced: 3,
+          version: "dracula-guided-information-search-v1",
+        }
+      : { bytes: 512, nonzero: true, rounds: 6, forced: 3, version: "policy-2-v20" },
+  );
 });
 
 test("completes all six rounds as King in the narrow layout", async ({ page, request }) => {

@@ -14,7 +14,7 @@ from dracula.api.session import HIDDEN_STATE_BYTES
 from dracula.bridge import build_policy_turn_context
 from dracula.engine import EnginePlayer, create_game
 from dracula.search import information_state_from_engine
-from dracula.search_policy import InlineSearchExecutor
+from dracula.search_policy import InlineSearchExecutor, InlineStrategicSearchExecutor
 
 
 def _request(executor: InlineSearchExecutor) -> PolicyTurnRequest:
@@ -117,3 +117,38 @@ def test_app_selects_and_validates_search_configuration(
     monkeypatch.setenv("DRACULA_SEARCH_SIMULATIONS", "0")
     with pytest.raises(ValueError, match="positive integer"):
         create_app(repository=InMemoryGameRepository(), narration_enabled=False)
+
+
+# Teacher v2 is selected explicitly, so manual testing cannot silently use v1.
+def test_app_selects_shallow_response_teacher_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DRACULA_OPPONENT_MODE", "search-v2")
+    monkeypatch.setenv("DRACULA_SEARCH_SIMULATIONS", "32")
+    monkeypatch.setenv("DRACULA_SEARCH_RESPONSE_COMPLETIONS", "4")
+    app = create_app(repository=InMemoryGameRepository(), narration_enabled=False)
+    executor = app.state.gameplay_service.policy_executor
+    descriptor = app.state.gameplay_service.policy_descriptor
+
+    assert isinstance(executor, InlineStrategicSearchExecutor)
+    assert descriptor.policy_id == "strategic-information-set-search"
+    assert executor.planner.config.outer_simulation_budget == 32
+    assert executor.planner.config.response_completions_per_action == 4
+
+    monkeypatch.setenv("DRACULA_SEARCH_RESPONSE_COMPLETIONS", "3")
+    with pytest.raises(ValueError, match="must be 1, 2, or 4"):
+        create_app(repository=InMemoryGameRepository(), narration_enabled=False)
+
+
+# The v2 adapter preserves the information-only, deterministic API boundary.
+def test_strategic_search_executor_is_deterministic_legal_and_stateless() -> None:
+    executor = InlineStrategicSearchExecutor.from_values(32, 4)
+    request = _request(executor)
+
+    first = executor.invoke(request)
+    repeated = executor.invoke(request)
+
+    assert first == repeated
+    assert first.action_index is not None
+    assert request.action_table[first.action_index] is not None
+    assert first.hidden_state is None

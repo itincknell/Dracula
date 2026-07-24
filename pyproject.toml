@@ -16,6 +16,12 @@ dependencies = [
 
 [project.scripts]
 dracula-search-validate = "dracula.search.validation:main"
+dracula-search-signal = "dracula.search.signal_measurement:main"
+dracula-teacher = "dracula.teacher:main"
+dracula-response-dataset = "dracula.response_dataset:main"
+dracula-response-ranker = "dracula.response_ranker:main"
+dracula-supervised = "dracula.supervised:main"
+dracula-expert = "dracula.expert:main"
 
 [project.optional-dependencies]
 test = [

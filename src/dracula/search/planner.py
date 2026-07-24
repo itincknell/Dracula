@@ -8,15 +8,15 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from dracula.bridge import ACTION_COUNT, action_index_for_move, build_policy_turn_context
+from dracula.bridge import ACTION_COUNT, action_index_for_move, move_for_action_index
 from dracula.engine import (
     EngineMove,
     EnginePlayer,
     EngineRoundResult,
     EngineStatus,
     SimulationEngineState,
-    apply_move,
-    legal_moves,
+    apply_simulation_move,
+    legal_simulation_moves,
     other_player,
 )
 from dracula.randomness import Sha256CounterStream, seed_hex
@@ -26,7 +26,7 @@ from dracula.search.information import (
     derive_rollout_choice_seed,
     derive_tree_selection_seed,
     information_state_fingerprint,
-    information_state_from_simulation,
+    project_simulation_information_state,
     sample_determinization,
     sample_uniform_action_index,
 )
@@ -158,9 +158,8 @@ def _move_for_action(state: SimulationEngineState, action_index: int) -> EngineM
     actor = state.active_player
     if actor is None:
         raise SearchContractViolation("a playing simulation must have an active player")
-    context = build_policy_turn_context(state, actor)
-    move = context.action_table[action_index]
-    if move is None:
+    move = move_for_action_index(actor, action_index)
+    if move not in legal_simulation_moves(state, actor):
         raise SearchContractViolation("search selected a masked engine action")
     return move
 
@@ -196,7 +195,7 @@ def _uniform_action(
     simulation_index: int,
     rollout_ply: int,
 ) -> int:
-    actor_information = information_state_from_simulation(state)
+    actor_information = project_simulation_information_state(state)
     return sample_uniform_action_index(
         actor_information,
         derive_rollout_choice_seed(request_seed, simulation_index, rollout_ply),
@@ -282,13 +281,13 @@ class InformationSetSearch:
                 actor = state.active_player
                 if actor is None:
                     raise SearchContractViolation("playing simulation lost its active player")
-                moves = legal_moves(state, actor)
+                moves = legal_simulation_moves(state, actor)
                 forced = len(moves) == 1
                 if forced:
                     move = moves[0]
                     action_index = action_index_for_move(move, actor)
                 elif actor is root_player and not expanded:
-                    actor_information = information_state_from_simulation(state)
+                    actor_information = project_simulation_information_state(state)
                     node_key = information_state_fingerprint(actor_information)
                     legal_actions = _legal_action_indexes(actor_information)
                     node = nodes.get(node_key)
@@ -325,7 +324,7 @@ class InformationSetSearch:
                         root_player, state, move, action_index, forced
                     )
                 )
-                state = apply_move(state, move).state
+                state = apply_simulation_move(state, move)
                 if not isinstance(state, SimulationEngineState):
                     raise SearchContractViolation("engine discarded simulation provenance")
                 rollout_ply += 1

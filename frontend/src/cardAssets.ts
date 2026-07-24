@@ -3,7 +3,12 @@ import sourceAssets from "../card-assets.json";
 export const CANONICAL_CARD_IDS = Object.freeze(Object.keys(sourceAssets));
 
 const CARD_ASSET_URLS = Object.freeze(
-  Object.fromEntries(CANONICAL_CARD_IDS.map((cardId) => [cardId, `/cards/${cardId}.png`])),
+  Object.fromEntries(
+    CANONICAL_CARD_IDS.map((cardId) => [
+      cardId,
+      `/cards/${cardId}.${cardId === "V1" || cardId === "V2" ? "svg" : "png"}`,
+    ]),
+  ),
 );
 
 const rankNames: Readonly<Record<string, string>> = {

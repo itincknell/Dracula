@@ -1,0 +1,52 @@
+[run]
+run_id = "expert-sustained-smoke-001"
+root_seed = "dracula-expert-sustained-smoke-v1"
+output_directory = "runs/expert-sustained-smoke-001"
+source_revision = "b1d6dda"
+maximum_iterations = 1
+
+[accepted]
+artifact_path = "runs/search-warmstart-smoke-001/warm-start-smoke.pt"
+
+[teacher]
+directory = "runs/search-teacher-warmstart-smoke-500"
+search_report_digest = "873c67800f259e96d980f99da42a52f50c0515d834c211824fddcd0294845433"
+
+[collection]
+training_games = 2
+validation_games = 1
+workers = 2
+simulation_budget = 100
+puct_constant = 1.5
+early_placement_count = 4
+
+[replay]
+accepted_iterations = 5
+examples_per_epoch = 256
+
+[optimization]
+device = "cpu"
+batch_size = 128
+learning_rate = 0.0003
+betas = [0.9, 0.999]
+epsilon = 1e-8
+weight_decay = 0.0001
+gradient_norm = 1.0
+minimum_epochs = 5
+maximum_epochs = 5
+early_stop_patience = 2
+minimum_improvement = 0.0001
+
+[evaluation]
+candidate_budget = 100
+random_pairs = 1
+ppo_pairs = 1
+search_pairs = 1
+prior_pairs = 1
+search_control_budget = 100
+bootstrap_samples = 200
+workers = 2
+strategic_repetitions = 1
+
+[controls]
+ppo_archive = "runs/training-004/archives/policy-2-policy-2-v20.pt"

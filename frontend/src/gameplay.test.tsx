@@ -134,7 +134,8 @@ describe("card interaction", () => {
     fireEvent.click(illegal);
 
     expect(submitMove).not.toHaveBeenCalled();
-    expect(screen.getAllByText("Legal")).toHaveLength(1);
+    expect(screen.queryByText("Legal")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play 2 of Clubs at coffin position 9" })).toHaveTextContent("+");
   });
 
   it("disables every hand input while a mutation is pending or Dracula is active", async () => {
@@ -219,8 +220,24 @@ describe("resumable phases", () => {
     await userEvent.click(screen.getByRole("button", { name: "2 of Clubs (2C), hand slot 1" }));
 
     expect(screen.getByRole("button", { name: "Play 2 of Clubs at coffin position 9" })).toBeEnabled();
-    expect(screen.getAllByText("Legal")).toHaveLength(1);
+    expect(screen.queryByText("Legal")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Score tally")).toHaveTextContent("12345");
     expect(screen.queryByText("server-only")).not.toBeInTheDocument();
+  });
+});
+
+describe("turn identity", () => {
+  it.each([
+    ["queen", "Your turn — Queen · Rows"],
+    ["king", "Your turn — King · Columns"],
+  ] as const)("shows the human's %s orientation", async (humanRole, message) => {
+    const current = view(
+      { kind: "human_turn" },
+      { human_role: humanRole, active_player: humanRole },
+    );
+    const { controller } = await loadedController(current);
+    render(<GameWindow controller={controller} onNewGame={() => undefined} />);
+
+    expect(screen.getByLabelText(`Current turn: ${message}`)).toHaveTextContent(message);
   });
 });

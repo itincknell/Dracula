@@ -2,9 +2,15 @@
 
 ## Status
 
-The information-set search opponent is validated. Search-guided neural training
-is not ready because the shared policy/value architecture and guided-search
-training contract remain incomplete.
+This is a historical report for the version 1 teacher design. Its collection
+commands and 500-simulation dataset plan are superseded by
+[Teacher v2 smoke collection](teacher-v2-smoke-collection.md) and the active
+[model-training contract](../docs/model-training.md).
+
+The information-set search opponent, shared policy/value model, deterministic
+teacher collector, supervised optimizer, neural-guided PUCT planner, and
+single-model expert iterator are validated mechanically. Full-scale data
+collection and candidate evaluation remain.
 
 ## Rejected PPO experiment
 
@@ -33,9 +39,9 @@ versioned deterministic seeds, conserves all 54 cards, and reconstructs an
 engine-valid simulation state. Equal player information produces equal samples
 and search results for the same seed.
 
-## Planned neural learner
+## Neural learner
 
-One feed-forward network will predict:
+One 339,978-parameter feed-forward network will predict:
 
 - 32 raw policy logits over the fixed hand-slot and coffin-position action map.
 - One bounded player-relative value estimating normalized terminal round-score
@@ -51,16 +57,30 @@ policy target. The exact terminal target is:
 The same target attaches to each non-forced decision by that player in the
 round. Forced placements produce no policy sample.
 
+The initial dataset uses 240 games and 500-simulation search. After warm-start
+training, guided self-play uses 100-simulation PUCT with network policy priors
+and exact full-round scoring. The value head does not truncate search until a
+separate accuracy, strength, and latency gate passes.
+
 ## Retained implementation
 
 - Deterministic engine, scoring, serialization, and invariance tests.
 - Player-relative information state and hidden-card sampler.
 - Search-only UCT planner, exhaustive diagnostic, strategic fixtures, and
   absolute-control evaluation.
+- The 339,978-parameter feed-forward policy/value model, external masking,
+  dual-head loss, deterministic initialization, and strict artifact contract.
+- Deterministic full-game search-teacher collection, public decision caches,
+  sealed tensor shards, split manifests, inspection, and phase resume.
+- Deterministic supervised optimization, held-out validation, CPU/MPS device
+  selection, atomic checkpoint recovery, reports, and model export.
+- Information-safe PUCT using model priors, per-actor sampled views, exact
+  terminal backup, deterministic diagnostics, and an experimental gated value
+  cutoff.
 - Historical PPO runs, reports, checkpoints, recurrent model loader, and local
   adapter as immutable comparison evidence.
-- FastAPI, SQLite, React gameplay, the local search executor, and recorded local
-  results.
+- FastAPI, SQLite, React gameplay, local search and guided-search executors, and
+  recorded local results.
 
 ## Removed from active use
 
@@ -91,6 +111,42 @@ Under four concurrent validation workers, 500-simulation fixture decisions had
 203 MiB including Python and PyTorch. The 2,000-simulation budget added no
 fixture passes over 500.
 
+One full six-round teacher game produced 42 examples at each measured budget:
+
+| Simulations | Wall time | Examples/hour | Simulations/second | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 57.9 s | 2,610 | 72.8 | 199 MB |
+| 500 | 309.2 s | 489 | 68.0 | 201 MB |
+
+These are single-worker measurements. Four-worker collection is implemented and
+validated separately; full-run duration depends on sustained thermal behavior.
+
+A two-game 500-simulation smoke corpus supplied 42 training and 42 held-out
+examples. Supervised training selected epoch 28 and stopped after epoch 33 with
+a held-out total loss of 2.2213. This validates mechanics only; it is not a
+candidate-strength result.
+
+| Optimization device | Examples/second | Median epoch | Peak RSS | Swap growth |
+| --- | ---: | ---: | ---: | ---: |
+| CPU | 7,756 | 5.4 ms | 297 MB | 0 |
+| MPS | 953 | 44.1 ms | 440 MB | 0 |
+
+CPU is the measured default for the current batch shape.
+
+The two-game smoke model was also exercised as guided-search infrastructure.
+On one matched seed per strategic fixture, full-round exact search produced:
+
+| Simulations | UCT fixtures | Guided fixtures | UCT mean | Guided mean |
+| ---: | ---: | ---: | ---: | ---: |
+| 20 | 8/12 | 9/12 | 0.34 s | 0.40 s |
+| 50 | 9/12 | 10/12 | 0.87 s | 1.17 s |
+| 100 | 10/12 | 12/12 | 2.24 s | 2.35 s |
+
+Peak process RSS was about 203 MB. This is a plumbing and tactical-fixture
+result, not candidate-strength evidence. The smoke model's held-out value MSE
+was `0.0690`, worse than the zero predictor's `0.0344`; model-value cutoffs
+therefore remain disabled without running the later strength and latency gates.
+
 ## Commands
 
 Run the complete implemented suite:
@@ -111,8 +167,19 @@ removing `runs/search-validation-001`:
   --game-pairs 12
 ```
 
-There is no active search-guided training command. The retired PPO command was
-removed rather than presented as the new trainer.
+Collect the full initial teacher corpus and run supervised warm-start training:
+
+```bash
+.venv/bin/dracula-teacher full \
+  --output runs/search-teacher-001 \
+  --root-seed dracula-search-teacher-warmstart-v1
+
+.venv/bin/dracula-supervised train --config configs/search-warmstart.toml
+```
+
+`dracula-supervised resume`, `validate`, and `export` operate from the immutable
+resolved run directory. `configs/search-warmstart-smoke.toml` reproduces the
+mechanical smoke run.
 
 Run local gameplay against the search opponent:
 
@@ -124,20 +191,17 @@ Run the historical comparison control with `make preview-control`.
 
 ## Remaining measured limitations
 
-- Embedding widths, shared-body shape, normalization, exact initialization,
-  parameter count, and loss weights are not finalized.
-- Neural-guided information-set selection, batched leaf evaluation, root
-  exploration, and move-temperature behavior are not specified or implemented.
-- Replay, dual-head optimization, atomic resume, CPU/MPS comparison, and a
-  sustained search-guided trial do not exist.
-- No search-guided neural checkpoint exists for absolute evaluation or local
-  gameplay. Search-only gameplay is available.
+- The full 240-game teacher corpus and candidate warm start have not run.
+- The expert-iteration smoke and sustained trials are below the contractual
+  collection and absolute-evaluation sample sizes.
+- A guided candidate completed local gameplay and retained strategic behavior
+  at 100 simulations, but has not established full-game non-inferiority to the
+  500-simulation teacher.
 - The validated 500-simulation Python search is too slow for an unqualified
   interactive deployment claim.
 
 ## Readiness assessment
 
-Not ready for sustained search-guided self-play. The exact blockers are the
-unfinished neural architecture, guided-search contract, replay/training system,
-and search-backed application adapter. Engine and search-only readiness gates
-are complete.
+The complete training path is ready for the full sealed teacher corpus and
+contract-size expert run. No guided candidate is ready for acceptance until the
+full absolute controls establish the required strength and latency result.

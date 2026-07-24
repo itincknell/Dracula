@@ -33,7 +33,7 @@ function useReducedMotion(forced: boolean | undefined): boolean {
 }
 
 function playerHeading(player: Player, humanRole: Player): string {
-  return player === humanRole ? "Your Score" : "My Score";
+  return player === humanRole ? "Your Score" : "Dracula's Score";
 }
 
 function activeLine(
@@ -180,7 +180,7 @@ function ComparisonWorkspace({
         })}
       </div>
       <div className="comparison-column">
-        <h2>My Score</h2>
+        <h2>Dracula's Score</h2>
         {model.opponentRankedTotals.map((total, index) => {
           const comparison = model.comparisons[index];
           const reached = index <= comparisonIndex;
@@ -196,7 +196,7 @@ function SelectedScores({ model }: { model: ScoringPresentationModel }) {
   return (
     <section className="selected-round-scores" aria-live="polite">
       <div><span>Your Score</span><strong>{model.selection.humanScore}</strong><small>Round Score</small></div>
-      <div><span>My Score</span><strong>{model.selection.opponentScore}</strong><small>Round Score</small></div>
+      <div><span>Dracula's Score</span><strong>{model.selection.opponentScore}</strong><small>Round Score</small></div>
     </section>
   );
 }
@@ -211,7 +211,7 @@ export function RoundTotals({ model }: { model: ScoringPresentationModel }) {
         <b aria-label={`Your new total: ${model.totals.humanTotal}`}>{model.totals.humanTotal}</b>
       </div>
       <div>
-        <span>My Score</span>
+        <span>Dracula's Score</span>
         <strong aria-label={`Dracula's round score: ${model.totals.opponentRound}`}>{model.totals.opponentRound}</strong>
         <span className="previous-total" aria-label={`Dracula's previous total: ${model.totals.opponentPrevious}`}>+ {model.totals.opponentPrevious}</span>
         <b aria-label={`Dracula's new total: ${model.totals.opponentTotal}`}>{model.totals.opponentTotal}</b>

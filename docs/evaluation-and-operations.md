@@ -27,15 +27,24 @@ narration-disabled play completes without fabricated commentary.
 
 ## Opponent evaluation
 
-The search-only gates, fixed fixtures, controls, statistical rule, tactical
-cases, and later neural comparisons are defined in
-[information-set search](search.md#search-only-gates) and
-[model training](model-training.md#search-fixtures-and-absolute-controls).
+The version 1 baseline, Teacher v2 gates, fixed fixtures, controls, statistical
+rules, tactical cases, and later neural comparisons are defined in
+[information-set search](search.md#teacher-v2-gates) and
+[model training](model-training.md#absolute-evaluation-and-manual-acceptance).
 
 Application acceptance additionally measures per-turn wall time, timeout rate,
-peak process memory, retained tree memory after a decision, and reproducibility
-after retry. A controller is not eligible for deployment until its worst
-supported decision budget fits a declared request-execution profile.
+outer simulations, shallow-response requests, candidate actions, terminal
+evaluations, response-cache behavior, peak process memory, retained tree memory
+after a decision, and reproducibility after retry. A controller is not eligible
+for deployment until its worst supported decision budget fits a declared
+request-execution profile.
+
+The initial guided-search candidate uses 100 full-round simulations per move.
+Its model, PUCT, replay, and manual-acceptance criteria are fixed in
+[neural model](neural-model.md) and
+[model training](model-training.md#absolute-evaluation-and-manual-acceptance).
+Network value cutoffs remain experimental until they satisfy the separate gate
+in [information-set search](search.md#value-cutoff-gate).
 
 ## Narrator and cost evaluation
 
@@ -84,7 +93,10 @@ referenced by digest rather than copied into logs.
 
 The deterministic engine, SQLite persistence, FastAPI service, React frontend,
 and narrator-disabled mode run without AWS. In-memory adapters support unit
-tests. Local gameplay uses the validated search controller by default. The
+tests. Local gameplay can select the manually approved 32×4 Teacher v2
+controller. Version 1 remains an explicit comparison control, and the failed
+automated v2 report remains historical evidence. A selected policy/value
+artifact can run behind guided search through the same opponent boundary. The
 archived-policy adapter remains available only as the fixed PPO control.
 
 Run the search opponent with:
@@ -94,7 +106,26 @@ make dev
 ```
 
 Use `SEARCH_SIMULATIONS` and `SEARCH_EXPLORATION` to override its resolved
-configuration. Run `make preview-control` to select the historical control.
+configuration. Run `make preview-control` to select the historical PPO control.
+Run the manually approved Teacher v2 controller explicitly with:
+
+```bash
+make preview OPPONENT=search-v2 \
+  SEARCH_SIMULATIONS=32 \
+  SEARCH_RESPONSE_COMPLETIONS=4
+```
+
+Version 1 remains the default and no controller is selected as a silent
+fallback.
+
+Run the following to inspect a candidate without changing the default
+controller:
+
+```bash
+make preview OPPONENT=guided \
+  GUIDED_ARTIFACT=<path> \
+  GUIDED_SIMULATIONS=<budget>
+```
 Missing or invalid controller configuration fails at startup; it never silently
 selects another opponent.
 
