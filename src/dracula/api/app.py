@@ -42,12 +42,18 @@ LOCAL_OPPONENT_MODE_ENV = "DRACULA_OPPONENT_MODE"
 SEARCH_SIMULATIONS_ENV = "DRACULA_SEARCH_SIMULATIONS"
 SEARCH_EXPLORATION_ENV = "DRACULA_SEARCH_EXPLORATION"
 SEARCH_RESPONSE_COMPLETIONS_ENV = "DRACULA_SEARCH_RESPONSE_COMPLETIONS"
+SEARCH_RESPONSE_SIMULATIONS_ENV = "DRACULA_SEARCH_RESPONSE_SIMULATIONS"
+BELIEF_COMPLETIONS_ENV = "DRACULA_BELIEF_COMPLETIONS"
 RESPONSE_RANKER_ARTIFACT_ENV = "DRACULA_RESPONSE_RANKER_ARTIFACT"
 GUIDED_ARTIFACT_ENV = "DRACULA_POLICY_VALUE_ARTIFACT"
 GUIDED_SIMULATIONS_ENV = "DRACULA_GUIDED_SIMULATIONS"
+SAM_POLICY_ARTIFACT_ENV = "DRACULA_SAM_POLICY_ARTIFACT"
+BGC_PI0_ARTIFACT_ENV = "DRACULA_BGC_PI0_ARTIFACT"
 DEFAULT_SEARCH_SIMULATIONS = 500
 DEFAULT_SEARCH_EXPLORATION = math.sqrt(2.0)
 DEFAULT_SEARCH_RESPONSE_COMPLETIONS = 1
+DEFAULT_SEARCH_RESPONSE_SIMULATIONS = 32
+DEFAULT_BELIEF_COMPLETIONS = 8
 DEFAULT_GUIDED_SIMULATIONS = 100
 
 
@@ -133,11 +139,16 @@ def create_app(
         if opponent_mode not in {
             "search",
             "search-v2",
+            "search-v2-nested",
+            "search-belief-greedy",
+            "search-belief-greedy-pi0",
+            "bgc-policy",
             "search-v2-student-direct",
             "search-v2-student-top-2",
             "search-v2-student-top-3",
             "guided",
             "archive",
+            "sam-policy",
         }:
             raise ValueError(
                 f"{LOCAL_OPPONENT_MODE_ENV} must select a documented opponent mode"
@@ -207,6 +218,88 @@ def create_app(
                 response_ranker_artifact=response_ranker_artifact,
             )
             resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "search-v2-nested":
+            from dracula.search_policy import (
+                InlineNestedStrategicSearchExecutor,
+            )
+
+            resolved_executor = (
+                InlineNestedStrategicSearchExecutor.from_values(
+                    _positive_integer_environment(
+                        SEARCH_SIMULATIONS_ENV,
+                        32,
+                    ),
+                    _positive_integer_environment(
+                        SEARCH_RESPONSE_SIMULATIONS_ENV,
+                        DEFAULT_SEARCH_RESPONSE_SIMULATIONS,
+                    ),
+                    _nonnegative_float_environment(
+                        SEARCH_EXPLORATION_ENV,
+                        DEFAULT_SEARCH_EXPLORATION,
+                    ),
+                    _nonnegative_float_environment(
+                        SEARCH_EXPLORATION_ENV,
+                        DEFAULT_SEARCH_EXPLORATION,
+                    ),
+                )
+            )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "search-belief-greedy":
+            from dracula.search_policy import (
+                InlineBeliefGreedySearchExecutor,
+            )
+
+            resolved_executor = InlineBeliefGreedySearchExecutor.from_values(
+                _positive_integer_environment(
+                    SEARCH_SIMULATIONS_ENV,
+                    32,
+                ),
+                _positive_integer_environment(
+                    BELIEF_COMPLETIONS_ENV,
+                    DEFAULT_BELIEF_COMPLETIONS,
+                ),
+                _nonnegative_float_environment(
+                    SEARCH_EXPLORATION_ENV,
+                    DEFAULT_SEARCH_EXPLORATION,
+                ),
+            )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "search-belief-greedy-pi0":
+            artifact_path = os.getenv(BGC_PI0_ARTIFACT_ENV)
+            if artifact_path is None or not artifact_path.strip():
+                raise ValueError(
+                    f"{BGC_PI0_ARTIFACT_ENV} must be a nonempty path"
+                )
+            from dracula.search_policy import (
+                InlinePi0BeliefGreedySearchExecutor,
+            )
+
+            resolved_executor = InlinePi0BeliefGreedySearchExecutor.from_values(
+                artifact_path,
+                _positive_integer_environment(
+                    SEARCH_SIMULATIONS_ENV,
+                    128,
+                ),
+                _positive_integer_environment(
+                    BELIEF_COMPLETIONS_ENV,
+                    DEFAULT_BELIEF_COMPLETIONS,
+                ),
+                _nonnegative_float_environment(
+                    SEARCH_EXPLORATION_ENV,
+                    DEFAULT_SEARCH_EXPLORATION,
+                ),
+            )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "bgc-policy":
+            artifact_path = os.getenv(BGC_PI0_ARTIFACT_ENV)
+            if artifact_path is None or not artifact_path.strip():
+                raise ValueError(
+                    f"{BGC_PI0_ARTIFACT_ENV} must be a nonempty path"
+                )
+            from dracula.search_policy import InlineBGCPolicyExecutor
+
+            resolved_executor = InlineBGCPolicyExecutor(artifact_path)
+            resolved_descriptor = resolved_executor.descriptor
         elif opponent_mode == "guided":
             artifact_path = os.getenv(GUIDED_ARTIFACT_ENV)
             if artifact_path is None or not artifact_path.strip():
@@ -238,6 +331,20 @@ def create_app(
                     LOCAL_INFERENCE_PROFILE_ENV, DEFAULT_LOCAL_INFERENCE_PROFILE
                 ),
             )
+            resolved_descriptor = resolved_executor.descriptor
+        elif opponent_mode == "sam-policy":
+            artifact_path = os.getenv(SAM_POLICY_ARTIFACT_ENV)
+            if artifact_path is None or not artifact_path.strip():
+                raise ValueError(
+                    f"{SAM_POLICY_ARTIFACT_ENV} must be a nonempty path"
+                )
+            # PyTorch remains outside the ordinary API import path unless the
+            # standalone classifier is selected explicitly.
+            from dracula.standalone_policy import (
+                StandaloneSamPolicyExecutor,
+            )
+
+            resolved_executor = StandaloneSamPolicyExecutor(artifact_path)
             resolved_descriptor = resolved_executor.descriptor
 
     application = FastAPI(title="Dracula API", version=API_VERSION)

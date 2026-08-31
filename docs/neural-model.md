@@ -1,128 +1,240 @@
-# Search-guided neural model
+# Standalone BGC-128 policy model
 
-The learned opponent will compress the approved Teacher v2 search player. One
-feed-forward network predicts a policy over the fixed action space and a
-player-relative round value. It has no recurrent state and does not own
-legality, transitions, determinization, scoring, or final action selection.
+The selected release model is a standalone policy classifier trained from
+BGC-128 lineage normalized root-search visit distributions. It receives one player-visible
+card-set observation and returns one raw score for each current-card candidate
+and non-center destination pair. It does not predict action values, returns, scores, or any
+other search diagnostic.
+
+The model has no value head, critic, recurrence, PPO objective, or hybrid-search
+deployment role. It does not own legality, symmetry detection, concrete paired-destination
+selection, engine transitions, determinization, or scoring.
 
 ## Contract versions
 
-The initial artifact records:
+The initial implementation uses:
 
 ```text
-model_schema_version       = dracula-policy-value-v1
-observation_schema_version = dracula-observation-v1
-action_schema_version      = dracula-action-map-v1
-value_schema_version       = dracula-round-value-v1
+model_schema_version                 = dracula-bgc-card-policy-v2
+artifact_schema_version              = dracula-bgc-card-policy-artifact-v2
+observation_schema_version           = dracula-observation-card-set-v2
+action_schema_version                = dracula-card-candidate-action-map-v2
+representative_mask_schema_version   = dracula-sam-representative-mask-v1
+initialization_schema_version        = dracula-bgc-card-policy-initialization-v2
+training_snapshot_schema_version     = dracula-bgc-policy-snapshot-v1
+optimizer_compatibility_version      = dracula-bgc-policy-optimizer-v1
 ```
 
-The model receives `observation: bool[875]` and returns:
+The single-state interface is:
 
 ```text
-policy_logits: float32[4, 8]
-round_value:   float32 scalar in [-1, 1]
+observation:       bool[659]
+raw_policy_logits: float32[4, 8]
 ```
 
-Batch input is `bool[B, 875]`; batch output is `float32[B, 4, 8]` and
-`float32[B]`. The legal mask is a separate `bool[4, 8]` or `bool[B, 4, 8]`
-value applied outside the model.
+The batched interface is:
+
+```text
+observation:       bool[B, 659]
+raw_policy_logits: float32[B, 4, 8]
+```
+
+Parameters and outputs are float32. The model receives no legal-mask bit.
+Legality and representative-action reduction remain external.
+
+Action index is `candidate_row * 8 + destination_table_index`. Candidate rows
+contain the one to four current hand cards in fixed canonical card-ID order;
+padding rows have no legal action and no learned row embedding. Destination-table order is global grid
+indexes `0, 1, 2, 3, 5, 6, 7, 8`; the occupied center at grid index `4` has no
+action.
 
 ## Observation
 
-The observation is the player-relative round-local projection already produced
-by the engine bridge:
+The observation is the established player-relative projection:
 
 | Range | Shape | Meaning |
 | --- | --- | --- |
-| `0:216` | `4 × 54` | Acting player's stable hand slots |
-| `216:702` | `9 × 54` | Player-relative coffin positions |
-| `702:756` | `54` | Played cards |
-| `756:810` | `54` | Cards remaining in the acting player's hand |
-| `810:864` | `54` | Unseen cards |
-| `864:870` | `6` | One-hot round index |
-| `870:874` | `4` | One-hot acting-player decision index |
-| `874` | `1` | Acting player is dealer |
+| `0:486` | `9 × 54` | Player-relative coffin positions |
+| `486:540` | `54` | Played cards |
+| `540:594` | `54` | Cards remaining in the acting player's hand |
+| `594:648` | `54` | Unseen cards |
+| `648:654` | `6` | One-hot round index |
+| `654:658` | `4` | One-hot acting-player decision index |
+| `658` | `1` | Acting player is dealer |
 
 The three card-status vectors partition all 54 cards. Empty hand and coffin
-positions contain all zeros. Queen uses authoritative grid orientation; King
-uses the existing transpose so the acting player's scoring lines are always
-rows. Player identity is therefore not a feature.
+positions contain all zeros. Queen uses authoritative grid orientation. King
+uses the established transpose so the acting player's scoring lines are rows.
+Player identity is not a feature.
 
-The layout totals `216 + 486 + 162 + 11 = 875` bits. It was revalidated against
-`SearchInformationState` across 3,072 active states from 64 complete seeded
-games: 2,688 learned decisions and 384 forced placements. Hand slots, coffin
-positions, card partitions, lifecycle fields, and legal masks agreed at every
-state.
-
-The projection is sufficient for the uniform belief and round-local objective.
-Public move history remains available to search for determinization and audit,
-but it is not a model feature. Completed rounds and cumulative scores do not
-affect the additive round-value target.
+The layout totals `486 + 162 + 11 = 659` bits. Fixed preprocessing extracts the
+set bits of the in-hand vector in canonical card-ID order and packs them into
+four candidate rows. Canonical order is not learned. The projection contains no
+authoritative opponent hand, stock order, engine seed, determinization, search
+tree, model state, or policy history.
 
 ## Architecture
 
-One card embedding is shared by separate hand and coffin encoders:
+One card embedding is shared by the hand and coffin encoders:
 
 ```text
-card embedding:          54 × 32
-hand-slot embedding:      4 × 8
-coffin-position embedding:9 × 8
+card embedding:             54 × 32
+coffin-position embedding:   9 × 8
 
-hand position:    (32 card + 8 slot + 1 occupied) -> Linear(41, 64) -> GELU
-coffin position:  (32 card + 8 position + 1 occupied) -> Linear(41, 64) -> GELU
-card status:      162 -> Linear(162, 96) -> GELU
-context:           11 -> Linear(11, 16) -> GELU
+current card candidate:
+    32 card
+    -> Linear(32, 64)
+    -> GELU
 
-fusion: 4×64 + 9×64 + 96 + 16 = 944
-shared body: Linear(944, 256) -> GELU -> LayerNorm(256)
-             -> Linear(256, 128) -> GELU
+hand set:
+    sum current-card features
+    -> Linear(64, 256)
+    -> GELU
+
+coffin position:
+    32 card + 8 position + 1 occupied
+    -> Linear(41, 64)
+    -> GELU
+
+card status:
+    162
+    -> Linear(162, 96)
+    -> GELU
+
+context:
+    11
+    -> Linear(11, 16)
+    -> GELU
 ```
 
-For each position, matrix multiplication of its one-hot card row by the shared
-card-embedding table produces the card vector; an empty row produces a zero
-vector. The slot or grid-position embedding and occupied flag remain present.
-The status and context inputs use their flattened table order. The fusion order
-is the four hand features, nine coffin features, status feature, then context
-feature.
+The in-hand membership vector selects one to four exact card embeddings. The
+shared candidate encoder runs on each card and the resulting features are
+summed before the hand-set encoder. This summary is permutation-invariant.
+Candidate rows only serialize the current cards for scoring; they have no
+embedding or learned identity.
 
-The policy head scores each hand-slot and destination pair with shared weights:
+The fusion order is the 256-wide hand-set feature, nine coffin features, status
+feature, then context feature:
 
 ```text
-pair = hand_feature[64] + destination_feature[64] + shared_state[128]
-pair -> Linear(256, 128) -> GELU -> LayerNorm(128)
-     -> Linear(128, 1)
+fusion width = 256 + 9×64 + 96 + 16 = 944
+
+shared body:
+    Linear(944, 512)
+    -> GELU
+    -> LayerNorm(512)
+    -> Linear(512, 256)
+    -> GELU
 ```
 
-Applying the pair head to four hand slots and the eight non-center positions
-produces 32 raw logits. It receives no legal-mask bit. External masking replaces
-illegal logits with negative infinity before log-softmax or softmax.
-
-For the bounded response-distillation experiment, the same shared body and
-policy head rank Teacher v2 strategic action groups. A group score is the
-arithmetic mean of its concrete member logits. Training uses weighted pairwise
-logistic ranking: each non-tied group pair is weighted by the absolute
-difference between its four-completion mean terminal differentials. Exact ties
-contribute zero. Inference selects the highest legal group score and then the
-lowest canonical representative index. Paired destinations continue to use the
-search layer's derived fair coin. No softmax, root visits, or value prediction
-participates in this experiment.
-
-The value head is:
+The shared pair scorer receives the exact candidate-card feature, encoded destination, and
+shared state:
 
 ```text
-shared_state[128] -> Linear(128, 64) -> GELU -> Linear(64, 1) -> tanh
+pair input = hand feature 64 + destination feature 64 + shared state 256
+           = 384
+
+pair head:
+    Linear(384, 256)
+    -> GELU
+    -> LayerNorm(256)
+    -> Linear(256, 1)
 ```
 
-There is no dropout, recurrence, attention, or batch normalization. The exact
-trainable parameter count is **339,978**:
+The pair head runs for each of four current-card candidate rows and the eight non-center coffin
+positions, producing 32 raw logits. There is no dropout, attention, recurrence,
+batch normalization, value head, or auxiliary output.
+
+Every GELU is `GELU(approximate="none")`. Both LayerNorm modules use learnable
+affine parameters and epsilon `1e-5`.
+
+The exact trainable parameter count is **754,601**:
 
 | Component | Parameters |
 | --- | ---: |
-| Shared embeddings | 1,832 |
-| Local encoders | 21,216 |
-| Shared body | 275,328 |
-| Policy head | 33,281 |
-| Value head | 8,321 |
+| Shared embeddings | 1,800 |
+| Card, hand-set, coffin, status, and context encoders | 37,280 |
+| Shared body | 616,192 |
+| Pair head | 99,329 |
+| **Total** | **754,601** |
+
+## Representative-action legality
+
+The dataset row retains the full engine-legal `bool[4,8]` mask and the exact
+strategic-group partition. The training projection reconstructs the
+authoritative destination groups from the observation and full mask, verifies
+that they equal the sealed row groups, and derives a separate representative
+mask.
+
+For every legal hand card:
+
+- A listed symmetry pattern enables only the table's designated proxy
+  destination for each strategic group.
+- The non-proxy member of a paired group is false in the representative mask.
+- An unpaired group enables its sole destination.
+- An unlisted occupied-position pattern enables every engine-legal destination
+  independently.
+
+The reduction applies independently to each hand card. Different hand cards
+remain different actions. The center position has no action logit. The complete
+authoritative table is in [information-set search](search.md#authoritative-early-turn-symmetry).
+
+Each strategic group's exact root visit count is assigned to its designated
+proxy action. No mirrored-destination averaging or pooling occurs. Counts sum
+to the configured 128 outer simulations. Before a row enters a batch,
+validation requires:
+
+1. The stored groups exactly partition the full engine-legal actions.
+2. The reconstructed representatives exactly match the authoritative table.
+3. The representative mask contains one true action per strategic group.
+4. Every positive visit count belongs to a true representative action.
+5. Every non-proxy paired member is false.
+
+## Objective
+
+Let `m` be the external representative mask, `N(a)` the exact group visit
+count, and `pi(a) = N(a) / 128`:
+
+```text
+masked_logits[a] = raw_policy_logits[a] when m[a] is true
+masked_logits[a] = -infinity           when m[a] is false
+
+log_p = log_softmax(masked_logits)
+L_policy = -sum(pi[a] * log_p[a])
+```
+
+The target is the normalized root-search distribution over legal
+representative actions. There is no selected-action-only loss, illegal-action
+penalty, legality auxiliary task, temperature transformation, label smoothing,
+action-value target, score target, return target, value loss, PPO term, or
+other auxiliary loss. AdamW weight decay is the only regularization and is not
+added to the reported cross-entropy.
+
+Forced eighth placements have no row and no loss.
+
+## Standalone inference
+
+Standalone inference performs these steps:
+
+1. Build the established player-visible observation and full engine-legal mask.
+2. Derive and validate the representative mask from the authoritative symmetry
+   table.
+3. Run the model once.
+4. Apply the representative mask outside the model.
+5. Select the maximum legal representative-action logit. An exact tie resolves
+   to the lowest canonical action index.
+6. If the selected group is paired, call the existing
+   `derive_strategic_destination_choice_seed` fair-coin stream with the
+   deterministic opponent request seed, scope
+   `sam-policy-argmax-result-v1`, information state, selected proxy action, and
+   choice index zero; pass the result to `select_concrete_action_index`.
+7. Validate and apply the concrete action through the engine.
+
+The fair-coin result is not a model target. The selected proxy remains the
+strategic choice regardless of which paired destination the coin resolves.
+Standalone argmax inference is the selected production controller. The visit
+distribution supplied training information; deployment selects the highest
+masked representative logit.
 
 ## Initialization
 
@@ -131,67 +243,56 @@ eight bytes of:
 
 ```text
 derive_seed(
-    "dracula-model-initialization-v2",
+    "dracula-bgc-card-policy-initialization-v2",
     run_root_seed,
     model_id,
     decimal(initialization_ordinal),
 )
 ```
 
-Linear weights use Xavier uniform initialization with gain `1.0` and zero
-biases. Embeddings use
-a zero-mean normal distribution with standard deviation
-`1 / sqrt(embedding_width)`. Layer-normalization weights initialize to one and
-biases to zero. Initialization uses an isolated PyTorch generator and does not
-change global random state.
+Initialization uses an isolated PyTorch generator and does not change global
+random state:
 
-## Targets and loss
+- Linear weights use Xavier uniform initialization with gain `1.0`.
+- Linear biases are zero.
+- Embeddings use a zero-mean normal distribution with standard deviation
+  `1 / sqrt(embedding_width)`.
+- LayerNorm weights are one and biases are zero.
 
-For a non-forced decision with root visit counts `N(a)`:
+## Mechanical acceptance
 
-```text
-pi(a) = N(a) / sum_b N(b)
-z = (round_score[player] - round_score[other]) / 150
+Implementation acceptance covers:
 
-L_policy = -sum_a pi(a) * log_softmax(masked_logits)(a)
-L_value  = (v - z)^2
-L        = L_policy + L_value
-```
-
-Illegal actions have zero target probability. A malformed target with positive
-illegal mass is rejected before loss calculation. The exact completed-round
-`z` attaches to every non-forced decision made by that player during the round.
-Forced placements produce no training example.
-
-Both loss weights are `1.0`. Regularization is AdamW decoupled weight decay of
-`1e-4` applied to every trainable parameter; it is not added a second time to
-the reported loss.
-
-## Acceptance
-
-Implementation acceptance requires:
-
-- Exact tensor and parameter counts.
-- Deterministic initialization and CPU inference.
+- Exact input, output, batch, and parameter counts.
+- Float32 parameters and outputs.
+- Deterministic versioned initialization.
 - Batch and individual forward equivalence.
 - Queen/King normalized-input equivalence.
-- Invariance under authoritative hidden-card substitutions.
-- Finite outputs, losses, and gradients.
-- Policy probability zero on illegal actions and unit mass on legal actions.
-- Player-relative values that reverse sign with the target perspective.
-- Policy and value losses both updating the shared body.
-- CPU and MPS agreement within `1e-5` absolute and `1e-4` relative tolerance.
-- No engine scoring, private state, determinization, or action selection in the
-  model package.
+- Hidden-card substitution invariance.
+- Exact representative masks for every authoritative pattern and every legal
+  hand card.
+- All engine-legal actions retained independently for unlisted patterns.
+- Finite logits, cross-entropy, and gradients.
+- Shared body and pair-head parameter updates.
+- Zero training probability on masked actions.
+- Deterministic proxy argmax and paired-destination fair-coin resolution.
+- CPU operation and MPS agreement within `1e-5` absolute and `1e-4` relative
+  tolerance.
+- No engine scoring, search, private state, or action application in the model
+  package.
+
+These checks establish model and artifact validity. The completed `pi1`
+training and user selection are summarized in
+[model training](model-training.md#selected-pi1-run).
 
 ## Artifact
 
-A model artifact contains the state dictionary, exact parameter count, all
+The model artifact contains the state dictionary, exact parameter count,
 contract versions, card and action order, initialization identity, source
-revision, training configuration, dataset and search-report digests, optimizer
+identity, training configuration, corpus-snapshot digest, optimizer
 compatibility version, and state-dictionary digest. Loading rejects missing,
 extra, incorrectly shaped, or non-finite parameters.
 
-The artifact has no hidden-state field. Deployment remains undecided until
-search-only, guided-search, and standalone-model strength and latency are
-measured.
+The artifact contains no value parameters, critic state, hidden state, search
+state, or fair-coin outcome. Previous policy/value, response-ranker, and hybrid
+artifacts remain historical evidence and are incompatible with this schema.

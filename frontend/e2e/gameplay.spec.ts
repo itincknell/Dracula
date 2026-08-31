@@ -214,8 +214,10 @@ async function waitThroughScoring(
   const record = view.pending_round_result;
   if (record === null) throw new Error("scoring view has no round result");
   const firstPlayer = record.scoring_sequence.find((step) => step.kind === "score_line")?.player;
-  const firstHeading = firstPlayer === view.human_role ? "Your Score" : "My Score";
-  const secondHeading = firstHeading === "Your Score" ? "My Score" : "Your Score";
+  const firstHeading =
+    firstPlayer === view.human_role ? "Your Score" : "Dracula's Score";
+  const secondHeading =
+    firstHeading === "Your Score" ? "Dracula's Score" : "Your Score";
   const firstDirections = record.scoring_sequence
     .filter((step) => step.kind === "score_line")
     .slice(0, 3)

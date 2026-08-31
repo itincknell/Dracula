@@ -4,8 +4,8 @@
 
 This is a historical report for the version 1 teacher design. Its collection
 commands and 500-simulation dataset plan are superseded by
-[Teacher v2 smoke collection](teacher-v2-smoke-collection.md) and the active
-[model-training contract](../docs/model-training.md).
+[Teacher v2 smoke collection](../teacher-v2/teacher-v2-smoke-collection.md) and
+the active [model-training contract](../../../docs/model-training.md).
 
 The information-set search opponent, shared policy/value model, deterministic
 teacher collector, supervised optimizer, neural-guided PUCT planner, and
@@ -174,11 +174,13 @@ Collect the full initial teacher corpus and run supervised warm-start training:
   --output runs/search-teacher-001 \
   --root-seed dracula-search-teacher-warmstart-v1
 
-.venv/bin/dracula-supervised train --config configs/search-warmstart.toml
+.venv/bin/dracula-supervised train \
+  --config configs/archive/search-guided/search-warmstart.toml
 ```
 
 `dracula-supervised resume`, `validate`, and `export` operate from the immutable
-resolved run directory. `configs/search-warmstart-smoke.toml` reproduces the
+resolved run directory.
+`configs/archive/search-guided/search-warmstart-smoke.toml` reproduces the
 mechanical smoke run.
 
 Run local gameplay against the search opponent:

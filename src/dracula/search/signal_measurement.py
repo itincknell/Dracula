@@ -1084,7 +1084,7 @@ def main() -> int:
     parser.add_argument(
         "--report",
         type=Path,
-        default=Path("reports/teacher-v2-symmetry-signal.md"),
+        default=Path("reports/history/teacher-v2/teacher-v2-symmetry-signal.md"),
     )
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()

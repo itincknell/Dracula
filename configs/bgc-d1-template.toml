@@ -1,0 +1,26 @@
+[run]
+root_seed = "bgc-pi0-d1-corpus-001-root-v1"
+output_directory = "runs/bgc-pi0-d1-corpus-001"
+accepted_pi0_directory = "runs/pi0-accepted-001"
+
+[collection]
+outer_simulations = 128
+base_belief_completions = 8
+workers = 4
+minimum_free_disk_gib = 1.0
+trajectory_profiles = [
+  "teacher",
+  "one-deviation",
+  "two-deviations",
+  "mixed",
+  "alternative",
+]
+
+[contracts]
+dataset = "dracula-bgc-pi0-d1-dataset-v2"
+row = "dracula-bgc-pi0-d1-row-v2"
+game = "dracula-bgc-pi0-d1-game-v2"
+manifest = "dracula-bgc-pi0-d1-manifest-v2"
+search = "dracula-pi0-bgc-search-v1"
+response = "dracula-accepted-pi0-response-v1"
+cache = "dracula-accepted-pi0-response-cache-v1"

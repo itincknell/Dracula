@@ -15,13 +15,12 @@ dependencies = [
 ]
 
 [project.scripts]
-dracula-search-validate = "dracula.search.validation:main"
-dracula-search-signal = "dracula.search.signal_measurement:main"
-dracula-teacher = "dracula.teacher:main"
-dracula-response-dataset = "dracula.response_dataset:main"
-dracula-response-ranker = "dracula.response_ranker:main"
-dracula-supervised = "dracula.supervised:main"
-dracula-expert = "dracula.expert:main"
+dracula-belief-greedy-miner = "dracula.belief_greedy_miner:main"
+dracula-bgc-policy-evaluation = "dracula.bgc_policy_evaluation:main"
+dracula-bgc-policy-training = "dracula.bgc_policy_training:main"
+dracula-bgc-pi0-miner = "dracula.bgc_pi0_miner:main"
+dracula-sam-miner = "dracula.sam_miner:main"
+dracula-sam-policy-training = "dracula.sam_policy_training:main"
 
 [project.optional-dependencies]
 test = [

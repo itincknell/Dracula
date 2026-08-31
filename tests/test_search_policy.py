@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from uuid import uuid4
 
 import pytest
@@ -11,10 +12,39 @@ from dracula.api.app import create_app
 from dracula.api.repository import InMemoryGameRepository
 from dracula.api.service import PolicyTurnRequest
 from dracula.api.session import HIDDEN_STATE_BYTES
+from dracula.belief_greedy_miner import resolve_source_identity
+from dracula.bgc_policy import save_bgc_policy_artifact
+from dracula.bgc_policy_model import BGCPolicyModel
 from dracula.bridge import build_policy_turn_context
 from dracula.engine import EnginePlayer, create_game
 from dracula.search import information_state_from_engine
-from dracula.search_policy import InlineSearchExecutor, InlineStrategicSearchExecutor
+from dracula.search_policy import (
+    InlineBeliefGreedySearchExecutor,
+    InlineNestedStrategicSearchExecutor,
+    InlinePi0BeliefGreedySearchExecutor,
+    InlineSearchExecutor,
+    InlineStrategicSearchExecutor,
+)
+
+
+def _pi0_candidate(tmp_path) -> str:
+    path = tmp_path / "pi0-candidate.pt"
+    source = resolve_source_identity()
+    model = BGCPolicyModel(
+        run_root_seed="pi0-gameplay-test-root",
+        model_id="pi0-gameplay-test",
+        initialization_ordinal=0,
+    )
+    save_bgc_policy_artifact(
+        path,
+        model,
+        source_revision=source.revision,
+        source_tree_digest=source.tree_digest,
+        training_configuration={"purpose": "explicit local pi0-BGC test"},
+        corpus_snapshot_digest=hashlib.sha256(b"snapshot").hexdigest(),
+        dataset_digest=hashlib.sha256(b"dataset").hexdigest(),
+    )
+    return str(path)
 
 
 def _request(executor: InlineSearchExecutor) -> PolicyTurnRequest:
@@ -138,6 +168,85 @@ def test_app_selects_shallow_response_teacher_v2(
     monkeypatch.setenv("DRACULA_SEARCH_RESPONSE_COMPLETIONS", "3")
     with pytest.raises(ValueError, match="must be 1, 2, or 4"):
         create_app(repository=InMemoryGameRepository(), narration_enabled=False)
+
+
+# The historical heavyweight profile is explicit and cannot be confused with
+# shallow-response Teacher v2 through a shared completion-count setting.
+def test_app_selects_nested_response_teacher_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DRACULA_OPPONENT_MODE", "search-v2-nested")
+    monkeypatch.setenv("DRACULA_SEARCH_SIMULATIONS", "32")
+    monkeypatch.setenv("DRACULA_SEARCH_RESPONSE_SIMULATIONS", "32")
+    app = create_app(
+        repository=InMemoryGameRepository(),
+        narration_enabled=False,
+    )
+    executor = app.state.gameplay_service.policy_executor
+    descriptor = app.state.gameplay_service.policy_descriptor
+
+    assert isinstance(executor, InlineNestedStrategicSearchExecutor)
+    assert descriptor.policy_id == "strategic-information-set-search-nested"
+    assert executor.planner.config.outer_simulation_budget == 32
+    assert executor.planner.config.response_simulation_budget == 32
+
+
+def test_app_selects_belief_greedy_search_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DRACULA_OPPONENT_MODE", "search-belief-greedy")
+    monkeypatch.setenv("DRACULA_SEARCH_SIMULATIONS", "32")
+    monkeypatch.setenv("DRACULA_BELIEF_COMPLETIONS", "8")
+    app = create_app(
+        repository=InMemoryGameRepository(),
+        narration_enabled=False,
+    )
+    executor = app.state.gameplay_service.policy_executor
+    descriptor = app.state.gameplay_service.policy_descriptor
+
+    assert isinstance(executor, InlineBeliefGreedySearchExecutor)
+    assert descriptor.policy_id == "belief-greedy-information-set-search"
+    assert executor.planner.config.outer_simulation_budget == 32
+    assert executor.planner.config.belief_completion_count == 8
+
+
+def test_belief_greedy_executor_is_deterministic_legal_and_stateless() -> None:
+    executor = InlineBeliefGreedySearchExecutor.from_values(32, 2)
+    request = _request(executor)  # type: ignore[arg-type]
+
+    first = executor.invoke(request)
+    repeated = executor.invoke(request)
+
+    assert first == repeated
+    assert first.action_index is not None
+    assert request.action_table[first.action_index] is not None
+    assert first.hidden_state is None
+
+
+def test_app_selects_explicit_pi0_bgc_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    artifact = _pi0_candidate(tmp_path)
+    monkeypatch.setenv("DRACULA_OPPONENT_MODE", "search-belief-greedy-pi0")
+    monkeypatch.setenv("DRACULA_BGC_PI0_ARTIFACT", artifact)
+    monkeypatch.setenv("DRACULA_SEARCH_SIMULATIONS", "8")
+    monkeypatch.setenv("DRACULA_BELIEF_COMPLETIONS", "2")
+    app = create_app(
+        repository=InMemoryGameRepository(),
+        narration_enabled=False,
+    )
+    executor = app.state.gameplay_service.policy_executor
+    descriptor = app.state.gameplay_service.policy_descriptor
+    assert isinstance(executor, InlinePi0BeliefGreedySearchExecutor)
+    assert descriptor.policy_id == "pi0-continuation-belief-greedy-search"
+    assert executor.planner.config.outer_simulation_budget == 8
+
+    request = _request(executor)  # type: ignore[arg-type]
+    first = executor.invoke(request)
+    repeated = executor.invoke(request)
+    assert first == repeated
+    assert first.action_index is not None
+    assert request.action_table[first.action_index] is not None
 
 
 # The v2 adapter preserves the information-only, deterministic API boundary.

@@ -6,7 +6,7 @@ const CARD_ASSET_URLS = Object.freeze(
   Object.fromEntries(
     CANONICAL_CARD_IDS.map((cardId) => [
       cardId,
-      `/cards/${cardId}.${cardId === "V1" || cardId === "V2" ? "svg" : "png"}`,
+      `/cards/${cardId}.${cardId === "V1" || cardId === "V2" ? "jpg" : "png"}`,
     ]),
   ),
 );

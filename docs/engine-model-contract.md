@@ -1,7 +1,7 @@
 # Engine–opponent contract
 
 This document defines the deterministic boundary between the game engine,
-information-set search, and a later search-guided model. Application
+information-set search, and the feed-forward Sam imitation policy. Application
 persistence and HTTP behavior belong in [architecture](architecture.md).
 
 ## Contract versions
@@ -220,10 +220,10 @@ The information state validates these properties:
 - No opponent slot, opponent remaining card, stock order, seed, or private
   fingerprint is present.
 
-## Neural observation
+## Search observation
 
-The shared policy/value model uses the existing player-relative Boolean
-projection and a separate legal mask:
+The search boundary uses the existing player-relative Boolean projection and a
+separate legal mask:
 
 ```text
 observation[0:216]     = own hand, bool[4, 54]
@@ -237,15 +237,37 @@ observation[874]       = acting player is dealer, bool
 legal_mask             = bool[4, 8]
 ```
 
-The observation has exactly 875 elements. The three status vectors XOR to 54
-true values. Player identity, public move order, completed-round layouts,
-cumulative scores, and authoritative state are absent. Search retains the
-public history required for determinization separately.
+The search observation has exactly 875 elements. Its first 216 bits preserve
+the engine's stable slots because search actions and engine moves use those
+slots. The three status vectors XOR to 54 true values. Player identity, public
+move order, completed-round layouts, cumulative scores, and authoritative
+state are absent. Search retains the public history required for
+determinization separately.
+
+The standalone neural policy does not consume those redundant slot bits. A
+mechanical projection removes `observation[0:216]`, producing `bool[659]`:
+
+```text
+compact[0:486]     = player-relative coffin, bool[9, 54]
+compact[486:540]   = played cards, bool[54]
+compact[540:594]   = own remaining hand membership, bool[54]
+compact[594:648]   = unseen cards, bool[54]
+compact[648:654]   = round index, one-hot bool[6]
+compact[654:658]   = own decision index, one-hot bool[4]
+compact[658]       = acting player is dealer, bool
+```
+
+Set bits in `compact[540:594]` are sorted by canonical card ID and packed into
+up to four temporary candidate rows. The shared scorer receives each exact
+card embedding; candidate-row position has no feature or embedding. Model
+action indices therefore use a temporary candidate row, while search and the
+engine retain stable hand-slot action indices. The conversion between them is
+exact because both projections retain the current cards' identities.
 
 ## Action mapping
 
-The fixed action space is four private hand slots by eight non-center positions.
-For action index `i`:
+The search action space is four private hand slots by eight non-center
+positions. For search action index `i`:
 
 ```text
 hand_slot = i // 8
@@ -253,7 +275,7 @@ policy_position_index = i % 8
 policy_grid_index = [0, 1, 2, 3, 5, 6, 7, 8][policy_position_index]
 ```
 
-The context contains a 32-entry action table. A legal entry contains the global
+The context contains a 32-entry search action table. A legal entry contains the global
 `EngineMove`; a masked entry is `None`. The mask and table are derived from one
 call to `legal_moves` and must agree exactly. Player-relative action conversion
 round-trips for Queen and King.
@@ -267,7 +289,7 @@ forced placement, but it supplies no policy target.
 The determinization builder accepts only `SearchInformationState`, public
 engine records, a simulation seed, and the public lifecycle shape. It creates a
 valid simulation-only `EngineState` as specified in
-[information-set search](search.md#root-belief-and-determinization).
+[information-set search](search.md#determinization).
 
 Opponent cards already played in the round and sampled remaining cards form a
 complete four-card hand. Canonical sorting determines simulated slots, and the
@@ -290,30 +312,23 @@ player information state, public response, or model input.
 
 During a rollout, every acting player receives a newly projected
 `SearchInformationState` from the sampled world. The other player's remaining
-hand is hidden from that projection. Version 1 selects simulated opponent
-actions with its uniform legal policy. Teacher v2 passes the projection to the
-shallow greedy response evaluator.
+hand is hidden from that projection. Sam runs an actor-local information-set
+UCT search from that projection. BGC-128 instead runs its one-ply belief-greedy
+response evaluation from the same actor-local boundary.
 
-For each response completion index, Teacher v2 samples one world from the actor
-projection and evaluates every legal candidate action from that same world.
-Each candidate is applied to an immutable copy and completed with uniform legal
-play. The response evaluator selects the maximum mean exact round
-differential. Response worlds are discarded; only the selected action is
-applied to the unchanged outer simulation state.
+The response request seed and cache identity are functions of the actor
+information-state digest and controller configuration, never the enclosing
+sampled world. Equal actor views therefore produce equal response samples and
+strategic choices even when their enclosing root hands and stock differ. Only
+the selected legal action is applied to the unchanged outer simulation state.
 
-The Teacher v2 response seed and cache key are functions of the actor
-information-state digest and response configuration, never the enclosing
-sampled world. Equal actor views therefore produce equal response samples,
-mean values, and actions. This invariance is required even when the enclosing
-root hand and stock differ.
-
-## Search and neural samples
+## Search diagnostics and BGC examples
 
 Search produces one decision record at each non-forced real turn:
 
 ```python
 class SearchDecision:
-    information_state_digest: str
+    information_state_fingerprint: str
     action_table: tuple[EngineMove | None, ...]
     selected_action_index: int
     visits: tuple[int, ...]            # length 32
@@ -322,33 +337,46 @@ class SearchDecision:
     search_config_digest: str
 
 
-class SearchTrainingSample:
-    observation: BoolTensor[875]
-    legal_mask: BoolTensor[4, 8]
-    search_policy: FloatTensor[32]
-    selected_action_index: int
-    round_return: float
-    information_state_digest: str
+class BalancedBGCRow:
+    observation: PackedBoolTensor[875]  # frozen D0 source/search schema
+    legal_mask: PackedBoolTensor[4, 8]  # full engine legality
+    strategic_groups: tuple[tuple[int, ...], ...]
+    strategic_group_representatives: tuple[int, ...]
+    strategic_group_visits: tuple[int, ...]  # sums to 128
+    selected_group_representative: int       # audit only
+    information_state_fingerprint: str
     search_config_digest: str
     fixture_id: str
+    trajectory_profile: str
     player: EnginePlayer
     dealer: EnginePlayer
     round_number: int
     placement_number: int
 ```
 
-`search_policy` is derived only from legal root visit counts. `round_return` is
-attached after the engine completes that round. Contract versions accompany the
-serialized row. Forced placements have no `SearchTrainingSample`. The full
-information state, public history, search diagnostics, and determinizations are
-not serialized into model datasets; application events retain only the accepted
-public move and resolved opponent configuration.
+The complete row and artifact contract is in
+[BGC dataset miner](bgc-dataset-miner.md). Exact group visits are the active
+learning target; mean returns and action values remain private search
+diagnostics. The selected group is retained only for audit, agreement metrics,
+and trajectory advancement. Forced placements have no dataset row.
 
-Teacher v2 retains this boundary unchanged. Response samples, action values,
-cache entries, and terminal evaluations are private search diagnostics; they
-do not become model rows. Its `search_config_digest` commits to the outer
-budget, response completions per action, selection profiles, and seed
-namespaces.
+Before training, the frozen D0 prefix is physically rewritten into the compact
+`bool[659]` observation and temporary candidate-row action schema. Exact group
+visits, strategic meaning, and split membership are preserved. Future D1 rows
+use that compact schema directly.
+Application events retain only the accepted public move and resolved opponent
+configuration.
+
+The standalone training projection derives a second
+`representative_legal_mask: bool[4,8]` without changing the sealed row. For
+each hand card, only the authoritative proxy destination for a listed symmetry
+group remains true; paired non-proxy members are false. Unlisted patterns keep
+the full engine-legal actions. Each group's visit count is assigned to its
+designated representative and divided by 128. No group-logit averaging occurs.
+Illegal and non-proxy logits become negative infinity before log-softmax and
+receive zero probability. Standalone inference applies the same mask, selects
+the maximum proxy logit, then uses the existing derived fair coin to resolve a
+paired concrete destination.
 
 ## Contract fixtures
 
@@ -362,9 +390,8 @@ Fixtures cover:
 | Action table | Engine legality, mask, table, and inverse mapping form one exact bijection |
 | Determinization | Every sample conserves 54 cards, preserves public facts and root hand, and varies only hidden assignments |
 | Opponent view | Root-private substitutions do not alter opponent inputs or seeded opponent decisions |
-| Shallow response | Equal actor views in different outer worlds reproduce shared candidate samples, mean values, and actions |
-| Candidate fairness | Every legal response action uses the same determinization at one completion index |
-| World isolation | Response sampled cards never replace cards in the outer trajectory; both worlds remain independently engine-valid |
+| Sam actor response | Equal actor views in different outer worlds reproduce actor-local samples and strategic choices |
+| Branching | Placements one through six produce one Sam-32 child and `k - 1` distinct uniform alternatives; placement seven follows both legal strategic actions |
 | Terminal result | Search payoff equals the engine round-score differential divided by 150 and changes sign by player |
 | Replay | Search seeds, samples, actions, terminal scores, and report digests reproduce exactly on CPU |
 

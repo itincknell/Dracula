@@ -4,7 +4,13 @@ The React, TypeScript, and Vite frontend provides a responsive game window, a
 dedicated rules page, direct card interaction, scoring presentations, and
 Dracula commentary. The browser renders `HumanGameView` and submits
 server-issued legal move IDs. It does not shuffle, score, decide legality, or
-receive private policy, opponent-hand, or deck data.
+receive private policy data. The production browser also retains the initial
+seed and accepted command history for stateless recovery; an inspecting user
+can derive hidden cards from that accepted envelope.
+
+Production narration uses Bedrock only for opening, rounds 1–5 transitions,
+and the final game result. The reserved commentary surface remains inactive
+without delaying or fabricating text when narration is disabled locally.
 
 ## Page structure
 
@@ -13,7 +19,7 @@ The game window contains two visual regions:
 - The **main display** contains the coffin, human hand, score tally, turn state,
   and scoring presentation.
 - The **commentary panel** is visually presented as a chat bar but has no text
-  input. It contains Dracula artwork and model-generated commentary.
+  input. It reserves Dracula artwork and optional commentary.
 
 Rules, About, and Contact links appear below the game window. Rules opens the
 dedicated rules page in a new browser tab. About links to the project article;
@@ -25,7 +31,7 @@ The initial view presents two primary actions: **Start as Queen** and **Start as
 King**. It also provides the Rules link. No game exists and no narrator request
 is made until the user selects a role.
 
-Game creation resolves the production policy and narrator configuration.
+Game creation selects the fixed `pi1` opponent. Narration resolves separately.
 The MVP does not expose a model or difficulty selector.
 
 The interaction sequence is:
@@ -33,19 +39,19 @@ The interaction sequence is:
 1. The user may open Rules without leaving the start view.
 2. The user selects Queen or King, and the browser creates the game with that
    role.
-3. The browser displays the dealt round and awaits the required round-opening
-   comment before enabling card play.
+3. The browser displays the dealt round and requests the opening comment.
 4. Human and opponent turns alternate. Turn status makes clear when the user may
    act and when Dracula is deciding.
 5. After the eighth move, the main display runs the row and column scoring
    sequence before advancing.
-6. Rounds two through six repeat the opening-comment, play, and scoring flow.
+6. Rounds two through five reveal one transition comment after scoring; round
+   six requests only the final-result comment.
 7. The final view retains the completed coffin and scores, displays the outcome
-   and closing comment, and offers **Start new game**.
+   and optional closing comment, and offers **Start new game**.
 
-Reloading an active game restores the authoritative state and resumes any
-pending opponent, narration, scoring, or round-advance phase described by the
-API.
+Reloading an active game reads the last confirmed seed-and-history envelope
+from browser storage, asks the API to replay it, and reconstructs the current
+view. Presentation-only scoring may restart from its deterministic beginning.
 
 ## Desktop layout
 
@@ -66,12 +72,13 @@ width and matches the main display's height.
 +------------------------------------------------+------------------+
 ```
 
-The main display uses a fixed design aspect ratio constrained by both available
-width and viewport height. The coffin begins near the upper-left of the display
-and uses most of its height. The score tally occupies the space between the
-coffin and the right boundary. The human hand is centered beneath the coffin.
-Cards, spacing, and text resize within the container; the interface is not
-scaled as a single bitmap.
+The desktop main display has a minimum 700-pixel content height so the complete
+tall-card coffin and hand remain visible. Its coffin track is content-sized to
+avoid unused bands above and below the grid. Short viewports scroll rather than
+cropping cards. The score tally occupies the space between the coffin and the
+right boundary, and the human hand is centered beneath the coffin. Cards,
+spacing, and text resize within the container; the interface is not scaled as a
+single bitmap.
 
 The commentary panel reserves a fixed region at the top for the Dracula art
 asset. The commentary stream fills the remaining height and scrolls so the
@@ -90,15 +97,19 @@ same arrangement.
 
 ```text
 +----------------------------------+
+| title                            |
++----------------------------------+
 | avatar | latest Dracula comment  |
 +----------------------------------+
-| score tally                      |
+| game surface: coffin + hand      |
 +----------------------------------+
-|                                  |
-|           3×3 coffin             |
-|                                  |
+| turn role and orientation        |
 +----------------------------------+
-|           human hand             |
+| player scores                    |
++----------------------------------+
+| cheat sheet                      |
++----------------------------------+
+| Rules | About | Contact          |
 +----------------------------------+
 ```
 
@@ -107,10 +118,11 @@ Dracula avatar to the left of only the latest narrator message; it has no
 scrolling transcript. The space is sized for the configured maximum commentary
 length so ordinary message changes do not shift the coffin.
 
-Within the main display, the score tally appears first, followed by the coffin
-and then the human hand. The layout supports the 360-pixel minimum viewport in
-the release-ready definition. Short viewports may scroll vertically rather than
-making cards or text unreadable.
+The coffin and hand form one tightened game surface. Turn role and orientation
+follow it, then player scores, the full-width Cheat Sheet, and footer links.
+The layout supports the 360-pixel minimum viewport in the release-ready
+definition. Short viewports may scroll vertically rather than making cards or
+text unreadable. Gameplay responses never force an automatic scroll.
 
 ## Card interaction
 
@@ -127,11 +139,16 @@ game control after the server response.
 While a move request is pending, further card input is disabled. A rejected or
 stale move restores interaction from the returned authoritative view. During an
 opponent turn, the hand remains visible but inactive and the turn status
-indicates that Dracula is deciding.
+indicates that Dracula is deciding. During a human turn, the same status names
+the human's Queen or King role and its row or column scoring orientation.
 
-The frontend does not display a global inventory of seen, hidden, or played
-cards. The human's card information is conveyed by their current hand and the
-cards currently visible in the coffin.
+A prominent full-width **Cheat Sheet** window sits directly beneath the game
+window and above the footer links. Expanding it opens a four-by-thirteen suited-
+card ledger plus V1 and V2. It marks only cards already visible to the human:
+the current hand, the public coffin, and completed public coffins. It updates
+from each confirmed `HumanGameView` and never renders an opponent hand, stock
+identity, sampled card, or inferred hidden information. This presentation rule
+is independent of the inspectable recovery seed stored by the browser.
 
 ## Commentary behavior
 
@@ -139,15 +156,14 @@ The commentary panel becomes active only after game creation. Desktop retains
 the full commentary stream for the current game. Narrow and mobile layouts show
 only the newest comment.
 
-Optional move comments arrive without interrupting card or opponent-turn
-progress.
-Required round-opening and scoring comments follow the bounded presentation
-waits defined in [architecture](architecture.md#narrator-scheduling). A failed
-narrator job ends its wait without inserting substitute Dracula dialogue.
+There are no move comments. The opening comment may arrive after play begins.
+For rounds 1–5, the browser starts one transition request after the eighth
+placement and reveals the result after scoring. Round 6 requests only the final
+game-result comment. A failed narrator call inserts no substitute dialogue.
 
 New commentary is announced as a polite live-region update without moving
-keyboard focus. A delayed optional comment is shown only if the architecture's
-event-order and current-round rules still admit it.
+keyboard focus. A delayed comment is shown only if it still belongs to the
+displayed opening, transition, or final-result cue.
 
 ## Round-scoring presentation
 
@@ -166,13 +182,11 @@ does not reduce card size.
 The dealer is scored first and the non-dealer second. Because either player may
 be Queen or King, the sequence supports both row-then-column and
 column-then-row ordering. The human calculation is headed **Your Score** and the
-opponent calculation is headed **My Score**, regardless of who dealt.
+opponent calculation is headed **Dracula's Score**, regardless of who dealt.
 
-The narrator job for the current orientation starts with its animation. After
-the three line scores are sorted, the browser performs the bounded wait and
-appends the comment to the unchanged commentary panel. The completed dealer
-tally then fades from the calculation workspace while the coffin remains and
-the non-dealer calculation begins.
+No orientation-specific narrator job exists. The one round-transition request
+has already started after the eighth placement and runs independently while
+both player calculations animate.
 
 ### Calculating one orientation
 
@@ -224,7 +238,8 @@ for equal values.
 ### Selecting round scores
 
 After both individual tallies are complete, the coffin fades out. **Your Score**
-and **My Score** appear side by side, each with its three sorted line values.
+and **Dracula's Score** appear side by side, each with its three sorted line
+values.
 Corresponding ranks are compared from highest to lowest:
 
 1. Both values in the current pair pop together.
@@ -241,10 +256,10 @@ cumulative total with an addition sign and underline, followed by the new
 cumulative total below the line.
 
 The round score, previous total, and new total remain visible. Rounds one through
-five end with **Deal Next Round**. Activating it advances the game, deals the
-next round, and begins its opening-comment sequence. After round six, the browser
-finalizes the game, awaits the closing comment, and shows **Play Again**; the
-score calculation remains visible until that action starts a new game.
+five reveal the transition comment and end with **Deal Next Round**. Activating
+it records an advance command and deals the next round without another opening
+cue. After round six, the browser reveals the final-result comment and shows
+**Play Again**; there is no separate final-round transition response.
 
 ### Motion and recovery
 
@@ -256,20 +271,17 @@ behavior remain fixed.
 The MVP has no skip or replay control for scoring. With reduced motion enabled,
 scale and movement are replaced by border, opacity, and text-state changes while
 every calculation step remains visible. Reloading during scoring restarts the
-presentation from the dealer's first series using the stored deterministic
-sequence; existing narration jobs are reused and commentary is not duplicated.
-
-Both narrator waits have a configured upper bound. A pending or failed response
-cannot prevent the sequence from reaching its completion control.
+presentation from the dealer's first series using the replayed deterministic
+sequence. Narration readiness and animation completion are separate client
+conditions; a pending or failed response cannot prevent the sequence from
+reaching its completion control.
 
 ## Loading, failure, and recovery
 
 - A game-creation failure leaves the selected role visible and offers retry.
 - A pending human move preserves the displayed hand and coffin until accepted.
-- A pending opponent turn shows its status and resumes the same claimed turn after
-  reload or retry.
-- A stale-state response replaces the local view with the server response before
-  accepting more input.
+- A repeated envelope and command deterministically reproduce the same branch.
+- A cache miss replays the stored seed and history before accepting more input.
 - Narrator failure does not alter game state or prevent game completion.
 - A failed state request preserves the last confirmed display and provides a
   retry action rather than applying an optimistic game change.
@@ -282,20 +294,22 @@ The principal UI responsibilities are `GameStart`, `GameWindow`, `MainDisplay`,
 
 CSS Grid provides the outer desktop/narrow layouts and the coffin. Container
 queries, `aspect-ratio`, and bounded fluid sizing support internal scaling. Card
-assets use the Kenney Playing Cards Pack described below. No drag-and-drop
-library has been selected; the choice must support pointer, touch, and keyboard
-behavior described above.
+assets use the Kenney Playing Cards Pack described below. Native browser drag
+events, tap selection, and keyboard selection share the same server-issued move
+ID path; no drag-and-drop framework owns game state.
 
 ## Usability acceptance
 
-The initial desktop main-display aspect ratio is `4 / 3`. The desktop layout
-uses the existing two-pane proportions until the game window is narrower than
-900 CSS pixels, at which point it switches to the narrow layout. The breakpoint
-may be adjusted during implementation only when the same acceptance cases show
-that cards, scores, or commentary no longer fit at the documented minimum size.
+The desktop main display uses its intrinsic content height with a 700-pixel
+minimum. The desktop layout uses the existing two-pane proportions until the
+game window is narrower than 900 CSS pixels, at which point it switches to the
+narrow layout. In the narrow layout the coffin track is content-sized, so the
+complete 7:10 card grid expands the page vertically. The breakpoint may be
+adjusted during implementation only when the same acceptance cases show that
+cards, scores, or commentary no longer fit at the documented minimum size.
 
-Card image boxes do not render below 64×64 CSS pixels. The visible pixel-art
-card remains centered within that box. Body and control text is at least 16 CSS
+Card image boxes use a 7:10 tall-card ratio and do not render below 64 CSS
+pixels wide. The visible pixel-art card remains centered within that box. Body and control text is at least 16 CSS
 pixels; secondary labels are at least 14 CSS pixels. Short viewports scroll
 instead of reducing either minimum.
 
@@ -335,20 +349,21 @@ selected automatically at narrower layouts.
 Both source directories are ignored by Git and treated as immutable. An asset
 preparation step copies only the required files into the frontend asset set and
 does not modify the source directories. The copied set contains the 52 suited
-cards plus `card_joker_black.png` and
-`card_joker_red.png`, which map directly to the two Vampire card IDs. Jokers and
-Vampires are the same cards. A later custom Vampire-themed Joker may replace
-both images without changing game state or card semantics.
+cards. The two Vampire IDs use the project-owned `V1.jpg` and `V2.jpg` artwork,
+whose large `V` labels and Vampire silhouettes keep them visually distinct from
+Jacks without changing game state or card semantics.
 
 Cards render with nearest-neighbor scaling and do not use interpolation that
 softens the pixel art. The asset mapping, Kenney source URL, pack version, and
 CC0 license are recorded with the copied frontend assets.
 
-The Dracula portrait and mobile avatar are project-provided artwork. Their final
-files do not block layout or interaction implementation: the desktop reserves
-its fixed portrait region and mobile uses a square placeholder with the same
-eventual dimensions. Before release, the supplied image must remain clear at
-both crops and include a recorded source and usage status.
+The human hand uses a 72-pixel minimum card size and may grow to 110 pixels when
+space permits. Responsive layouts preserve that minimum so suit marks remain
+readable rather than shrinking the cards to avoid scrolling.
+
+The Dracula portrait and mobile avatar are project-provided artwork. The image
+uses contained rendering in both regions so the full portrait remains visible;
+unused side space is intentional. Its source and usage status remain recorded.
 
 The Rules, About, and Contact destinations are configuration values. All three
-must resolve correctly, and the Rules link opens a new tab.
+must resolve correctly, and Rules opens a new tab.

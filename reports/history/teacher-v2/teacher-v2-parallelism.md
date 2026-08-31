@@ -19,7 +19,7 @@ worker count processed the same six full games from root seed
 decision-cache directory.
 
 ```bash
-.venv/bin/python tools/benchmark_teacher_parallelism.py \
+.venv/bin/python tools/archive/teacher-v2/benchmark_teacher_parallelism.py \
   --output-root .local/teacher-v2-parallelism-20260723 \
   --games 6 --workers 1 2 4 6
 ```

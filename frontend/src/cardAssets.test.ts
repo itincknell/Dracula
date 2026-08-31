@@ -25,7 +25,7 @@ describe("card assets", () => {
     expect(CANONICAL_CARD_IDS).toEqual(expectedIds);
     expect(Object.keys(sourceAssets)).toEqual(expectedIds);
     expect(cardAsset("AC")).toBe("/cards/AC.png");
-    expect(cardAsset("V2")).toBe("/cards/V2.svg");
+    expect(cardAsset("V2")).toBe("/cards/V2.jpg");
     expect(() => cardAsset("not-a-card")).toThrow("unknown canonical card ID");
   });
 
@@ -46,13 +46,13 @@ describe("card assets", () => {
     }
   });
 
-  it("copies the hand-authored Vampire faces without transforming them", async () => {
+  it("copies the project-owned Vampire faces without transforming them", async () => {
     for (const cardId of ["V1", "V2"]) {
       const [source, copied] = await Promise.all([
-        readFile(path.join(customRoot, `${cardId}.svg`)),
-        readFile(path.join(copiedRoot, `${cardId}.svg`)),
+        readFile(path.join(customRoot, `${cardId}.jpg`)),
+        readFile(path.join(copiedRoot, `${cardId}.jpg`)),
       ]);
-      expect(copied.equals(source), `${cardId} must preserve its custom vector source`).toBe(true);
+      expect(copied.equals(source), `${cardId} must preserve its custom raster source`).toBe(true);
     }
   });
 

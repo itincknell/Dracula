@@ -4,7 +4,7 @@
 
 This is a historical readiness report for the version 1 teacher path. Its
 500-simulation collection command and dataset references are superseded by
-[Teacher v2 training readiness](teacher-v2-training-readiness.md).
+[Teacher v2 training readiness](../teacher-v2/teacher-v2-training-readiness.md).
 
 The single-model expert-iteration suite is implemented end to end. Collection,
 replay, optimization, checkpoint recovery, absolute evaluation, manual
@@ -72,13 +72,15 @@ Produce the full teacher and warm-start artifacts:
 .venv/bin/dracula-teacher full \
   --output runs/search-teacher-001 \
   --root-seed dracula-search-teacher-warmstart-v1
-.venv/bin/dracula-supervised train --config configs/search-warmstart.toml
+.venv/bin/dracula-supervised train \
+  --config configs/archive/search-guided/search-warmstart.toml
 ```
 
 Run the full configured iteration:
 
 ```bash
-.venv/bin/dracula-expert run --config configs/expert.toml
+.venv/bin/dracula-expert run \
+  --config configs/archive/expert-iteration/expert.toml
 .venv/bin/dracula-expert resume --output runs/expert-001
 .venv/bin/dracula-expert evaluate --output runs/expert-001
 ```

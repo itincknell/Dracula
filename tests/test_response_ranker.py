@@ -18,15 +18,10 @@ from dracula.response_distillation import (
 )
 from dracula.teacher import FixtureSplit
 
-SEALED_DATASET = Path(
-    ".local/response-distillation/"
-    "teacher-v2-response-dataset-smoke-20260723"
-)
-
 
 @pytest.fixture(scope="module")
 def sealed_bundle() -> ranker.ResponseRankingBundle:
-    return ranker.load_response_ranking_datasets(SEALED_DATASET)
+    return _synthetic_bundle()
 
 
 def _model() -> PolicyValueModel:
@@ -39,19 +34,16 @@ def _model() -> PolicyValueModel:
     return model
 
 
-# The ranker must consume exactly the sealed four-game/two-game experiment,
-# never a convenience resplit that leaks fixture states into validation.
+# Ranker tests use a self-contained sealed-data projection so their privacy and
+# split invariants do not depend on archived local experiment artifacts.
 def test_sealed_dataset_has_exact_split_and_privacy_shape(
     sealed_bundle: ranker.ResponseRankingBundle,
 ) -> None:
-    assert sealed_bundle.dataset_digest == (
-        "110dd3658af4ab33ccd6a9eefe44f530"
-        "b2f8fb1f17321e917448cdaacb17ffec"
-    )
-    assert sealed_bundle.training.example_count == 12_930
-    assert sealed_bundle.validation.example_count == 6_463
-    assert sealed_bundle.training.observations.shape == (12_930, 875)
-    assert sealed_bundle.training.legal_masks.shape == (12_930, 4, 8)
+    assert sealed_bundle.dataset_digest == "6" * 64
+    assert sealed_bundle.training.example_count == 64
+    assert sealed_bundle.validation.example_count == 24
+    assert sealed_bundle.training.observations.shape == (64, 875)
+    assert sealed_bundle.training.legal_masks.shape == (64, 4, 8)
     assert not set(sealed_bundle.training.fixture_ids).intersection(
         sealed_bundle.validation.fixture_ids
     )
@@ -212,8 +204,8 @@ def _synthetic_dataset(
 
 def _synthetic_bundle() -> ranker.ResponseRankingBundle:
     return ranker.ResponseRankingBundle(
-        _synthetic_dataset(FixtureSplit.TRAINING, 12, "train"),
-        _synthetic_dataset(FixtureSplit.VALIDATION, 6, "validation"),
+        _synthetic_dataset(FixtureSplit.TRAINING, 64, "train"),
+        _synthetic_dataset(FixtureSplit.VALIDATION, 24, "validation"),
         "6" * 64,
     )
 
@@ -290,11 +282,11 @@ def test_artifact_is_compatible_private_and_exact(
 ) -> None:
     config = replace(
         ranker.load_response_ranker_config(
-            "configs/teacher-v2-response-ranker.toml"
+            "configs/archive/teacher-v2/teacher-v2-response-ranker.toml"
         ),
         run=replace(
             ranker.load_response_ranker_config(
-                "configs/teacher-v2-response-ranker.toml"
+                "configs/archive/teacher-v2/teacher-v2-response-ranker.toml"
             ).run,
             output_directory=str(tmp_path / "artifact-run"),
         ),

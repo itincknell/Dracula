@@ -171,7 +171,7 @@ export function MainDisplay({
 
   useEffect(() => {
     if (priorPending.current === "human_move" && presentation.pending === null) {
-      statusRef.current?.querySelector<HTMLElement>(".turn-status")?.focus();
+      statusRef.current?.querySelector<HTMLElement>(".turn-status")?.focus({ preventScroll: true });
     }
     priorPending.current = presentation.pending;
   }, [presentation.pending]);
@@ -186,10 +186,10 @@ export function MainDisplay({
       aria-busy={presentation.pending !== null}
       data-pending={presentation.pending ?? undefined}
     >
-      <TurnStatus view={view} pending={presentation.pending} />
-      <Scoreboard view={view} />
       <CardGrid controller={controller} />
       <Hand controller={controller} />
+      <TurnStatus view={view} pending={presentation.pending} />
+      <Scoreboard view={view} />
       {showingScores ? <ScoringPresentation controller={controller} view={view} /> : null}
       {finalRecord === undefined ? null : (
         <FinalRoundPresentation record={finalRecord} view={view} onNewGame={onNewGame} />
@@ -205,7 +205,9 @@ export function CommentaryPanel({ narrationEnabled }: { narrationEnabled: boolea
       aria-label="Dracula commentary"
       data-narration-enabled={narrationEnabled}
     >
-      <div className="portrait-placeholder" aria-hidden="true"><span>D</span></div>
+      <div className="portrait-placeholder" aria-hidden="true">
+        <img className="dracula-avatar" src="/dracula.png" alt="" draggable={false} />
+      </div>
       <div className="commentary-stream" role="status" aria-live="polite" aria-atomic="true" aria-relevant="additions text">
         <span className="commentary-status">
           {narrationEnabled ? "Commentary is not connected." : "Narration disabled"}

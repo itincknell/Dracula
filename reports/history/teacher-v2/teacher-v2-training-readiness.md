@@ -20,7 +20,7 @@ dataset       runs/teacher-v2-001
 training      runs/teacher-v2-training-001
 collection log output-teacher-v2
 training log output-teacher-v2-training
-training config configs/teacher-v2-training.toml
+training config configs/archive/teacher-v2/teacher-v2-training.toml
 ```
 
 The proposed collection contains 216 training games and 24 validation games,
@@ -38,7 +38,7 @@ The expected collection configuration digest is
 `dcb4f657ea48b9a4daed194a6b9b9dd72992498f73d64becbccaf3763571fa38`.
 The collector writes and validates its immutable resolved configuration before
 the first game. The supervised trainer resolves
-`configs/teacher-v2-training.toml` against the sealed dataset digest before
+`configs/archive/teacher-v2/teacher-v2-training.toml` against the sealed dataset digest before
 optimization.
 
 ## Capacity
@@ -117,7 +117,7 @@ nohup .venv/bin/dracula-teacher resume \
 
 ```bash
 nohup .venv/bin/dracula-supervised train \
-  --config configs/teacher-v2-training.toml \
+  --config configs/archive/teacher-v2/teacher-v2-training.toml \
   > output-teacher-v2-training 2>&1 & echo $! > .local/teacher-v2-training.pid
 ```
 

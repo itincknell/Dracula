@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from dracula.bridge import ACTION_COUNT, action_index_for_move
 from dracula.engine import (
-    EnginePlayer,
     EngineState,
     EngineStatus,
     SimulationEngineState,

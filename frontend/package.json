@@ -19,6 +19,9 @@
     "check": "npm run test && npm run typecheck && npm run lint && npm run verify:build"
   },
   "dependencies": {
+    "@fontsource/grenze-gotisch": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/silkscreen": "^5.3.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

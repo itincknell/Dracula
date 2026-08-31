@@ -82,19 +82,25 @@ function reducedStepDuration(): number {
   return Number.isFinite(configured) && configured >= 20 ? configured : 160;
 }
 
+export const SCORING_PLAYBACK_RATE = 0.75;
+
+function atPlaybackRate(milliseconds: number): number {
+  return Math.round(milliseconds / SCORING_PLAYBACK_RATE);
+}
+
 export const SCORING_TIMING: ScoringTiming = {
-  entering: 350,
-  revealValue: 280,
-  collapseSum: 380,
-  multiplierLabel: 420,
-  multiplierFactor: 360,
-  lineTotal: 460,
-  orientationRanked: 650,
+  entering: atPlaybackRate(1_200),
+  revealValue: atPlaybackRate(280),
+  collapseSum: atPlaybackRate(380),
+  multiplierLabel: atPlaybackRate(420),
+  multiplierFactor: atPlaybackRate(360),
+  lineTotal: atPlaybackRate(460),
+  orientationRanked: atPlaybackRate(650),
   narratorWait: 1_500,
-  orientationHandoff: 320,
-  compareRank: 520,
-  selectRoundScore: 620,
-  updateTotals: 720,
+  orientationHandoff: atPlaybackRate(1_200),
+  compareRank: atPlaybackRate(700),
+  selectRoundScore: atPlaybackRate(800),
+  updateTotals: atPlaybackRate(720),
   reducedStep: reducedStepDuration(),
 };
 

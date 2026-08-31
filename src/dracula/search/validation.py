@@ -12,7 +12,7 @@ import statistics
 import sys
 import tempfile
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -50,7 +50,6 @@ from dracula.search.strategic import (
     derive_strategic_search_request_seed,
 )
 from dracula.search.strategic_fixtures import (
-    FIXTURE_TARGET_ROUND,
     STRATEGIC_FIXTURE_SCHEMA_VERSION,
     STRATEGIC_FIXTURES,
     FixtureEvidence,

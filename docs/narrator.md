@@ -2,34 +2,52 @@
 
 ## Responsibility
 
-The narrator speaks in character as Dracula and supplies the opponent's visible
-personality. It receives only server-issued public event projections and cannot
-choose moves, inspect private state, recalculate effects, or mutate the game.
-The application invokes the configured Bedrock model directly; no agent loop or
-tool layer is involved.
+Amazon Bedrock supplies Dracula's presentation text. It never chooses moves,
+scores cards, validates actions, or changes the seed-and-history game envelope.
+The Lambda application invokes one allowlisted Bedrock text model directly; no
+agent, tool loop, knowledge base, or SageMaker service is involved.
 
-## Cadence and presentation
+## Exact cadence
 
-Required comments occur at the start of every round, after each player's
-orientation tally, and at game completion. The dealer's row or column tally runs
-first. Each scoring input contains only that orientation's calculations and
-sorted scores. Generation begins with the corresponding animation and is
-awaited at its end through a bounded presentation wait.
+Only these cue classes invoke Bedrock:
 
-Move comments are optional, non-blocking banter. A deterministic cadence gate
-allows at most two per round, favors human moves late in the round, suppresses
-the final placement, and gives lower priority to Dracula's own moves. Events
-that do not pass the gate cause no model invocation. Every invocation expects
-commentary text.
+1. **Opening** — once after game creation.
+2. **Round transition** — after the eighth placement in rounds 1–5. The browser
+   requests it immediately, runs the scoring animation, and reveals the text
+   after the animation ends.
+3. **Final game result** — once after round 6 completes. It replaces the round-
+   transition cue; there is no separate final-round response.
 
-Taunts may dramatize visible events but cannot claim knowledge of search state,
-hidden cards, model tensors, or intended strategy. The complete
-trigger matrix and delayed-response behavior are defined in
-[architecture](architecture.md#narrator-scheduling).
+There is no per-move banter, round-opening narration after round 1,
+orientation-specific narration, or separate response for each player's score.
+
+The browser owns presentation timing. A narration request contains its complete
+public cue and may reach any Lambda environment. A delayed response appears
+only after its corresponding animation; a failed response produces no invented
+fallback and cannot block the game.
+
+## Input boundary
+
+The public cue may contain:
+
+- Human role and Dracula role.
+- Round number.
+- Public coffin and played cards.
+- Engine-calculated round scores and cumulative scores.
+- Round winner or final game result.
+
+It excludes both hands, stock order, game seed, model observation, masks,
+logits, training data, search diagnostics, and intended strategy. The client
+game envelope contains the seed for stateless replay, but that envelope is not
+forwarded to Bedrock.
 
 ## Configuration
 
-The narrator configuration resolves to an allowlisted Bedrock model, prompt
-version, inference parameters, output limit, timeout, and retry limit. Games
-persist the resolved values. Public callers cannot supply arbitrary model IDs or
-prompts.
+Deployment configuration fixes the Bedrock region, allowlisted model ID,
+character prompt, inference parameters, output bound, and timeout. Public
+callers supply only an eligible structured cue. They cannot select a model or
+provide prompt instructions.
+
+Narration is not server-persistent. The browser may retain successful text with
+its local game display state. See [architecture](architecture.md#narrator-scheduling)
+and [deployment](deployment.md#bedrock-behavior).

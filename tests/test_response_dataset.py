@@ -20,6 +20,7 @@ from dracula.response_distillation import (
 from dracula.search import (
     DESTINATION_SYMMETRY_SCHEMA_VERSION,
     GREEDY_RESPONSE_SCHEMA_VERSION,
+    SearchInterrupted,
     STRATEGIC_SEARCH_SCHEMA_VERSION,
     information_state_fingerprint,
     policy_input_from_information_state,
@@ -347,3 +348,54 @@ def test_resume_starts_at_a_sealed_game_boundary(
         interrupted_config, resume=True
     )
     assert resumed.dataset_digest == baseline.dataset_digest
+
+
+# Reopening a complete corpus is verification, not another collection run.
+# It must not replace the original collection metrics with no-op resume timing.
+def test_completed_resume_preserves_collection_metrics(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        dataset, "StrategicInformationSetSearch", _FastPlanner
+    )
+    config = _config(tmp_path / "complete")
+    original = dataset.collect_response_dataset(config)
+    metrics_path = (
+        config.output_path / "response-distillation" / "metrics.json"
+    )
+    metrics = metrics_path.read_bytes()
+
+    resumed = dataset.collect_response_dataset(config, resume=True)
+
+    assert resumed == original
+    assert metrics_path.read_bytes() == metrics
+
+
+# The production planner raises SearchInterrupted from inside a response
+# evaluation. The collector must preserve that as a resumable interruption
+# rather than recording a failed run.
+def test_search_interruption_is_recorded_as_resumable(
+    tmp_path, monkeypatch
+) -> None:
+    class _InterruptedPlanner:
+        def __init__(self, _config, *, response_observer=None):
+            del response_observer
+
+        def search(self, _information, _request_seed, _should_stop=None):
+            raise SearchInterrupted("production search interruption")
+
+    monkeypatch.setattr(
+        dataset, "StrategicInformationSetSearch", _InterruptedPlanner
+    )
+    config = _config(tmp_path / "interrupted-search")
+
+    with pytest.raises(
+        dataset.ResponseDatasetInterrupted,
+        match="response collection interrupted",
+    ):
+        dataset.collect_response_dataset(config)
+
+    assert not list(config.output_path.rglob("*.pt"))
+    assert dataset._load_json(config.output_path / "state.json")["phase"] == (
+        "interrupted"
+    )

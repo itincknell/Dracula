@@ -38,6 +38,7 @@ from dracula.search import (
     DESTINATION_SYMMETRY_SCHEMA_VERSION,
     GREEDY_RESPONSE_SCHEMA_VERSION,
     STRATEGIC_SEARCH_SCHEMA_VERSION,
+    SearchInterrupted,
     StrategicInformationSetSearch,
     StrategicSearchConfig,
     derive_strategic_search_request_seed,
@@ -807,10 +808,13 @@ def _collect_fixture(
                     config.search_config.digest,
                 )
                 started = time.perf_counter()
-                result = StrategicInformationSetSearch(
-                    config.search_config,
-                    response_observer=observe,
-                ).search(information, request_seed, should_stop)
+                try:
+                    result = StrategicInformationSetSearch(
+                        config.search_config,
+                        response_observer=observe,
+                    ).search(information, request_seed, should_stop)
+                except SearchInterrupted as error:
+                    raise ResponseDatasetInterrupted(str(error)) from error
                 search_seconds += time.perf_counter() - started
                 response_requests += result.response_request_count
                 action_index = _actual_action(
@@ -1169,6 +1173,28 @@ def collect_response_dataset(
             remaining.append(fixture)
         else:
             summaries.append(summary)
+    if resume and not remaining:
+        # A completed run is already canonical. Re-inspecting it must not
+        # replace collection timing with the duration of a no-op resume.
+        verified = inspect_response_dataset(config.output_path)
+        metrics = _load_json(
+            config.output_path / "response-distillation" / "metrics.json"
+        )
+        if not isinstance(metrics, dict):
+            raise ResponseDatasetError("response metrics are invalid")
+        try:
+            inspection = ResponseDatasetInspection(**metrics)
+        except TypeError as error:
+            raise ResponseDatasetError("response metrics are invalid") from error
+        if inspection.dataset_digest != verified.dataset_digest:
+            raise ResponseDatasetError("response metrics name another dataset")
+        _write_state(
+            config,
+            "complete",
+            dataset_digest=inspection.dataset_digest,
+            examples=inspection.examples,
+        )
+        return inspection
     try:
         if config.workers == 1 or should_stop is not None:
             _configure_worker()

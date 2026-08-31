@@ -26,7 +26,6 @@ from dracula.engine import (
     advance_after_round,
     create_game,
     derive_game_outcome,
-    other_player,
 )
 from dracula.models import Critic, Policy
 from dracula.randomness import derive_pytorch_seed, derive_seed

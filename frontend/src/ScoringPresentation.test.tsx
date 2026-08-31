@@ -140,7 +140,7 @@ describe("scoring presentation frames", () => {
     expect(document.querySelector(".score-expression")).toHaveTextContent("30");
   });
 
-  it("does not assign a directional value to the supplied Vampire card", async () => {
+  it("displays zero for the supplied Vampire card while totaling its line", async () => {
     const current = scoringView();
     const { timeline } = await setup(current);
     const vampire = frameIndex(
@@ -152,7 +152,7 @@ describe("scoring presentation frames", () => {
         frame.cardIndex === 1,
     );
     await advanceFrames(vampire);
-    expect(document.querySelector(".score-expression")).toHaveTextContent("11 + —");
+    expect(document.querySelector(".score-expression")).toHaveTextContent("11 + 0");
   });
 
   it("uses server ranks for the centered tally and hides it before the second orientation", async () => {

@@ -28,7 +28,6 @@ from dracula.engine import (
     advance_after_round,
     apply_move,
     create_game,
-    other_player,
 )
 from dracula.policy_value import (
     ACTION_SCHEMA_VERSION,
@@ -37,7 +36,6 @@ from dracula.policy_value import (
     PARAMETER_COUNT,
     VALUE_SCHEMA_VERSION,
     PolicyValueModel,
-    PolicyValueOptimizationConfig,
     build_policy_value_optimizer,
     load_policy_value_artifact,
     save_policy_value_artifact,

@@ -17,7 +17,6 @@ from dracula.bridge import (
     IN_HAND_STATUS_START,
     OBSERVATION_SIZE,
     PLAYED_STATUS_START,
-    POLICY_POSITION_COUNT,
     PROGRESS_START,
     ROUND_START,
     PolicyInput,

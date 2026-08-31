@@ -1,134 +1,86 @@
 # Evaluation and operations
 
-Search and model comparison are defined in
-[model training](model-training.md). This document covers application
-verification, local operation, and the evidence required before deployment is
-designed.
+## Selected release controller
 
-## Application evaluation
+The user selected standalone `pi1` as the production move controller after
+local play and fixed evaluation. The 754,601-parameter model runs one masked
+argmax inference for every non-forced Dracula move. It is packaged inside the
+Lambda image; there is no SageMaker call or production search.
 
-Deterministic tests cover dealing, legal moves, projections, scoring, state
-invariants, lifecycle transitions, event replay, conditional persistence, and
-idempotency. Adapter contract tests run against in-memory and SQLite storage.
+The selected local artifact has SHA-256 digest
+`70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c`.
+Release packaging verifies this digest before building the container.
 
-Opponent integration tests cover:
+## Application verification
 
-- Exact agreement between authoritative legality and the opponent action table.
-- Absence of opponent hand slots, hidden cards, stock order, seeds, and search
-  diagnostics from public responses.
-- Determinization invariance under authoritative hidden-state substitutions.
-- Deterministic retry of one claimed opponent turn.
-- Invalid, timed-out, or stale decisions leaving the engine unchanged.
-- Forced final placements bypassing search and committing exactly once.
+Final-sprint tests cover:
 
-The local smoke test loads the frontend, passes `/health`, completes seeded
-Queen and King games, reloads during every lifecycle phase, and confirms that
-narration-disabled play completes without fabricated commentary.
+- Seed-and-history replay through all six rounds.
+- Strict bounded parsing and rejection of impossible command histories.
+- Identical cache-hit and cache-miss reconstruction.
+- Deterministic retry and intentional branching from an older envelope.
+- Queen/King normalization and legal representative-action masking.
+- Deterministic paired-destination resolution.
+- Exact engine scoring and scoring-presentation inputs.
+- Browser storage reload during human, opponent, and scoring phases.
+- Opening, rounds 1–5 transition, and final-result narration cues.
+- Absence of a round-six transition cue.
+- Bedrock delay, timeout, and failure without game-state corruption.
+- No model logits, tensors, masks, or prompts in public responses.
 
-## Opponent evaluation
+The seed and action history are intentionally visible to the client. Tests no
+longer assert that the browser cannot inspect hidden cards or stock derived from
+the seed. Information-state privacy remains mandatory inside `pi1`: the model
+receives only Dracula's player-relative observation.
 
-The version 1 baseline, Teacher v2 gates, fixed fixtures, controls, statistical
-rules, tactical cases, and later neural comparisons are defined in
-[information-set search](search.md#teacher-v2-gates) and
-[model training](model-training.md#absolute-evaluation-and-manual-acceptance).
+## Deployment verification
 
-Application acceptance additionally measures per-turn wall time, timeout rate,
-outer simulations, shallow-response requests, candidate actions, terminal
-evaluations, response-cache behavior, peak process memory, retained tree memory
-after a decision, and reproducibility after retry. A controller is not eligible
-for deployment until its worst supported decision budget fits a declared
-request-execution profile.
+Staging exercises:
 
-The initial guided-search candidate uses 100 full-round simulations per move.
-Its model, PUCT, replay, and manual-acceptance criteria are fixed in
-[neural model](neural-model.md) and
-[model training](model-training.md#absolute-evaluation-and-manual-acceptance).
-Network value cutoffs remain experimental until they satisfy the separate gate
-in [information-set search](search.md#value-cutoff-gate).
+1. `/health` under the API Gateway custom domain.
+2. GitHub Pages asset loading under `/Dracula/`.
+3. CORS restricted to the deployed frontend origin.
+4. Cold model initialization and warm reuse.
+5. Requests deliberately spread across fresh Lambda environments.
+6. Complete games as Queen and King.
+7. Reload and browser-storage recovery.
+8. Bedrock calls at only the configured cue points.
+9. Rate limits and request-size bounds.
+10. Logs, latency/error metrics, alarms, and budget notification.
+11. Image rollback and infrastructure teardown.
 
-## Narrator and cost evaluation
+## Operational data
 
-Narrator cases use versioned public event projections. They assess factual
-grounding, private-state leakage, brevity, repetition, character, cadence, and
-graceful timeout or failure behavior.
+Normal logs contain request identity, route, duration, cache hit or miss,
+history length, opponent latency, action legality, Bedrock cue class, token
+usage, and failure category. Logs omit the game seed, action history, hands,
+stock, model input, masks, logits, weights, and complete narrator prompt.
 
-Cost modeling begins after the opponent execution profile is selected. It uses
-timestamped regional prices and measured request duration, memory, concurrency,
-storage, narration tokens, and traffic. Release reports separate one-time model
-or artifact storage from per-game compute and include cold-start contingencies.
+No game database, backup, migration, or retention process exists. Browser-local
+games are outside AWS recovery. CloudWatch logs follow a declared retention
+period. ECR image retention keeps the active release and rollback image.
 
-## Deployment gate
+## Cost boundary
 
-Deployment topology remains open until controller measurements determine:
-
-- Whether production runs search, network-guided search, or a standalone
-  distilled network.
-- CPU and memory required by one decision at the selected strength budget.
-- Expected warm and cold latency and the concurrency needed for public traffic.
-- Artifact size and whether a persistent model process is necessary.
-- Retry behavior and the maximum safe execution time.
-
-The selected design must preserve the `OpponentEngine` boundary in
-[architecture](architecture.md#opponent-decision-contract). The browser never
-accesses persistence or opponent compute directly. Only an application worker
-may invoke the eventual opponent service.
-
-Infrastructure, retention, observability, rate limits, budget alerts, rollback,
-and teardown are specified after this gate. No AWS inference product or memory
-tier is an active requirement before then.
-
-## Privacy and observability
-
-Public responses, browser state, narrator input, and normal logs exclude hands
-other than the human's own, opponent hand slots, hidden-card assignments, stock
-order, seeds, search determinizations, search trees, and model tensors.
-
-Operational records may include game and turn IDs, public engine version,
-controller and schema versions, search budget, decision latency, node count,
-result status, action validity, narrator model and prompt versions, token usage,
-and failures. Private diagnostic artifacts use restricted storage and are
-referenced by digest rather than copied into logs.
+AWS cost comes from API Gateway requests, Lambda duration and memory, ECR image
+storage, CloudWatch, ACM-supported endpoints, and Bedrock input/output tokens.
+There is no database or SageMaker endpoint cost. Cost validation measures cold
+and warm request duration, model-load memory, narration tokens per complete
+game, expected traffic, and a bounded abuse case.
 
 ## Local development
 
-The deterministic engine, SQLite persistence, FastAPI service, React frontend,
-and narrator-disabled mode run without AWS. In-memory adapters support unit
-tests. Local gameplay can select the manually approved 32×4 Teacher v2
-controller. Version 1 remains an explicit comparison control, and the failed
-automated v2 report remains historical evidence. A selected policy/value
-artifact can run behind guided search through the same opponent boundary. The
-archived-policy adapter remains available only as the fixed PPO control.
-
-Run the search opponent with:
+Local FastAPI continues to use SQLite for existing development, transaction,
+and gameplay-record tests. That local repository is not a production adapter.
+The default local preview selects the exact `pi1` artifact. Nested Sam and other
+controllers require explicit comparison commands and never act as fallbacks.
 
 ```bash
 make dev
+make preview
+make test
+make test-e2e
 ```
 
-Use `SEARCH_SIMULATIONS` and `SEARCH_EXPLORATION` to override its resolved
-configuration. Run `make preview-control` to select the historical PPO control.
-Run the manually approved Teacher v2 controller explicitly with:
-
-```bash
-make preview OPPONENT=search-v2 \
-  SEARCH_SIMULATIONS=32 \
-  SEARCH_RESPONSE_COMPLETIONS=4
-```
-
-Version 1 remains the default and no controller is selected as a silent
-fallback.
-
-Run the following to inspect a candidate without changing the default
-controller:
-
-```bash
-make preview OPPONENT=guided \
-  GUIDED_ARTIFACT=<path> \
-  GUIDED_SIMULATIONS=<budget>
-```
-Missing or invalid controller configuration fails at startup; it never silently
-selects another opponent.
-
-Verification covers engine rules, information-state privacy, search replay,
-API contracts, opponent integration, frontend gameplay, narrator cases, and
-seeded end-to-end replay.
+The final deployment topology and remaining implementation phases are in
+[deployment](deployment.md).

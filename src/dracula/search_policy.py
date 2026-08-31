@@ -11,11 +11,21 @@ from dracula.api.service import (
     PolicyTurnResult,
 )
 from dracula.policy_adapter import PolicyContractError
+from dracula.search.nested_strategic import (
+    NESTED_STRATEGIC_SEARCH_SCHEMA_VERSION,
+    NESTED_STRATEGIC_SELECTION_PROFILE,
+    NestedStrategicInformationSetSearch,
+    NestedStrategicSearchConfig,
+    derive_nested_strategic_search_request_seed,
+)
 from dracula.search import (
+    BELIEF_GREEDY_SEARCH_SCHEMA_VERSION,
     INFORMATION_STATE_SCHEMA_VERSION,
     SEARCH_SCHEMA_VERSION,
     STRATEGIC_SEARCH_SCHEMA_VERSION,
     STRATEGIC_SELECTION_PROFILE,
+    BeliefGreedyInformationSetSearch,
+    BeliefGreedySearchConfig,
     InformationSetSearch,
     SearchConfig,
     SearchInformationState,
@@ -23,6 +33,7 @@ from dracula.search import (
     StrategicInformationSetSearch,
     StrategicSearchConfig,
     ResponseRankerGroupEvaluator,
+    derive_belief_greedy_request_seed,
     derive_search_request_seed,
     derive_strategic_search_request_seed,
 )
@@ -178,16 +189,18 @@ class InlineStrategicSearchExecutor:
         LOGGER.info(
             (
                 "teacher-v2 turn controller=%s config_sha256=%s "
+                "ranker_sha256=%s "
                 "game_id=%s round=%d turn=%d "
                 "representative_action=%d representative_grid=%d "
                 "concrete_action=%d concrete_grid=%d "
                 "outer_simulations=%d response_completions=%d "
-                "response_requests=%d candidate_groups=%d "
-                "response_evaluations=%d cache_hits=%d "
-                "model_calls=%d elapsed_seconds=%.3f"
+                "response_requests=%d shortlisted_candidates=%d "
+                "terminal_evaluations=%d cache_hits=%d "
+                "model_calls=%d decision_latency_seconds=%.3f"
             ),
             self.descriptor.policy_id,
             self.planner.config.digest,
+            self.planner.config.response_ranker_artifact_digest or "none",
             request.game_id,
             request.round_number,
             request.turn_number,
@@ -207,10 +220,289 @@ class InlineStrategicSearchExecutor:
         return PolicyTurnResult(result.selected_action_index, None)
 
 
+class InlineNestedStrategicSearchExecutor:
+    """Run the historical nested-response Teacher v2 controller."""
+
+    def __init__(
+        self,
+        config: NestedStrategicSearchConfig = NestedStrategicSearchConfig(),
+    ) -> None:
+        self.planner = NestedStrategicInformationSetSearch(config)
+
+    @classmethod
+    def from_values(
+        cls,
+        outer_simulation_budget: int = 32,
+        response_simulation_budget: int = 32,
+        outer_exploration_constant: float = math.sqrt(2.0),
+        response_exploration_constant: float = math.sqrt(2.0),
+    ) -> InlineNestedStrategicSearchExecutor:
+        return cls(
+            NestedStrategicSearchConfig(
+                outer_simulation_budget=outer_simulation_budget,
+                response_simulation_budget=response_simulation_budget,
+                outer_exploration_constant=outer_exploration_constant,
+                response_exploration_constant=response_exploration_constant,
+            )
+        )
+
+    @property
+    def descriptor(self) -> PolicyDescriptor:
+        digest = self.planner.config.digest
+        return PolicyDescriptor(
+            policy_id="strategic-information-set-search-nested",
+            policy_version=NESTED_STRATEGIC_SEARCH_SCHEMA_VERSION,
+            artifact_id=f"sha256:{digest}",
+            artifact_sha256=digest,
+            observation_schema_version=INFORMATION_STATE_SCHEMA_VERSION,
+            action_schema_version=SEARCH_ACTION_SCHEMA_VERSION,
+            hidden_state_schema_version=SEARCH_STATE_SCHEMA_VERSION,
+            inference_profile=NESTED_STRATEGIC_SELECTION_PROFILE,
+        )
+
+    def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
+        information = _validate_request(request, self.descriptor)
+        request_seed = derive_nested_strategic_search_request_seed(
+            str(request.game_id),
+            information,
+            self.planner.config.digest,
+        )
+        result = self.planner.search(information, request_seed)
+        _validate_selected_action(request, result.selected_action_index)
+        LOGGER.info(
+            (
+                "teacher-v2-nested turn controller=%s config_sha256=%s "
+                "game_id=%s round=%d turn=%d action=%d "
+                "outer_simulations=%d response_simulations=%d "
+                "response_requests=%d unique_responses=%d cache_hits=%d "
+                "terminal_evaluations=%d decision_latency_seconds=%.3f"
+            ),
+            self.descriptor.policy_id,
+            self.planner.config.digest,
+            request.game_id,
+            request.round_number,
+            request.turn_number,
+            result.selected_action_index,
+            result.simulation_count,
+            result.response_simulation_count,
+            result.response_request_count,
+            result.unique_response_search_count,
+            result.response_cache_hit_count,
+            result.total_terminal_evaluation_count,
+            result.elapsed_seconds,
+        )
+        return PolicyTurnResult(result.selected_action_index, None)
+
+
+class InlineBeliefGreedySearchExecutor:
+    """Run the information-safe belief-greedy controller for local play."""
+
+    def __init__(
+        self,
+        config: BeliefGreedySearchConfig = BeliefGreedySearchConfig(),
+    ) -> None:
+        self.planner = BeliefGreedyInformationSetSearch(config)
+
+    @classmethod
+    def from_values(
+        cls,
+        outer_simulation_budget: int = 32,
+        belief_completion_count: int = 8,
+        outer_exploration_constant: float = math.sqrt(2.0),
+    ) -> InlineBeliefGreedySearchExecutor:
+        return cls(
+            BeliefGreedySearchConfig(
+                outer_simulation_budget=outer_simulation_budget,
+                belief_completion_count=belief_completion_count,
+                outer_exploration_constant=outer_exploration_constant,
+            )
+        )
+
+    @property
+    def descriptor(self) -> PolicyDescriptor:
+        digest = self.planner.config.digest
+        return PolicyDescriptor(
+            policy_id="belief-greedy-information-set-search",
+            policy_version=BELIEF_GREEDY_SEARCH_SCHEMA_VERSION,
+            artifact_id=f"sha256:{digest}",
+            artifact_sha256=digest,
+            observation_schema_version=INFORMATION_STATE_SCHEMA_VERSION,
+            action_schema_version=SEARCH_ACTION_SCHEMA_VERSION,
+            hidden_state_schema_version=SEARCH_STATE_SCHEMA_VERSION,
+            inference_profile="outer-max-visits-belief-greedy-v1",
+        )
+
+    def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
+        information = _validate_request(request, self.descriptor)
+        request_seed = derive_belief_greedy_request_seed(
+            str(request.game_id),
+            information,
+            self.planner.config.digest,
+        )
+        result = self.planner.search(information, request_seed)
+        _validate_selected_action(request, result.selected_action_index)
+        LOGGER.info(
+            (
+                "belief-greedy turn controller=%s config_sha256=%s "
+                "game_id=%s round=%d turn=%d representative_action=%d "
+                "concrete_action=%d outer_simulations=%d "
+                "belief_completions=%d response_requests=%d "
+                "unique_responses=%d cache_hits=%d "
+                "potential_evaluations=%d decision_latency_seconds=%.3f"
+            ),
+            self.descriptor.policy_id,
+            self.planner.config.digest,
+            request.game_id,
+            request.round_number,
+            request.turn_number,
+            result.selected_representative_action_index,
+            result.selected_action_index,
+            result.simulation_count,
+            self.planner.config.belief_completion_count,
+            result.response_request_count,
+            result.unique_response_evaluation_count,
+            result.response_cache_hit_count,
+            result.response_potential_evaluation_count,
+            result.elapsed_seconds,
+        )
+        return PolicyTurnResult(result.selected_action_index, None)
+
+
+class InlinePi0BeliefGreedySearchExecutor:
+    """Run BGC outer UCT with an explicitly selected pi0 continuation policy."""
+
+    def __init__(
+        self,
+        artifact_path: str,
+        config: BeliefGreedySearchConfig = BeliefGreedySearchConfig(
+            outer_simulation_budget=128,
+            belief_completion_count=8,
+        ),
+    ) -> None:
+        from dracula.bgc_policy_evaluation import (
+            Pi0ContinuationBeliefGreedySearch,
+            StandalonePi0Opponent,
+        )
+
+        self.policy = StandalonePi0Opponent.from_artifact(artifact_path)
+        self.planner = Pi0ContinuationBeliefGreedySearch(self.policy, config)
+
+    @classmethod
+    def from_values(
+        cls,
+        artifact_path: str,
+        outer_simulation_budget: int = 128,
+        belief_completion_count: int = 8,
+        outer_exploration_constant: float = math.sqrt(2.0),
+    ) -> InlinePi0BeliefGreedySearchExecutor:
+        return cls(
+            artifact_path,
+            BeliefGreedySearchConfig(
+                outer_simulation_budget=outer_simulation_budget,
+                belief_completion_count=belief_completion_count,
+                outer_exploration_constant=outer_exploration_constant,
+            ),
+        )
+
+    @property
+    def descriptor(self) -> PolicyDescriptor:
+        digest = self.planner.controller_digest
+        return PolicyDescriptor(
+            policy_id="pi0-continuation-belief-greedy-search",
+            policy_version="dracula-pi0-bgc-controller-v1",
+            artifact_id=f"sha256:{self.policy.artifact_digest}",
+            artifact_sha256=self.policy.artifact_digest,
+            observation_schema_version=INFORMATION_STATE_SCHEMA_VERSION,
+            action_schema_version=SEARCH_ACTION_SCHEMA_VERSION,
+            hidden_state_schema_version=SEARCH_STATE_SCHEMA_VERSION,
+            inference_profile=f"outer-max-visits-pi0-response-v1:{digest}",
+        )
+
+    def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
+        information = _validate_request(request, self.descriptor)
+        request_seed = derive_belief_greedy_request_seed(
+            str(request.game_id), information, self.planner.config.digest
+        )
+        result = self.planner.search(information, request_seed)
+        _validate_selected_action(request, result.selected_action_index)
+        LOGGER.info(
+            (
+                "pi0-bgc turn controller=%s controller_sha256=%s "
+                "artifact_sha256=%s game_id=%s round=%d turn=%d "
+                "representative_action=%d concrete_action=%d "
+                "outer_simulations=%d response_requests=%d "
+                "cache_hits=%d decision_latency_seconds=%.3f"
+            ),
+            self.descriptor.policy_id,
+            self.planner.controller_digest,
+            self.policy.artifact_digest,
+            request.game_id,
+            request.round_number,
+            request.turn_number,
+            result.selected_representative_action_index,
+            result.selected_action_index,
+            result.simulation_count,
+            result.response_request_count,
+            result.response_cache_hit_count,
+            result.elapsed_seconds,
+        )
+        return PolicyTurnResult(result.selected_action_index, None)
+
+
+class InlineBGCPolicyExecutor:
+    """Run one standalone BGC-distilled policy inference per accepted turn."""
+
+    def __init__(self, artifact_path: str) -> None:
+        from dracula.bgc_policy_evaluation import StandalonePi0Opponent
+
+        self.policy = StandalonePi0Opponent.from_artifact(artifact_path)
+
+    @property
+    def descriptor(self) -> PolicyDescriptor:
+        return PolicyDescriptor(
+            policy_id="standalone-bgc-policy",
+            policy_version="dracula-standalone-bgc-policy-v1",
+            artifact_id=f"sha256:{self.policy.artifact_digest}",
+            artifact_sha256=self.policy.artifact_digest,
+            observation_schema_version=INFORMATION_STATE_SCHEMA_VERSION,
+            action_schema_version=SEARCH_ACTION_SCHEMA_VERSION,
+            hidden_state_schema_version=SEARCH_STATE_SCHEMA_VERSION,
+            inference_profile="representative-argmax-v1",
+        )
+
+    def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
+        information = _validate_request(request, self.descriptor)
+        decision = self.policy.decide(
+            information,
+            fixture_id=str(request.game_id),
+            decision_index=request.turn_number,
+        )
+        _validate_selected_action(request, decision.concrete_action_index)
+        LOGGER.info(
+            (
+                "standalone-bgc-policy turn artifact_sha256=%s game_id=%s "
+                "round=%d turn=%d representative_action=%d concrete_action=%d "
+                "decision_latency_seconds=%.6f"
+            ),
+            self.policy.artifact_digest,
+            request.game_id,
+            request.round_number,
+            request.turn_number,
+            decision.representative_action_index,
+            decision.concrete_action_index,
+            decision.latency_seconds,
+        )
+        return PolicyTurnResult(decision.concrete_action_index, None)
+
+
 __all__ = (
     "SEARCH_ACTION_SCHEMA_VERSION",
     "SEARCH_SELECTION_PROFILE",
     "SEARCH_STATE_SCHEMA_VERSION",
+    "InlineBeliefGreedySearchExecutor",
+    "InlineBGCPolicyExecutor",
+    "InlineNestedStrategicSearchExecutor",
+    "InlinePi0BeliefGreedySearchExecutor",
     "InlineSearchExecutor",
     "InlineStrategicSearchExecutor",
 )

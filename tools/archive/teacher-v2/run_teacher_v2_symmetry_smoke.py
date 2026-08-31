@@ -21,7 +21,7 @@ SMOKE_SCHEMA_VERSION = "dracula-teacher-v2-symmetry-smoke-v1"
 DEFAULT_RAW_ROOT = Path(
     ".local/teacher-v2-symmetry-smoke-20260723"
 )
-DEFAULT_REPORT = Path("reports/teacher-v2-symmetry-smoke.md")
+DEFAULT_REPORT = Path("reports/history/teacher-v2/teacher-v2-symmetry-smoke.md")
 
 _FORBIDDEN_RAW_KEYS = frozenset(
     (

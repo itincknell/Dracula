@@ -98,7 +98,7 @@ function valueText(item: PresentedLine, cardIndex: number): string {
     item.line.multiplier_reason === "vampire" &&
     item.line.highlighted_card_ids.includes(cardId)
   ) {
-    return "—";
+    return "0";
   }
   return String(item.values[cardIndex]);
 }
@@ -131,8 +131,10 @@ function LineWorkspace({
   if (frame.kind === "line_total") completed.push(item.line.total);
   return (
     <section className="calculation-workspace" aria-live="polite">
-      <p className="score-heading">{playerHeading(orientation.player, model.humanRole)}</p>
-      <p className="series-label">{item.line.direction === "row" ? "Row" : "Column"} {item.line.index + 1}</p>
+      <div className="score-workspace-heading">
+        <p className="score-heading">{playerHeading(orientation.player, model.humanRole)}</p>
+        <p className="series-label">{item.line.direction === "row" ? "Row" : "Col"} {item.line.index + 1}</p>
+      </div>
       <div className={`score-expression ${frame.kind}`} data-stage={frame.kind}>{expression}</div>
       <div className="completed-line-totals" aria-label="Completed line totals">
         {completed.map((total, index) => <span key={`${index}-${total}`}>{total}</span>)}
@@ -151,7 +153,10 @@ function RankedOrientation({
   const orientation = model.orientations[orientationIndex];
   return (
     <section className="calculation-workspace ranked-orientation" aria-live="polite">
-      <p className="score-heading">{playerHeading(orientation.player, model.humanRole)}</p>
+      <div className="score-workspace-heading">
+        <p className="score-heading">{playerHeading(orientation.player, model.humanRole)}</p>
+      </div>
+      <div className="score-expression score-expression-placeholder" aria-hidden="true">0</div>
       <div className="ranked-line-totals" aria-label="Ranked line totals">
         {orientation.rankedTotals.map((total, index) => (
           <span key={index} data-rank={index + 1}>{total}</span>

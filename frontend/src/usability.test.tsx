@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import gameViewFixture from "../../contracts/v1/human-game-view.json";
-import { GameStart } from "./App";
+import { GameStart, SeenCardsExpando } from "./App";
 import type { ApiClient } from "./api";
 import type { HumanGameView } from "./contracts";
 import { GameController } from "./gameStore";
@@ -88,14 +88,33 @@ describe("accessible application surfaces", () => {
     expect(screen.getByRole("table")).toHaveTextContent("Queen");
     expect(screen.getByText(/line containing a Vampire scores zero/i)).toBeInTheDocument();
   });
+
+  it("expands a live ledger containing only cards visible to the human", async () => {
+    const user = userEvent.setup();
+    const view = structuredClone(gameViewFixture) as unknown as HumanGameView;
+    const rendered = render(<SeenCardsExpando view={view} />);
+
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Cheat Sheet/i }));
+    expect(screen.getByRole("table")).toHaveTextContent("5 of 54 cards seen");
+    expect(screen.getByRole("cell", { name: "4 of Clubs: seen" })).toHaveTextContent("X");
+    expect(screen.getByRole("cell", { name: "Ace of Clubs: not seen" })).toHaveTextContent(/^$/);
+    expect(screen.getByLabelText("Vampire 1: not seen")).toBeInTheDocument();
+
+    const nextView = structuredClone(view);
+    nextView.human_hand[0] = "V1";
+    rendered.rerender(<SeenCardsExpando view={nextView} />);
+    expect(screen.getByLabelText("Vampire 1: seen")).toHaveTextContent("X");
+  });
 });
 
 describe("responsive contract", () => {
-  it("encodes the documented floors, aspect ratio, breakpoint, container query, and scrolling", async () => {
+  it("encodes the documented floors, expanded play height, breakpoint, container query, and scrolling", async () => {
     const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const css = await readFile(path.join(frontendRoot, "src", "styles.css"), "utf8");
     expect(css).toContain("--minimum-card-size: 64px");
-    expect(css).toContain("aspect-ratio: 4 / 3");
+    expect(css).toContain("min-height: 700px");
+    expect(css).toContain("grid-template-rows: auto 170px auto auto");
     expect(css).toContain("@container game-layout (max-width: 899px)");
     expect(css).toContain("container-type: inline-size");
     expect(css).toContain("min-width: 360px");

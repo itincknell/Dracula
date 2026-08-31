@@ -22,7 +22,6 @@ from dracula.engine import (
     apply_move,
     legal_moves,
     legal_simulation_moves,
-    other_player,
     state_fingerprint,
     validate_state,
 )

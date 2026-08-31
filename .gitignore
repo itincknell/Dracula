@@ -1,3 +1,4 @@
+# Local operating-system and Python output
 .DS_Store
 .pytest_cache/
 .venv/
@@ -5,15 +6,19 @@ __pycache__/
 *.egg-info/
 /build/
 /dist/
+
+# Frontend dependencies, builds, and browser-test output
 /frontend/dist/
 /frontend/node_modules/
 /frontend/playwright-report/
 /frontend/test-results/
 /frontend/.env*.local
+
+# Protected local runtime state, active logs, runs, and verified archives
 /.local/
 /runs/
 /output*
 
-# Local, immutable source packs. Selected files are copied into frontend assets.
+# Local immutable source packs; selected assets are copied into the frontend.
 /Cards (large)/
 /Cards (medium)/
