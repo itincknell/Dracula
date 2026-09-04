@@ -37,11 +37,9 @@ from dracula.belief_greedy_miner import (
     resolve_source_identity,
 )
 from dracula.bgc_policy import (
-    BGC_POLICY_ARTIFACT_SCHEMA_VERSION,
     BGC_POLICY_LOSS_SCHEMA_VERSION,
     BGC_POLICY_MODEL_SCHEMA_VERSION,
     BGC_POLICY_OPTIMIZER_VERSION,
-    BGC_POLICY_SNAPSHOT_SCHEMA_VERSION,
     load_bgc_policy_artifact,
     save_bgc_policy_artifact,
 )
@@ -68,7 +66,6 @@ from dracula.bgc_policy_model import (
     BGCPolicyModel,
     BGCPolicyModelError,
     OBSERVATION_SCHEMA_VERSION,
-    OBSERVATION_SIZE,
     PARAMETER_COUNT,
 )
 from dracula.search.symmetry import destination_symmetry_groups

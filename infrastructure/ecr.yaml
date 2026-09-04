@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Shared immutable image registry for the Dracula gameplay API.
+
+Parameters:
+  RepositoryName:
+    Type: String
+    Default: dracula-api
+    AllowedPattern: "[a-z0-9]+(?:[._/-][a-z0-9]+)*"
+
+Resources:
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      EmptyOnDelete: false
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Retain the 20 newest images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+      RepositoryName: !Ref RepositoryName
+      Tags:
+        - Key: Application
+          Value: dracula
+
+Outputs:
+  RepositoryArn:
+    Value: !GetAtt ApiRepository.Arn
+  RepositoryUri:
+    Value: !GetAtt ApiRepository.RepositoryUri

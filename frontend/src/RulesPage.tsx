@@ -1,7 +1,16 @@
+import type { MouseEvent } from "react";
+
+import { siteLinks } from "./siteConfig";
+
+function sectionLink(event: MouseEvent<HTMLAnchorElement>, id: string): void {
+  event.preventDefault();
+  document.getElementById(id)?.scrollIntoView();
+}
+
 export function RulesPage() {
   return (
     <main className="page-shell rules-page">
-      <a href="/" className="wordmark">Dracula</a>
+      <a href={siteLinks.home} className="wordmark">Dracula</a>
       <article>
         <header>
           <p className="eyebrow">Rules reference</p>
@@ -13,10 +22,10 @@ export function RulesPage() {
         </header>
 
         <nav className="rules-contents" aria-label="Rules contents">
-          <a href="#setup">Setup</a>
-          <a href="#playing">Playing</a>
-          <a href="#scoring">Scoring</a>
-          <a href="#winning">Winning</a>
+          <a href="#/rules" onClick={(event) => sectionLink(event, "setup")}>Setup</a>
+          <a href="#/rules" onClick={(event) => sectionLink(event, "playing")}>Playing</a>
+          <a href="#/rules" onClick={(event) => sectionLink(event, "scoring")}>Scoring</a>
+          <a href="#/rules" onClick={(event) => sectionLink(event, "winning")}>Winning</a>
         </nav>
 
         <section id="setup">

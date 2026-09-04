@@ -11,6 +11,15 @@ visit-distillation configurations.
 disk-guard settings for reproducibility.
 
 `archive/` retains superseded experiment configurations needed to interpret or
-reproduce historical evidence. They are not active defaults. Historical Python
-commands remain available explicitly through `python -m dracula.<module>`;
-they are not installed as project entry points.
+reproduce historical evidence. They are not active defaults. Six maintained
+data and evaluation commands are installed from `pyproject.toml`:
+
+- `dracula-belief-greedy-miner`
+- `dracula-bgc-policy-evaluation`
+- `dracula-bgc-policy-training`
+- `dracula-bgc-pi0-miner`
+- `dracula-sam-miner`
+- `dracula-sam-policy-training`
+
+Other historical commands remain available explicitly through
+`python -m dracula.<module>`.

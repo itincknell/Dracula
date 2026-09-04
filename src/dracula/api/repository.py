@@ -20,22 +20,24 @@ from dracula.api.session import (
 
 
 class RepositoryError(Exception):
-    pass
+    """Base failure for the explicit local session persistence path."""
 
 
 class SessionNotFound(RepositoryError):
-    pass
+    """The requested local game ID has no persisted session."""
 
 
 class ConcurrentSessionUpdate(RepositoryError):
-    pass
+    """Optimistic storage revision changed before commit."""
 
 
 class RequestIdConflict(RepositoryError):
-    pass
+    """One idempotency key was reused with different request content."""
 
 
 class GameRepository(Protocol):
+    """Transactional storage boundary retained for local gameplay only."""
+
     def create(
         self, session: GameSession, create_record: IdempotencyRecord
     ) -> IdempotencyRecord | None: ...
@@ -48,6 +50,8 @@ class GameRepository(Protocol):
 
 
 class InMemoryGameRepository:
+    """Thread-safe local repository used by tests and ephemeral development."""
+
     def __init__(self) -> None:
         self._games: dict[UUID, GameSession] = {}
         self._create_requests: dict[str, tuple[UUID, IdempotencyRecord]] = {}
@@ -101,7 +105,7 @@ class InMemoryGameRepository:
 
 
 class SQLiteGameRepository:
-    """SQLite repository with a single explicit transaction per mutation."""
+    """Local-only SQLite repository with one explicit transaction per mutation."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
@@ -110,6 +114,7 @@ class SQLiteGameRepository:
         )
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
+        # WAL permits local browser reads while a move transaction is committed.
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._lock = threading.RLock()
         self._initialize()

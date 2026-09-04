@@ -1,10 +1,8 @@
-"""FastAPI entry point for local and deployed browser gameplay."""
+"""Compatible FastAPI entry point for local and stateless gameplay."""
 
 from __future__ import annotations
 
-import math
 import os
-
 from pathlib import Path
 from uuid import UUID
 
@@ -22,39 +20,23 @@ from dracula.api.contracts import (
     MoveRequest,
     VersionedMutationRequest,
 )
+from dracula.api.bedrock import BedrockRuntimeAdapter
+from dracula.api.local_controllers import resolve_local_controller
+from dracula.api.narration import NarrationAdapter
+from dracula.api.policy import PolicyDescriptor, PolicyExecutor, ServiceResponse
 from dracula.api.repository import (
     GameRepository,
     InMemoryGameRepository,
     SQLiteGameRepository,
 )
-from dracula.api.service import (
-    GameplayService,
-    PolicyDescriptor,
-    PolicyExecutor,
-    ServiceResponse,
-)
+from dracula.api.service import GameplayService
+from dracula.api.stateless_app import create_stateless_app
 
-LOCAL_POLICY_ARCHIVE_ENV = "DRACULA_POLICY_ARCHIVE"
-LOCAL_INFERENCE_PROFILE_ENV = "DRACULA_POLICY_INFERENCE_PROFILE"
-DEFAULT_LOCAL_INFERENCE_PROFILE = "argmax-v1"
 LOCAL_GAME_SEED_ENV = "DRACULA_LOCAL_GAME_SEED"
-LOCAL_OPPONENT_MODE_ENV = "DRACULA_OPPONENT_MODE"
-SEARCH_SIMULATIONS_ENV = "DRACULA_SEARCH_SIMULATIONS"
-SEARCH_EXPLORATION_ENV = "DRACULA_SEARCH_EXPLORATION"
-SEARCH_RESPONSE_COMPLETIONS_ENV = "DRACULA_SEARCH_RESPONSE_COMPLETIONS"
-SEARCH_RESPONSE_SIMULATIONS_ENV = "DRACULA_SEARCH_RESPONSE_SIMULATIONS"
-BELIEF_COMPLETIONS_ENV = "DRACULA_BELIEF_COMPLETIONS"
-RESPONSE_RANKER_ARTIFACT_ENV = "DRACULA_RESPONSE_RANKER_ARTIFACT"
-GUIDED_ARTIFACT_ENV = "DRACULA_POLICY_VALUE_ARTIFACT"
-GUIDED_SIMULATIONS_ENV = "DRACULA_GUIDED_SIMULATIONS"
-SAM_POLICY_ARTIFACT_ENV = "DRACULA_SAM_POLICY_ARTIFACT"
-BGC_PI0_ARTIFACT_ENV = "DRACULA_BGC_PI0_ARTIFACT"
-DEFAULT_SEARCH_SIMULATIONS = 500
-DEFAULT_SEARCH_EXPLORATION = math.sqrt(2.0)
-DEFAULT_SEARCH_RESPONSE_COMPLETIONS = 1
-DEFAULT_SEARCH_RESPONSE_SIMULATIONS = 32
-DEFAULT_BELIEF_COMPLETIONS = 8
-DEFAULT_GUIDED_SIMULATIONS = 100
+GAMEPLAY_MODE_ENV = "DRACULA_GAMEPLAY_MODE"
+REPLAY_CACHE_ENTRIES_ENV = "DRACULA_REPLAY_CACHE_ENTRIES"
+DEFAULT_GAMEPLAY_MODE = "local"
+DEFAULT_REPLAY_CACHE_ENTRIES = 256
 
 
 def _environment_flag(name: str, *, default: bool) -> bool:
@@ -78,40 +60,24 @@ def _default_repository() -> GameRepository:
     return SQLiteGameRepository(database_path)
 
 
-def _positive_integer_environment(name: str, default: int) -> int:
+def _nonnegative_integer_environment(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
         return default
     try:
         value = int(raw)
     except ValueError as error:
-        raise ValueError(f"{name} must be a positive integer") from error
-    if value < 1:
-        raise ValueError(f"{name} must be a positive integer")
+        raise ValueError(f"{name} must be a non-negative integer") from error
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
     return value
 
 
-def _nonnegative_float_environment(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except ValueError as error:
-        raise ValueError(f"{name} must be a non-negative finite number") from error
-    if not math.isfinite(value) or value < 0:
-        raise ValueError(f"{name} must be a non-negative finite number")
-    return value
-
-
-def _search_response_completions_environment() -> int:
-    value = _positive_integer_environment(
-        SEARCH_RESPONSE_COMPLETIONS_ENV,
-        DEFAULT_SEARCH_RESPONSE_COMPLETIONS,
-    )
-    if value not in {1, 2, 4}:
-        raise ValueError(f"{SEARCH_RESPONSE_COMPLETIONS_ENV} must be 1, 2, or 4")
-    return value
+def _gameplay_mode(value: str | None) -> str:
+    resolved = DEFAULT_GAMEPLAY_MODE if value is None else value.strip().lower()
+    if resolved not in {"local", "stateless"}:
+        raise ValueError(f"{GAMEPLAY_MODE_ENV} must be local or stateless")
+    return resolved
 
 
 def _json(response: ServiceResponse) -> JSONResponse:
@@ -124,240 +90,59 @@ def create_app(
     repository: GameRepository | None = None,
     policy_executor: PolicyExecutor | None = None,
     policy_descriptor: PolicyDescriptor | None = None,
+    gameplay_mode: str | None = None,
+    replay_cache_entries: int | None = None,
+    narration_adapter: NarrationAdapter | None = None,
 ) -> FastAPI:
+    """Assemble an explicitly selected local-stateful or stateless application."""
+
     resolved_narration = (
         _environment_flag("DRACULA_NARRATION_ENABLED", default=False)
         if narration_enabled is None
         else narration_enabled
     )
-    resolved_executor = policy_executor
-    resolved_descriptor = policy_descriptor
-    archive_path = os.getenv(LOCAL_POLICY_ARCHIVE_ENV)
-    opponent_mode = os.getenv(LOCAL_OPPONENT_MODE_ENV)
-    if opponent_mode is not None:
-        opponent_mode = opponent_mode.strip().lower()
-        if opponent_mode not in {
-            "search",
-            "search-v2",
-            "search-v2-nested",
-            "search-belief-greedy",
-            "search-belief-greedy-pi0",
-            "bgc-policy",
-            "search-v2-student-direct",
-            "search-v2-student-top-2",
-            "search-v2-student-top-3",
-            "guided",
-            "archive",
-            "sam-policy",
-        }:
-            raise ValueError(
-                f"{LOCAL_OPPONENT_MODE_ENV} must select a documented opponent mode"
-            )
-    elif archive_path is not None:
-        opponent_mode = "archive"
+    resolved_gameplay_mode = _gameplay_mode(
+        os.getenv(GAMEPLAY_MODE_ENV) if gameplay_mode is None else gameplay_mode
+    )
     local_game_seed = os.getenv(LOCAL_GAME_SEED_ENV)
     if local_game_seed is not None and not local_game_seed:
         raise ValueError(f"{LOCAL_GAME_SEED_ENV} must be a nonempty value")
-    if resolved_executor is None:
-        if opponent_mode == "search":
-            from dracula.search_policy import InlineSearchExecutor
+    resolved_executor, resolved_descriptor = resolve_local_controller(
+        policy_executor, policy_descriptor
+    )
 
-            resolved_executor = InlineSearchExecutor.from_values(
-                _positive_integer_environment(
-                    SEARCH_SIMULATIONS_ENV, DEFAULT_SEARCH_SIMULATIONS
-                ),
-                _nonnegative_float_environment(
-                    SEARCH_EXPLORATION_ENV, DEFAULT_SEARCH_EXPLORATION
-                ),
+    if resolved_gameplay_mode == "stateless":
+        if repository is not None:
+            raise ValueError("stateless gameplay cannot be configured with a repository")
+        cache_entries = (
+            _nonnegative_integer_environment(
+                REPLAY_CACHE_ENTRIES_ENV, DEFAULT_REPLAY_CACHE_ENTRIES
             )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode in {
-            "search-v2",
-            "search-v2-student-direct",
-            "search-v2-student-top-2",
-            "search-v2-student-top-3",
-        }:
-            from dracula.search_policy import InlineStrategicSearchExecutor
-            from dracula.search import StrategicResponseMode
-
-            response_mode = {
-                "search-v2": StrategicResponseMode.PURE,
-                "search-v2-student-direct": (
-                    StrategicResponseMode.STUDENT_DIRECT
-                ),
-                "search-v2-student-top-2": (
-                    StrategicResponseMode.STUDENT_TOP_2
-                ),
-                "search-v2-student-top-3": (
-                    StrategicResponseMode.STUDENT_TOP_3
-                ),
-            }[opponent_mode]
-            response_ranker_artifact = os.getenv(
-                RESPONSE_RANKER_ARTIFACT_ENV
-            )
-            if (
-                response_mode is not StrategicResponseMode.PURE
-                and (
-                    response_ranker_artifact is None
-                    or not response_ranker_artifact.strip()
-                )
-            ):
-                raise ValueError(
-                    f"{RESPONSE_RANKER_ARTIFACT_ENV} must be a nonempty path"
-                )
-
-            resolved_executor = InlineStrategicSearchExecutor.from_values(
-                _positive_integer_environment(
-                    SEARCH_SIMULATIONS_ENV, DEFAULT_SEARCH_SIMULATIONS
-                ),
-                _search_response_completions_environment(),
-                _nonnegative_float_environment(
-                    SEARCH_EXPLORATION_ENV, DEFAULT_SEARCH_EXPLORATION
-                ),
-                response_mode=response_mode,
-                response_ranker_artifact=response_ranker_artifact,
-            )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "search-v2-nested":
-            from dracula.search_policy import (
-                InlineNestedStrategicSearchExecutor,
-            )
-
-            resolved_executor = (
-                InlineNestedStrategicSearchExecutor.from_values(
-                    _positive_integer_environment(
-                        SEARCH_SIMULATIONS_ENV,
-                        32,
-                    ),
-                    _positive_integer_environment(
-                        SEARCH_RESPONSE_SIMULATIONS_ENV,
-                        DEFAULT_SEARCH_RESPONSE_SIMULATIONS,
-                    ),
-                    _nonnegative_float_environment(
-                        SEARCH_EXPLORATION_ENV,
-                        DEFAULT_SEARCH_EXPLORATION,
-                    ),
-                    _nonnegative_float_environment(
-                        SEARCH_EXPLORATION_ENV,
-                        DEFAULT_SEARCH_EXPLORATION,
-                    ),
-                )
-            )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "search-belief-greedy":
-            from dracula.search_policy import (
-                InlineBeliefGreedySearchExecutor,
-            )
-
-            resolved_executor = InlineBeliefGreedySearchExecutor.from_values(
-                _positive_integer_environment(
-                    SEARCH_SIMULATIONS_ENV,
-                    32,
-                ),
-                _positive_integer_environment(
-                    BELIEF_COMPLETIONS_ENV,
-                    DEFAULT_BELIEF_COMPLETIONS,
-                ),
-                _nonnegative_float_environment(
-                    SEARCH_EXPLORATION_ENV,
-                    DEFAULT_SEARCH_EXPLORATION,
-                ),
-            )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "search-belief-greedy-pi0":
-            artifact_path = os.getenv(BGC_PI0_ARTIFACT_ENV)
-            if artifact_path is None or not artifact_path.strip():
-                raise ValueError(
-                    f"{BGC_PI0_ARTIFACT_ENV} must be a nonempty path"
-                )
-            from dracula.search_policy import (
-                InlinePi0BeliefGreedySearchExecutor,
-            )
-
-            resolved_executor = InlinePi0BeliefGreedySearchExecutor.from_values(
-                artifact_path,
-                _positive_integer_environment(
-                    SEARCH_SIMULATIONS_ENV,
-                    128,
-                ),
-                _positive_integer_environment(
-                    BELIEF_COMPLETIONS_ENV,
-                    DEFAULT_BELIEF_COMPLETIONS,
-                ),
-                _nonnegative_float_environment(
-                    SEARCH_EXPLORATION_ENV,
-                    DEFAULT_SEARCH_EXPLORATION,
-                ),
-            )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "bgc-policy":
-            artifact_path = os.getenv(BGC_PI0_ARTIFACT_ENV)
-            if artifact_path is None or not artifact_path.strip():
-                raise ValueError(
-                    f"{BGC_PI0_ARTIFACT_ENV} must be a nonempty path"
-                )
-            from dracula.search_policy import InlineBGCPolicyExecutor
-
-            resolved_executor = InlineBGCPolicyExecutor(artifact_path)
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "guided":
-            artifact_path = os.getenv(GUIDED_ARTIFACT_ENV)
-            if artifact_path is None or not artifact_path.strip():
-                raise ValueError(f"{GUIDED_ARTIFACT_ENV} must be a nonempty path")
-            from dracula.guided_policy import InlineGuidedSearchExecutor
-            from dracula.search import GuidedSearchConfig
-
-            resolved_executor = InlineGuidedSearchExecutor(
-                artifact_path,
-                GuidedSearchConfig(
-                    simulation_budget=_positive_integer_environment(
-                        GUIDED_SIMULATIONS_ENV, DEFAULT_GUIDED_SIMULATIONS
-                    )
-                ),
-            )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "archive":
-            if archive_path is None or not archive_path.strip():
-                raise ValueError(
-                    f"{LOCAL_POLICY_ARCHIVE_ENV} must be a nonempty path"
-                )
-            # PyTorch remains outside the ordinary API import path unless a local
-            # candidate is explicitly selected.
-            from dracula.local_policy import InlinePolicyExecutor
-
-            resolved_executor = InlinePolicyExecutor.from_archive(
-                archive_path,
-                os.getenv(
-                    LOCAL_INFERENCE_PROFILE_ENV, DEFAULT_LOCAL_INFERENCE_PROFILE
-                ),
-            )
-            resolved_descriptor = resolved_executor.descriptor
-        elif opponent_mode == "sam-policy":
-            artifact_path = os.getenv(SAM_POLICY_ARTIFACT_ENV)
-            if artifact_path is None or not artifact_path.strip():
-                raise ValueError(
-                    f"{SAM_POLICY_ARTIFACT_ENV} must be a nonempty path"
-                )
-            # PyTorch remains outside the ordinary API import path unless the
-            # standalone classifier is selected explicitly.
-            from dracula.standalone_policy import (
-                StandaloneSamPolicyExecutor,
-            )
-
-            resolved_executor = StandaloneSamPolicyExecutor(artifact_path)
-            resolved_descriptor = resolved_executor.descriptor
+            if replay_cache_entries is None
+            else replay_cache_entries
+        )
+        resolved_narration_adapter = narration_adapter
+        if resolved_narration and resolved_narration_adapter is None:
+            resolved_narration_adapter = BedrockRuntimeAdapter.from_environment()
+        return create_stateless_app(
+            policy_executor=resolved_executor,
+            policy_descriptor=resolved_descriptor,
+            narration_enabled=resolved_narration,
+            narration_adapter=resolved_narration_adapter,
+            replay_cache_entries=cache_entries,
+            game_seed_factory=(None if local_game_seed is None else lambda: local_game_seed),
+        )
 
     application = FastAPI(title="Dracula API", version=API_VERSION)
     application.state.narration_enabled = resolved_narration
+    application.state.gameplay_mode = resolved_gameplay_mode
     application.state.game_repository = repository or _default_repository()
     application.state.gameplay_service = GameplayService(
         application.state.game_repository,
         policy_executor=resolved_executor,
         policy_descriptor=resolved_descriptor,
         narration_enabled=resolved_narration,
-        game_seed_factory=(
-            None if local_game_seed is None else lambda: local_game_seed
-        ),
+        game_seed_factory=(None if local_game_seed is None else lambda: local_game_seed),
     )
 
     @application.exception_handler(RequestValidationError)
@@ -418,9 +203,7 @@ def create_app(
     def opponent_turn(
         game_id: UUID, request: VersionedMutationRequest
     ) -> JSONResponse:
-        return _json(
-            application.state.gameplay_service.opponent_turn(game_id, request)
-        )
+        return _json(application.state.gameplay_service.opponent_turn(game_id, request))
 
     @application.post(
         "/games/{game_id}/rounds/{round_number}/advance",

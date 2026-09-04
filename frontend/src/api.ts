@@ -10,7 +10,7 @@ import {
   type HumanGameView,
   type MoveRequest,
   type VersionedMutationRequest,
-} from "./contracts";
+} from "./statefulContracts";
 
 export interface ApiResult<T, Status extends number> {
   status: Status;

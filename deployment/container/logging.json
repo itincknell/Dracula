@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "json": {
+      "()": "dracula.production_logging.JsonLogFormatter"
+    }
+  },
+  "handlers": {
+    "stdout": {
+      "class": "logging.StreamHandler",
+      "formatter": "json",
+      "stream": "ext://sys.stdout"
+    }
+  },
+  "root": {
+    "handlers": ["stdout"],
+    "level": "INFO"
+  },
+  "loggers": {
+    "uvicorn": {
+      "handlers": ["stdout"],
+      "level": "INFO",
+      "propagate": false
+    },
+    "uvicorn.access": {
+      "handlers": ["stdout"],
+      "level": "INFO",
+      "propagate": false
+    },
+    "uvicorn.error": {
+      "handlers": ["stdout"],
+      "level": "INFO",
+      "propagate": false
+    }
+  }
+}

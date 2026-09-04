@@ -7,7 +7,7 @@ Migration completed: July 25, 2026 at 10:16 EDT
 The active Sam-32 continuous collector now runs from an ignored, detached,
 physical source checkout:
 
-`/Users/itincknell/Projects/Dracula/.local/collector-source/sam-32-continuous-corpus-001`
+`<repository>/.local/collector-source/sam-32-continuous-corpus-001`
 
 The checkout is independent of the mutable main working tree. The collector
 continues to use the original corpus, virtual environment, log, and PID file.

@@ -10,6 +10,7 @@ experiments.
 | [Product and scope](product-and-scope.md) | North stars, goals, non-goals, acceptance |
 | [Rules](rules.md) | Authoritative game rules and examples |
 | [Architecture](architecture.md) | Stateless web application, `pi1`, replay, API, and narration boundaries |
+| [Stateless gameplay API](stateless-api.md) | Production envelope, replay, cache, routes, errors, and privacy |
 | [Deployment](deployment.md) | GitHub Pages, Cloudflare, API Gateway, Lambda, Bedrock, and release phases |
 | [Engine–opponent contract](engine-model-contract.md) | Deterministic engine, information-state projection, determinization, and action mapping |
 | [Information-set search](search.md) | Historical Sam/BGC controller design, hidden-information boundaries, symmetry, and deterministic action selection |

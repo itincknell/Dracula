@@ -6,6 +6,9 @@ __pycache__/
 *.egg-info/
 /build/
 /dist/
+/.env
+/.env.*
+!/.env.example
 
 # Frontend dependencies, builds, and browser-test output
 /frontend/dist/

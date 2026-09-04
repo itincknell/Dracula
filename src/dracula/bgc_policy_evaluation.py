@@ -11,7 +11,6 @@ import resource
 import shutil
 import sys
 import time
-from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
@@ -37,7 +36,7 @@ from dracula.engine import (
     legal_moves,
     other_player,
 )
-from dracula.randomness import Sha256CounterStream, derive_seed, seed_hex
+from dracula.randomness import Sha256CounterStream, derive_seed
 from dracula.sam_policy import (
     DESTINATION_SYMMETRY_SCHEMA_VERSION,
     INFERENCE_DESTINATION_SCOPE,

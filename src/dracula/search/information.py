@@ -22,7 +22,6 @@ from dracula.bridge import (
     PolicyInput,
     build_policy_turn_context,
     build_simulation_policy_input,
-    global_grid_index,
     player_relative_grid_index,
 )
 from dracula.cards import CARD_COUNT, CARD_IDS, CARD_INDEX_BY_ID, sort_card_ids
@@ -42,14 +41,17 @@ from dracula.engine import (
     score_coffin,
     validate_state,
 )
-from dracula.randomness import Sha256CounterStream, derive_seed, seed_hex, shuffled
+from dracula.randomness import Sha256CounterStream, derive_seed, seed_hex
 
+# These namespaces and the serialized field order define cache and artifact
+# identity. Changes require explicit versioned compatibility handling.
 INFORMATION_STATE_SCHEMA_VERSION = "dracula-search-information-v1"
 SEARCH_REQUEST_NAMESPACE = "dracula-search-request-v1"
 BELIEF_SAMPLE_NAMESPACE = "dracula-search-determinization-v1"
 TREE_SELECTION_NAMESPACE = "dracula-search-expansion-v1"
 ROLLOUT_CHOICE_NAMESPACE = "dracula-search-opponent-v1"
 
+# Rows are stable hand slots; columns are the eight non-center policy positions.
 LegalMask = tuple[
     tuple[bool, bool, bool, bool, bool, bool, bool, bool],
     tuple[bool, bool, bool, bool, bool, bool, bool, bool],
@@ -64,6 +66,8 @@ class InformationContractViolation(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PublicPlayedMove:
+    """Played-card fact with the private original hand slot removed."""
+
     player: EnginePlayer
     card_id: str
     global_grid_index: int
@@ -72,6 +76,8 @@ class PublicPlayedMove:
 
 @dataclass(frozen=True, slots=True)
 class PublicRoundRecord:
+    """Completed round facts visible to both players."""
+
     round_number: int
     dealer: EnginePlayer
     coffin: tuple[str, str, str, str, str, str, str, str, str]
@@ -81,6 +87,8 @@ class PublicRoundRecord:
 
 @dataclass(frozen=True, slots=True)
 class PublicGameHistory:
+    """Validated public history for an active round, with no hidden locations."""
+
     status: EngineStatus
     round_number: int
     dealer: EnginePlayer
@@ -96,6 +104,8 @@ class PublicGameHistory:
 
 @dataclass(frozen=True, slots=True)
 class SearchInformationState:
+    """Complete decision information available to exactly one active player."""
+
     schema_version: str
     player: EnginePlayer
     round_number: int
@@ -119,6 +129,8 @@ class SearchInformationState:
 
 @dataclass(frozen=True, slots=True)
 class SampledDeterminization:
+    """Private sampled world owned by search and never exposed as model input."""
+
     root_player: EnginePlayer
     sample_seed_digest: str
     opponent_remaining_hand: tuple[str, ...]
@@ -150,6 +162,8 @@ def _validate_public_moves(
     *,
     complete: bool,
 ) -> None:
+    """Validate public turn order and board growth without private hand slots."""
+
     expected_count = MOVES_PER_ROUND if complete else range(MOVES_PER_ROUND)
     if complete:
         valid_count = len(moves) == expected_count
@@ -190,6 +204,8 @@ def _round_scores(coffin: tuple[str, ...]) -> PlayerValues[int]:
 
 
 def _validate_public_round(record: PublicRoundRecord) -> None:
+    """Verify one public round's cards, moves, dealer, and recomputed scores."""
+
     if not isinstance(record, PublicRoundRecord):
         raise InformationContractViolation("completed history contains an invalid round")
     if type(record.round_number) is not int or not 1 <= record.round_number <= ROUNDS_PER_GAME:
@@ -207,6 +223,8 @@ def _validate_public_round(record: PublicRoundRecord) -> None:
 
 
 def _validate_public_history(history: PublicGameHistory) -> None:
+    """Verify active lifecycle, archived rounds, totals, and public card uniqueness."""
+
     if history.status is not EngineStatus.PLAYING:
         raise InformationContractViolation("search information requires an active round")
     if type(history.round_number) is not int or not 1 <= history.round_number <= ROUNDS_PER_GAME:
@@ -318,6 +336,8 @@ def _decode_slots(bits: list[list[bool]], label: str) -> tuple[str | None, ...]:
 def _relative_coffin(
     coffin: tuple[str | None, ...], player: EnginePlayer
 ) -> tuple[str | None, ...]:
+    """Rotate the authoritative coffin into the player's scoring frame."""
+
     result: list[str | None] = [None] * COFFIN_POSITION_COUNT
     for global_index, card_id in enumerate(coffin):
         result[player_relative_grid_index(player, global_index)] = card_id
@@ -347,6 +367,8 @@ def build_information_state(
     if public_history.active_player is not player:
         raise InformationContractViolation("information can be built only for the active player")
 
+    # Decode only actor-visible tensor fields, then reconcile them with the
+    # independently constructed public history before creating the typed view.
     observation = policy_input.observation.detach().cpu()
     hand_bits = observation[: HAND_SLOT_COUNT * CARD_COUNT].reshape(
         HAND_SLOT_COUNT, CARD_COUNT
@@ -396,6 +418,8 @@ def build_information_state(
         raise InformationContractViolation("visible progress and public move history disagree")
 
     opponent = other_player(player)
+    # The unseen cards intentionally form one undifferentiated pool. Only the
+    # public counts reveal how many occupy the opponent hand and stock.
     opponent_remaining = HAND_SLOT_COUNT - sum(
         move.player is opponent for move in public_history.current_round_moves
     )
@@ -495,6 +519,8 @@ def policy_input_from_information_state(
 
 
 def _expected_legal_mask(state: SearchInformationState) -> LegalMask:
+    """Recompute legality using only the actor's hand and public coffin."""
+
     occupied = {index for index, card in enumerate(state.coffin) if card is not None}
     destinations = {
         index
@@ -512,6 +538,8 @@ def _expected_legal_mask(state: SearchInformationState) -> LegalMask:
 
 
 def _validate_information_state(state: SearchInformationState) -> None:
+    """Verify actor ownership, public history, card partition, counts, and legality."""
+
     if state.schema_version != INFORMATION_STATE_SCHEMA_VERSION:
         raise InformationContractViolation("information schema version is unsupported")
     if not isinstance(state.player, EnginePlayer) or state.active_player is not state.player:
@@ -555,6 +583,8 @@ def _validate_information_state(state: SearchInformationState) -> None:
     if state.unseen_card_ids != sort_card_ids(state.unseen_card_ids):
         raise InformationContractViolation("unseen cards must use canonical order")
     _validate_card_ids(state.unseen_card_ids, "unseen pool")
+    # These three actor-visible sets must partition the physical deck without
+    # revealing how unseen cards divide between opponent hand and stock.
     physical = (*state.played_card_ids, *own_cards, *state.unseen_card_ids)
     if len(physical) != CARD_COUNT or set(physical) != set(CARD_IDS):
         raise InformationContractViolation("information state must partition all 54 cards")
@@ -591,6 +621,8 @@ def _relative_public_move(
 
 
 def _relative_round(record: PublicRoundRecord, root: EnginePlayer) -> dict[str, object]:
+    """Encode one public round without preserving absolute actor orientation."""
+
     coffin = [None] * COFFIN_POSITION_COUNT
     for global_index, card_id in enumerate(record.coffin):
         coffin[player_relative_grid_index(root, global_index)] = card_id
@@ -608,6 +640,8 @@ def _relative_round(record: PublicRoundRecord, root: EnginePlayer) -> dict[str, 
 
 
 def canonical_information_data(state: SearchInformationState) -> dict[str, object]:
+    """Return actor-relative information in compatibility-stable field order."""
+
     _validate_information_state(state)
     opponent = other_player(state.player)
     return {
@@ -638,6 +672,9 @@ def canonical_information_data(state: SearchInformationState) -> dict[str, objec
 
 
 def canonical_information_json(state: SearchInformationState) -> str:
+    """Serialize canonical actor information without hidden-location data."""
+
+    # Dictionary insertion order is part of the information fingerprint.
     return json.dumps(
         canonical_information_data(state),
         ensure_ascii=False,
@@ -647,6 +684,8 @@ def canonical_information_json(state: SearchInformationState) -> str:
 
 
 def information_state_fingerprint(state: SearchInformationState) -> str:
+    """Identify states indistinguishable to the acting player."""
+
     return hashlib.sha256(canonical_information_json(state).encode("utf-8")).hexdigest()
 
 
@@ -661,6 +700,8 @@ def derive_search_request_seed(
     state: SearchInformationState,
     search_config_digest: str,
 ) -> bytes:
+    """Bind one search request to its fixture, information, actor, and config."""
+
     return derive_seed(
         SEARCH_REQUEST_NAMESPACE,
         fixture_id,
@@ -673,6 +714,8 @@ def derive_search_request_seed(
 
 
 def derive_belief_sample_seed(request_seed: bytes, simulation_index: int) -> bytes:
+    """Derive one simulation's hidden-world sampling stream."""
+
     return derive_seed(
         BELIEF_SAMPLE_NAMESPACE,
         seed_hex(request_seed),
@@ -683,6 +726,8 @@ def derive_belief_sample_seed(request_seed: bytes, simulation_index: int) -> byt
 def derive_tree_selection_seed(
     request_seed: bytes, simulation_index: int, node_digest: str
 ) -> bytes:
+    """Derive node-local selection randomness for one simulation."""
+
     return derive_seed(
         TREE_SELECTION_NAMESPACE,
         seed_hex(request_seed),
@@ -694,6 +739,8 @@ def derive_tree_selection_seed(
 def derive_rollout_choice_seed(
     request_seed: bytes, simulation_index: int, rollout_ply: int
 ) -> bytes:
+    """Derive one rollout choice without sharing randomness across plies."""
+
     return derive_seed(
         ROLLOUT_CHOICE_NAMESPACE,
         seed_hex(request_seed),
@@ -718,189 +765,11 @@ def sample_uniform_action_index(
     return legal[Sha256CounterStream(choice_seed).randbelow(len(legal))]
 
 
-def _private_moves(
-    moves: tuple[PublicPlayedMove, ...],
-    original_hands: PlayerValues[tuple[str, ...]],
-) -> tuple[EnginePlayedMove, ...]:
-    slots = {
-        player: {card_id: index for index, card_id in enumerate(original_hands[player])}
-        for player in EnginePlayer
-    }
-    return tuple(
-        EnginePlayedMove(
-            player=move.player,
-            card_id=move.card_id,
-            hand_slot=slots[move.player][move.card_id],
-            global_grid_index=move.global_grid_index,
-            turn_number=move.turn_number,
-        )
-        for move in moves
-    )
-
-
-def _completed_round_result(record: PublicRoundRecord) -> EngineRoundResult:
-    hands = PlayerValues(
-        queen=sort_card_ids(
-            move.card_id for move in record.moves if move.player is EnginePlayer.QUEEN
-        ),
-        king=sort_card_ids(
-            move.card_id for move in record.moves if move.player is EnginePlayer.KING
-        ),
-    )
-    lines = score_coffin(record.coffin)
-    return EngineRoundResult(
-        round_number=record.round_number,
-        dealer=record.dealer,
-        coffin=record.coffin,
-        moves=_private_moves(record.moves, hands),
-        line_scores=lines,
-        round_scores=record.round_scores,
-    )
-
-
-def _original_hand(
-    remaining: tuple[str, ...],
-    moves: tuple[PublicPlayedMove, ...],
-    player: EnginePlayer,
-) -> tuple[str, ...]:
-    original = sort_card_ids(
-        (*remaining, *(move.card_id for move in moves if move.player is player))
-    )
-    if len(original) != HAND_SLOT_COUNT or len(set(original)) != HAND_SLOT_COUNT:
-        raise InformationContractViolation("sampled original hand must contain four cards")
-    return original
-
-
-def _remaining_slots(
-    original: tuple[str, ...], moves: tuple[PublicPlayedMove, ...], player: EnginePlayer
-) -> tuple[str | None, str | None, str | None, str | None]:
-    played = {move.card_id for move in moves if move.player is player}
-    return tuple(  # type: ignore[return-value]
-        None if card_id in played else card_id for card_id in original
-    )
-
-
-def _deal_segment(
-    hands: PlayerValues[tuple[str, ...]], dealer: EnginePlayer, center_card: str
-) -> tuple[str, ...]:
-    non_dealer_hand = hands[other_player(dealer)]
-    dealer_hand = hands[dealer]
-    return (
-        non_dealer_hand[0],
-        non_dealer_hand[1],
-        dealer_hand[0],
-        dealer_hand[1],
-        non_dealer_hand[2],
-        non_dealer_hand[3],
-        dealer_hand[2],
-        dealer_hand[3],
-        center_card,
-    )
-
-
-def _global_coffin(state: SearchInformationState) -> tuple[str | None, ...]:
-    result: list[str | None] = [None] * COFFIN_POSITION_COUNT
-    for policy_index, card_id in enumerate(state.coffin):
-        result[global_grid_index(state.player, policy_index)] = card_id
-    return tuple(result)
-
-
 def sample_determinization(
     information: SearchInformationState, sample_seed: bytes
 ) -> SampledDeterminization:
     """Sample a complete private world using only a player information state."""
 
-    _validate_information_state(information)
-    sample_seed_digest = seed_hex(sample_seed)
-    hidden_order = shuffled(information.unseen_card_ids, sample_seed)
-    opponent_remaining = sort_card_ids(
-        hidden_order[: information.opponent_remaining_count]
-    )
-    sampled_stock = hidden_order[information.opponent_remaining_count :]
-    if len(sampled_stock) != information.stock_count:
-        raise InformationContractViolation("sampled stock count is inconsistent")
+    from dracula.search.determinization import sample_determinization as sample
 
-    root = information.player
-    opponent = other_player(root)
-    root_original = _original_hand(
-        _card_ids(information.own_hand), information.current_round_moves, root
-    )
-    opponent_original = _original_hand(
-        opponent_remaining, information.current_round_moves, opponent
-    )
-    current_hands = PlayerValues(
-        queen=root_original if root is EnginePlayer.QUEEN else opponent_original,
-        king=root_original if root is EnginePlayer.KING else opponent_original,
-    )
-
-    completed_results = tuple(
-        _completed_round_result(record) for record in information.completed_rounds
-    )
-    deck_parts: list[str] = []
-    for result in completed_results:
-        result_hands = PlayerValues(
-            queen=tuple(
-                move.card_id
-                for move in sorted(
-                    (move for move in result.moves if move.player is EnginePlayer.QUEEN),
-                    key=lambda move: move.hand_slot,
-                )
-            ),
-            king=tuple(
-                move.card_id
-                for move in sorted(
-                    (move for move in result.moves if move.player is EnginePlayer.KING),
-                    key=lambda move: move.hand_slot,
-                )
-            ),
-        )
-        deck_parts.extend(
-            _deal_segment(
-                result_hands,
-                result.dealer,
-                result.coffin[CENTER_GRID_INDEX],
-            )
-        )
-    global_coffin = _global_coffin(information)
-    center_card = global_coffin[CENTER_GRID_INDEX]
-    if center_card is None:
-        raise InformationContractViolation("sampled round requires its public center")
-    deck_parts.extend(_deal_segment(current_hands, information.dealer, center_card))
-    deck_parts.extend(sampled_stock)
-    simulation_deck = tuple(deck_parts)
-
-    private_moves = _private_moves(information.current_round_moves, current_hands)
-    simulated_hands = PlayerValues(
-        queen=_remaining_slots(
-            current_hands.queen, information.current_round_moves, EnginePlayer.QUEEN
-        ),
-        king=_remaining_slots(
-            current_hands.king, information.current_round_moves, EnginePlayer.KING
-        ),
-    )
-    if simulated_hands[root] != information.own_hand:
-        raise InformationContractViolation("sample changed the root player's stable slots")
-    state = SimulationEngineState(
-        seed=f"search-simulation-v1:{sample_seed_digest}",
-        status=EngineStatus.PLAYING,
-        round_number=information.round_number,
-        dealer=information.dealer,
-        active_player=information.active_player,
-        stock=sampled_stock,
-        hands=simulated_hands,
-        coffin=global_coffin,  # type: ignore[arg-type]
-        current_round_moves=private_moves,
-        pending_round_result=None,
-        completed_rounds=completed_results,
-        total_scores=information.total_scores,
-        simulation_deck=simulation_deck,
-    )
-    if project_simulation_information_state(state) != information:
-        raise InformationContractViolation("sample does not reproduce its root information state")
-    return SampledDeterminization(
-        root_player=root,
-        sample_seed_digest=sample_seed_digest,
-        opponent_remaining_hand=opponent_remaining,
-        sampled_stock=sampled_stock,
-        state=state,
-    )
+    return sample(information, sample_seed)

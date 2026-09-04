@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 
-from dracula.api.service import (
+from dracula.api.policy import (
     PolicyDescriptor,
     PolicyTurnRequest,
     PolicyTurnResult,
@@ -450,49 +450,20 @@ class InlinePi0BeliefGreedySearchExecutor:
 
 
 class InlineBGCPolicyExecutor:
-    """Run one standalone BGC-distilled policy inference per accepted turn."""
+    """Compatibility name for the production-neutral standalone policy adapter."""
 
     def __init__(self, artifact_path: str) -> None:
-        from dracula.bgc_policy_evaluation import StandalonePi0Opponent
+        from dracula.active_policy import ActivePolicyExecutor
 
-        self.policy = StandalonePi0Opponent.from_artifact(artifact_path)
+        self._delegate = ActivePolicyExecutor(artifact_path)
+        self.policy = self._delegate.policy
 
     @property
     def descriptor(self) -> PolicyDescriptor:
-        return PolicyDescriptor(
-            policy_id="standalone-bgc-policy",
-            policy_version="dracula-standalone-bgc-policy-v1",
-            artifact_id=f"sha256:{self.policy.artifact_digest}",
-            artifact_sha256=self.policy.artifact_digest,
-            observation_schema_version=INFORMATION_STATE_SCHEMA_VERSION,
-            action_schema_version=SEARCH_ACTION_SCHEMA_VERSION,
-            hidden_state_schema_version=SEARCH_STATE_SCHEMA_VERSION,
-            inference_profile="representative-argmax-v1",
-        )
+        return self._delegate.descriptor
 
     def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
-        information = _validate_request(request, self.descriptor)
-        decision = self.policy.decide(
-            information,
-            fixture_id=str(request.game_id),
-            decision_index=request.turn_number,
-        )
-        _validate_selected_action(request, decision.concrete_action_index)
-        LOGGER.info(
-            (
-                "standalone-bgc-policy turn artifact_sha256=%s game_id=%s "
-                "round=%d turn=%d representative_action=%d concrete_action=%d "
-                "decision_latency_seconds=%.6f"
-            ),
-            self.policy.artifact_digest,
-            request.game_id,
-            request.round_number,
-            request.turn_number,
-            decision.representative_action_index,
-            decision.concrete_action_index,
-            decision.latency_seconds,
-        )
-        return PolicyTurnResult(decision.concrete_action_index, None)
+        return self._delegate.invoke(request)
 
 
 __all__ = (

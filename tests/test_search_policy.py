@@ -15,6 +15,7 @@ from dracula.api.session import HIDDEN_STATE_BYTES
 from dracula.belief_greedy_miner import resolve_source_identity
 from dracula.bgc_policy import save_bgc_policy_artifact
 from dracula.bgc_policy_model import BGCPolicyModel
+from dracula.active_policy import ActivePolicyExecutor
 from dracula.bridge import build_policy_turn_context
 from dracula.engine import EnginePlayer, create_game
 from dracula.search import information_state_from_engine
@@ -247,6 +248,64 @@ def test_app_selects_explicit_pi0_bgc_candidate(
     assert first == repeated
     assert first.action_index is not None
     assert request.action_table[first.action_index] is not None
+
+
+def test_standalone_bgc_policy_does_not_reuse_pi0_artifact_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DRACULA_OPPONENT_MODE", "bgc-policy")
+    monkeypatch.setenv("DRACULA_BGC_PI0_ARTIFACT", "historical-pi0.pt")
+
+    with pytest.raises(ValueError, match="DRACULA_POLICY_ARTIFACT"):
+        create_app(
+            repository=InMemoryGameRepository(),
+            narration_enabled=False,
+        )
+
+
+def test_active_policy_executor_is_deterministic_and_uses_the_policy_artifact(
+    tmp_path,
+) -> None:
+    executor = ActivePolicyExecutor(_pi0_candidate(tmp_path))
+    request = _request(executor)  # type: ignore[arg-type]
+
+    first = executor.invoke(request)
+    repeated = executor.invoke(request)
+
+    assert first == repeated
+    assert first.action_index is not None
+    assert request.action_table[first.action_index] is not None
+
+
+def test_active_policy_preserves_the_historical_pi0_runtime_action(
+    tmp_path,
+) -> None:
+    from dracula.bgc_policy_evaluation import StandalonePi0Opponent
+
+    artifact = _pi0_candidate(tmp_path)
+    active = ActivePolicyExecutor(artifact)
+    historical = StandalonePi0Opponent.from_artifact(artifact)
+    request = _request(active)  # type: ignore[arg-type]
+    information = request.information_state
+    assert information is not None
+
+    active_decision = active.policy.decide(
+        information,
+        fixture_id=str(request.game_id),
+        decision_index=request.turn_number,
+    )
+    historical_decision = historical.decide(
+        information,
+        fixture_id=str(request.game_id),
+        decision_index=request.turn_number,
+    )
+
+    assert active_decision.representative_action_index == (
+        historical_decision.representative_action_index
+    )
+    assert active_decision.concrete_action_index == (
+        historical_decision.concrete_action_index
+    )
 
 
 # The v2 adapter preserves the information-only, deterministic API boundary.

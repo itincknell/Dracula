@@ -2,9 +2,10 @@ import { useEffect, useRef } from "react";
 
 import { CardFace } from "./CardFace";
 import { cardName } from "./cardAssets";
+import { currentDialogueIsVisible, DraculaCommentary } from "./DraculaCommentary";
 import { FinalRoundPresentation, ScoringPresentation } from "./ScoringPresentation";
-import type { HumanGameView } from "./contracts";
-import { GameController, useGameStore } from "./gameStore";
+import type { HumanGameView } from "./statefulContracts";
+import { type GameControllerContract, useGameStore } from "./gameControllerContract";
 
 export function TurnStatus({ view, pending }: { view: HumanGameView; pending: string | null }) {
   const humanRole = view.human_role === "queen" ? "Queen" : "King";
@@ -37,7 +38,7 @@ export function Scoreboard({ view }: { view: HumanGameView }) {
   );
 }
 
-export function CardGrid({ controller }: { controller: GameController }) {
+export function CardGrid({ controller }: { controller: GameControllerContract }) {
   const { view, presentation } = useGameStore(controller);
   if (view === null) return null;
   const inputEnabled = presentation.pending === null && view.phase.kind === "human_turn";
@@ -109,7 +110,7 @@ export function CardGrid({ controller }: { controller: GameController }) {
   );
 }
 
-export function Hand({ controller }: { controller: GameController }) {
+export function Hand({ controller }: { controller: GameControllerContract }) {
   const { view, presentation } = useGameStore(controller);
   if (view === null) return null;
   const inputEnabled = presentation.pending === null && view.phase.kind === "human_turn";
@@ -162,7 +163,7 @@ export function MainDisplay({
   controller,
   onNewGame,
 }: {
-  controller: GameController;
+  controller: GameControllerContract;
   onNewGame: () => void;
 }) {
   const { view, presentation } = useGameStore(controller);
@@ -170,7 +171,10 @@ export function MainDisplay({
   const priorPending = useRef(presentation.pending);
 
   useEffect(() => {
-    if (priorPending.current === "human_move" && presentation.pending === null) {
+    if (
+      (priorPending.current === "human_move" || priorPending.current === "opponent_turn") &&
+      presentation.pending === null
+    ) {
       statusRef.current?.querySelector<HTMLElement>(".turn-status")?.focus({ preventScroll: true });
     }
     priorPending.current = presentation.pending;
@@ -198,33 +202,19 @@ export function MainDisplay({
   );
 }
 
-export function CommentaryPanel({ narrationEnabled }: { narrationEnabled: boolean }) {
-  return (
-    <aside
-      className="commentary-panel"
-      aria-label="Dracula commentary"
-      data-narration-enabled={narrationEnabled}
-    >
-      <div className="portrait-placeholder" aria-hidden="true">
-        <img className="dracula-avatar" src="/dracula.png" alt="" draggable={false} />
-      </div>
-      <div className="commentary-stream" role="status" aria-live="polite" aria-atomic="true" aria-relevant="additions text">
-        <span className="commentary-status">
-          {narrationEnabled ? "Commentary is not connected." : "Narration disabled"}
-        </span>
-      </div>
-    </aside>
-  );
+export function CommentaryPanel({ controller }: { controller: GameControllerContract }) {
+  const { view, narration } = useGameStore(controller);
+  return view === null ? null : <DraculaCommentary view={view} narration={narration} />;
 }
 
 export function GameWindow({
   controller,
   onNewGame,
 }: {
-  controller: GameController;
+  controller: GameControllerContract;
   onNewGame: () => void;
 }) {
-  const { view, presentation } = useGameStore(controller);
+  const { view, presentation, narration } = useGameStore(controller);
 
   useEffect(() => {
     if (
@@ -237,6 +227,7 @@ export function GameWindow({
   }, [controller, presentation.pending, view]);
 
   if (view === null) return null;
+  const dialogueVisible = currentDialogueIsVisible(view, narration.messages.length);
   return (
     <div className="game-layout-container">
       {presentation.error !== null ? (
@@ -251,9 +242,14 @@ export function GameWindow({
           )}
         </section>
       ) : null}
-      <section className="game-window" data-game-id={view.game_id} aria-label="Dracula game">
+      <section
+        className="game-window"
+        data-game-id={view.game_id}
+        data-dialogue-visible={dialogueVisible}
+        aria-label="Dracula game"
+      >
         <MainDisplay controller={controller} onNewGame={onNewGame} />
-        <CommentaryPanel narrationEnabled={view.narration_enabled} />
+        <CommentaryPanel controller={controller} />
       </section>
     </div>
   );

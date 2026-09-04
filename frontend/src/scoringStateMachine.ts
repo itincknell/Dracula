@@ -1,4 +1,4 @@
-import type { LineScore, Player, RoundRecord, ScoringStep } from "./contracts";
+import type { LineScore, Player, RoundRecord, ScoringStep } from "./contractPrimitives";
 
 export interface PresentedLine {
   player: Player;

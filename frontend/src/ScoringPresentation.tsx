@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { CardFace } from "./CardFace";
-import type { HumanGameView, Player, RoundRecord } from "./contracts";
-import { GameController, useGameStore } from "./gameStore";
+import type { Player, RoundRecord } from "./contractPrimitives";
+import type { HumanGameView } from "./statefulContracts";
+import { type GameControllerContract, useGameStore } from "./gameControllerContract";
 import {
   SCORING_TIMING,
   createScoringModel,
@@ -258,7 +259,7 @@ function PresentationWorkspace({
 }
 
 export interface ScoringPresentationProps {
-  controller: GameController;
+  controller: GameControllerContract;
   view: HumanGameView;
   reducedMotion?: boolean;
   timing?: ScoringTiming;
@@ -300,6 +301,10 @@ export function ScoringPresentation({
     }, duration);
     return () => window.clearTimeout(timer);
   }, [frame, reducedMotion, timeline.length, timing]);
+
+  useEffect(() => {
+    if (frame.kind === "complete") controller.revealNarration();
+  }, [controller, frame.kind]);
 
   useEffect(() => {
     if (

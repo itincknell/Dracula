@@ -24,7 +24,6 @@ from dracula.bgc_policy_model import (
     compact_observation_from_legacy,
 )
 from dracula.bgc_policy_training import (
-    BGCCommittedCorpusSnapshot,
     BGCPolicyTrainingError,
     OUTER_SIMULATION_BUDGET,
     _decode_packed,

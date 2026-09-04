@@ -52,6 +52,8 @@ The interaction sequence is:
 Reloading an active game reads the last confirmed seed-and-history envelope
 from browser storage, asks the API to replay it, and reconstructs the current
 view. Presentation-only scoring may restart from its deterministic beginning.
+Malformed or unrecoverable browser data is deleted before it can reach the API,
+and the user is returned to a safe new-game path.
 
 ## Desktop layout
 
@@ -82,7 +84,8 @@ single bitmap.
 
 The commentary panel reserves a fixed region at the top for the Dracula art
 asset. The commentary stream fills the remaining height and scrolls so the
-desktop user can review earlier comments. New comments append at the bottom.
+desktop user can review earlier comments. New comments append at the bottom and
+appear one character at a time beside a blinking block cursor.
 
 Scoring highlights, values, multipliers, comparisons, and totals appear only in
 the main display. Its geometry and the commentary panel remain stable during
@@ -298,6 +301,19 @@ assets use the Kenney Playing Cards Pack described below. Native browser drag
 events, tap selection, and keyboard selection share the same server-issued move
 ID path; no drag-and-drop framework owns game state.
 
+The production build uses the GitHub Pages base `/Dracula/` and the build-time
+API origin `https://api.ian-tincknell.com`. Its three in-app locations are hash
+fragments (`#/`, `#/game`, and `#/rules`) beneath the one Pages entry point, so
+direct navigation and refresh require neither a router dependency nor a copied
+404 page. Rules continues to open in a new tab.
+
+The browser stores exactly one recovery object containing the seed and ordered
+accepted-command history. A command is added only from an accepted API
+response. UI projections, cards, model data, logits, masks, search diagnostics,
+and Python objects are not persisted. Each reload posts that envelope to the
+stateless resume route; process-local server caching can improve that replay but
+does not alter its result.
+
 ## Usability acceptance
 
 The desktop main display uses its intrinsic content height with a 700-pixel
@@ -361,9 +377,18 @@ The human hand uses a 72-pixel minimum card size and may grow to 110 pixels when
 space permits. Responsive layouts preserve that minimum so suit marks remain
 readable rather than shrinking the cards to avoid scrolling.
 
-The Dracula portrait and mobile avatar are project-provided artwork. The image
-uses contained rendering in both regions so the full portrait remains visible;
-unused side space is intentional. Its source and usage status remain recorded.
+The retired original portrait is not part of the active asset set. Four
+project-provided portraits use contained rendering in both regions so the full
+square artwork remains visible and unused side space is intentional:
+
+- `dracula-angry-frown.jpg` is the default.
+- `dracula-angrier-frown.jpg` appears whenever Dracula trails.
+- `dracula-angriest-grimace.jpg` supersedes it when Dracula trails by at least
+  50 points in rounds 4–6.
+- `dracula-winning-grin.jpg` appears when Dracula leads in rounds 4–6.
+
+While current round dialogue is printing after the severe-loss state, the
+angrier and angriest portraits alternate until the user advances the round.
 
 The Rules, About, and Contact destinations are configuration values. All three
 must resolve correctly, and Rules opens a new tab.

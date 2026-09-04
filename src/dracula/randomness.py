@@ -7,6 +7,8 @@ import re
 from collections.abc import Sequence
 from typing import TypeVar
 
+# These identifiers define persisted seed streams; changing either changes
+# deterministic deals, searches, training order, and recorded artifacts.
 RANDOMNESS_SCHEMA_VERSION = "dracula-randomness-v1"
 COUNTER_NAMESPACE = "dracula-sha256-counter-v1"
 SEED_BYTES = hashlib.sha256().digest_size
@@ -37,11 +39,15 @@ def derive_pytorch_seed(namespace: str, *components: str) -> int:
 
 
 def seed_hex(seed: bytes) -> str:
+    """Return the canonical lowercase hexadecimal representation of a seed."""
+
     _validate_seed(seed)
     return seed.hex()
 
 
 def seed_integer(seed: bytes) -> int:
+    """Interpret a canonical seed as one unsigned big-endian integer."""
+
     _validate_seed(seed)
     return int.from_bytes(seed, "big", signed=False)
 
@@ -60,14 +66,20 @@ class Sha256CounterStream:
 
     @property
     def counter(self) -> int:
+        """Return the index of the next block without advancing the stream."""
+
         return self._counter
 
     def next_block(self) -> bytes:
+        """Return the next deterministic digest and advance the stream once."""
+
         block = derive_seed(COUNTER_NAMESPACE, self._seed.hex(), str(self._counter))
         self._counter += 1
         return block
 
     def randbelow(self, upper_bound: int) -> int:
+        """Return an unbiased deterministic integer in ``range(upper_bound)``."""
+
         if type(upper_bound) is not int or upper_bound <= 0:
             raise ValueError("upper_bound must be a positive integer")
 

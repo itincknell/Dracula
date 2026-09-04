@@ -6,6 +6,24 @@ configuration or command.
 
 ## Active operational evidence
 
+- [`active/production-release-readiness.md`](active/production-release-readiness.md)
+  seals the local release candidate identity and records the exact production
+  cutover, decision, rollback, and teardown plan without executing it.
+- [`active/staging-deployment-validation.md`](active/staging-deployment-validation.md)
+  records the exact local staging-equivalent image, four role/dealer games,
+  replay and browser validation, costs, and expired AWS credential blocker.
+- [`active/github-pages-frontend-integration.md`](active/github-pages-frontend-integration.md)
+  records the stateless browser envelope, independent narration timing,
+  `/Dracula/` production build, Pages workflow, and complete browser validation.
+- [`active/lambda-packaging-and-infrastructure.md`](active/lambda-packaging-and-infrastructure.md)
+  records the digest-bound Lambda image, local container measurements,
+  CloudFormation resources, and external staging prerequisites.
+- [`active/bedrock-narration-implementation.md`](active/bedrock-narration-implementation.md)
+  records the three grounded cue classes, Bedrock Runtime boundary, failure
+  isolation, privacy tests, and deferred voice/model selections.
+- [`active/stateless-gameplay-api.md`](active/stateless-gameplay-api.md)
+  records the production seed/history replay, bounded cache, routes, privacy
+  contract, and validation.
 - [`active/final-deployment-sprint-2026-08-30.md`](active/final-deployment-sprint-2026-08-30.md)
   records the locked `pi1`, stateless Lambda, GitHub Pages, Cloudflare, API
   Gateway, and Bedrock release plan.
@@ -70,6 +88,12 @@ rather than repeated as active Markdown reports.
 
 ## Maintenance
 
+- [`maintenance/final-sprint-refactoring.md`](maintenance/final-sprint-refactoring.md)
+  records the restrained production-path separation, naming normalization,
+  behavior-preservation tests, and complete validation.
+- [`maintenance/final-sprint-repo-hygiene.md`](maintenance/final-sprint-repo-hygiene.md)
+  records generated-output cleanup, deployment configuration normalization,
+  secret/build-context inspection, and the complete post-sprint validation.
 - [`maintenance/repo-hygiene-inventory.md`](maintenance/repo-hygiene-inventory.md)
   records the read-only inventory and keep/archive/remove classification.
 - [`maintenance/repo-hygiene-collector-isolation.md`](maintenance/repo-hygiene-collector-isolation.md)

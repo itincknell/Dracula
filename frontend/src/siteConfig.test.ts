@@ -5,7 +5,8 @@ import { resolveSiteLinks } from "./siteConfig";
 describe("site links", () => {
   it("uses local destinations when no deployment values are supplied", () => {
     expect(resolveSiteLinks({})).toEqual({
-      rules: "/rules",
+      home: "/",
+      rules: "/#/rules",
       about: "/about",
       contact: "/contact",
     });
@@ -17,9 +18,17 @@ describe("site links", () => {
       VITE_ABOUT_URL: "https://example.test/about",
       VITE_CONTACT_URL: "https://example.test/contact",
     })).toEqual({
+      home: "/",
       rules: "https://example.test/rules",
       about: "https://example.test/about",
       contact: "https://example.test/contact",
+    });
+  });
+
+  it("keeps internal routes under the GitHub Pages project base", () => {
+    expect(resolveSiteLinks({ BASE_URL: "/Dracula/" })).toMatchObject({
+      home: "/Dracula/",
+      rules: "/Dracula/#/rules",
     });
   });
 });

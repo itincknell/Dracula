@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-from dracula.api.service import (
+from dracula.api.policy import (
     PolicyDescriptor,
     PolicyTurnRequest,
     PolicyTurnResult,

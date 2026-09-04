@@ -26,6 +26,8 @@ class Color(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Card:
+    """Immutable rules metadata for one physical card."""
+
     card_id: str
     index: int
     rank: str | None
@@ -65,6 +67,7 @@ class Card:
 
 
 def _build_cards() -> tuple[Card, ...]:
+    # Suit and rank declaration order defines stable card indexes; Vampires remain last.
     cards: list[Card] = []
     for suit in Suit:
         for rank in RANKS:
@@ -88,6 +91,8 @@ CARD_INDEX_BY_ID: Mapping[str, int] = MappingProxyType(
 
 
 def card_by_id(card_id: str) -> Card:
+    """Return the canonical card identified by ``card_id``."""
+
     try:
         return CARD_BY_ID[card_id]
     except KeyError as error:
@@ -95,11 +100,15 @@ def card_by_id(card_id: str) -> Card:
 
 
 def card_by_index(index: int) -> Card:
+    """Return the canonical card at a stable zero-based index."""
+
     if type(index) is not int or not 0 <= index < CARD_COUNT:
         raise ValueError(f"card index must be between 0 and {CARD_COUNT - 1}")
     return CARDS[index]
 
 
 def sort_card_ids(card_ids: Iterable[str]) -> tuple[str, ...]:
+    """Validate and return card IDs in canonical index order."""
+
     cards = tuple(card_by_id(card_id) for card_id in card_ids)
     return tuple(card.card_id for card in sorted(cards, key=lambda card: card.index))

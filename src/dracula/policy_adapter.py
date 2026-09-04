@@ -9,6 +9,8 @@ from typing import Protocol
 
 from dracula.randomness import derive_seed
 
+# These shapes and versions belong to retained recurrent-policy artifacts; the
+# selected standalone policy uses ``active_policy`` directly.
 POLICY_INFERENCE_CONTRACT_VERSION = "policy-inference-v1"
 POLICY_ARCHIVE_FORMAT_VERSION = "dracula-policy-archive-v1"
 HIDDEN_STATE_SCHEMA_VERSION = "dracula-hidden-state-v1"
@@ -23,6 +25,8 @@ class PolicyContractError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class PolicyArtifactMetadata:
+    """Compatibility identity for a historical generic policy artifact."""
+
     artifact_id: str
     artifact_sha256: str
     policy_id: str
@@ -36,6 +40,8 @@ class PolicyArtifactMetadata:
 
 @dataclass(frozen=True, slots=True)
 class PolicyInferenceRequest:
+    """Validated legacy observation, legality, and recurrent-state request."""
+
     contract_version: str
     artifact_id: str
     observation: tuple[bool, ...]
@@ -63,6 +69,8 @@ class PolicyInferenceRequest:
 
 @dataclass(frozen=True, slots=True)
 class PolicyInferenceResponse:
+    """Validated legacy logits and next recurrent state."""
+
     contract_version: str
     artifact_id: str
     raw_logits: tuple[tuple[float, ...], ...]
@@ -78,6 +86,8 @@ class PolicyInferenceResponse:
 
 
 class PolicyAdapter(Protocol):
+    """Deployment-neutral interface implemented by historical policy runtimes."""
+
     @property
     def metadata(self) -> PolicyArtifactMetadata: ...
 
@@ -86,6 +96,8 @@ class PolicyAdapter(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ActionSelectionProfile:
+    """Versioned deterministic action-selection behavior."""
+
     version: str
     action_selection: str
     temperature: float
@@ -100,6 +112,8 @@ _PROFILES = {
 
 
 def resolve_inference_profile(version: str) -> ActionSelectionProfile:
+    """Return a known immutable inference profile by exact version."""
+
     try:
         return _PROFILES[version]
     except KeyError as error:
@@ -107,6 +121,8 @@ def resolve_inference_profile(version: str) -> ActionSelectionProfile:
 
 
 def validate_hidden_bytes(value: bytes) -> None:
+    """Validate the historical 128-float recurrent-state encoding."""
+
     if type(value) is not bytes or len(value) != HIDDEN_STATE_BYTES:
         raise PolicyContractError(
             f"hidden state must contain exactly {HIDDEN_STATE_BYTES} bytes"
@@ -116,6 +132,8 @@ def validate_hidden_bytes(value: bytes) -> None:
 
 
 def validate_raw_logits(raw_logits: tuple[tuple[float, ...], ...]) -> None:
+    """Validate a finite four-hand-slot by eight-destination logit matrix."""
+
     if len(raw_logits) != 4 or any(len(row) != 8 for row in raw_logits):
         raise PolicyContractError("raw logits must have shape [4,8]")
     if any(
@@ -157,6 +175,8 @@ def select_masked_action(
     if profile.action_selection != "sample" or profile.temperature <= 0:
         raise PolicyContractError("inference profile is invalid")
 
+    # Subtracting the maximum preserves the categorical distribution while
+    # preventing exponential overflow.
     maximum = max(flattened[index] / profile.temperature for index in legal)
     weights = tuple(
         math.exp(flattened[index] / profile.temperature - maximum) for index in legal
@@ -170,6 +190,8 @@ def select_masked_action(
         artifact_id,
         profile.version,
     )
+    # The full derived digest supplies a deterministic uniform point in the
+    # cumulative legal-action weights.
     threshold = int.from_bytes(seed, "big") / float(1 << 256) * total
     cumulative = 0.0
     for index, weight in zip(legal, weights, strict=True):

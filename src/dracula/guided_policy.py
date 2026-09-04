@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from dracula.api.service import PolicyDescriptor, PolicyTurnRequest, PolicyTurnResult
+from dracula.api.policy import PolicyDescriptor, PolicyTurnRequest, PolicyTurnResult
 from dracula.policy_adapter import PolicyContractError
 from dracula.search import (
     GUIDED_SEARCH_SCHEMA_VERSION,

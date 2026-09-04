@@ -17,21 +17,20 @@ from uuid import UUID, uuid5, NAMESPACE_URL
 from pydantic import TypeAdapter
 
 from dracula.api.contracts import (
-    GameCompletePhase,
     HumanGameView,
     HumanTurnPhase,
     LegalMove,
-    LineScore as ApiLineScore,
-    OpponentTurnPhase,
-    PlayedMove,
-    PlayerScore,
     PublicEvent,
     ResumablePhase,
     RoundRecord,
-    ScoringPhase,
-    ScoringStep,
 )
-from dracula.cards import Suit, card_by_id
+from dracula.api.policy import HIDDEN_STATE_BYTES, zero_hidden_state
+from dracula.api.presentation import (
+    phase_for_state,
+    played_move,
+    player_score,
+    round_record,
+)
 from dracula.engine import (
     EnginePlayedMove,
     EnginePlayer,
@@ -43,14 +42,11 @@ from dracula.engine import (
     MultiplierReason,
     PlayerValues,
     canonical_state_data,
-    derive_game_outcome,
     legal_moves,
     other_player,
     validate_state,
 )
 
-HIDDEN_FLOAT_COUNT = 128
-HIDDEN_STATE_BYTES = HIDDEN_FLOAT_COUNT * 4
 SESSION_SCHEMA_VERSION = "dracula-game-session-v1"
 _PHASE_ADAPTER = TypeAdapter(ResumablePhase)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -58,6 +54,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 @dataclass(frozen=True, slots=True)
 class PolicySession:
+    """Controller identity and recurrent compatibility state pinned to a local game."""
+
     policy_id: str
     policy_version: str
     artifact_id: str
@@ -71,6 +69,8 @@ class PolicySession:
 
 @dataclass(frozen=True, slots=True)
 class PolicyTurnClaim:
+    """Persisted ownership of one local opponent inference transaction."""
+
     job_id: str
     request_id: str
     request_hash: str
@@ -79,6 +79,8 @@ class PolicyTurnClaim:
 
 @dataclass(frozen=True, slots=True)
 class IdempotencyRecord:
+    """Exact response sealed for one local request ID and body digest."""
+
     request_id: str
     request_hash: str
     status_code: int
@@ -87,6 +89,8 @@ class IdempotencyRecord:
 
 @dataclass(frozen=True, slots=True)
 class GameSession:
+    """Complete private state and transaction metadata for local persistence."""
+
     game_id: UUID
     version: int
     revision: int
@@ -100,11 +104,9 @@ class GameSession:
     policy_turn_claim: PolicyTurnClaim | None = None
 
 
-def zero_hidden_state() -> bytes:
-    return bytes(HIDDEN_STATE_BYTES)
-
-
 def validate_hidden_state(value: bytes) -> None:
+    """Validate the retained fixed-width recurrent policy state."""
+
     if not isinstance(value, bytes) or len(value) != HIDDEN_STATE_BYTES:
         raise ValueError(f"policy hidden state must contain {HIDDEN_STATE_BYTES} bytes")
     if not all(math.isfinite(item) for item in struct.unpack("<128f", value)):
@@ -112,6 +114,8 @@ def validate_hidden_state(value: bytes) -> None:
 
 
 def validate_session(session: GameSession) -> None:
+    """Verify private engine, policy, event, and idempotency consistency."""
+
     if not isinstance(session, GameSession):
         raise TypeError("session must be a GameSession")
     validate_state(session.engine_state)
@@ -193,6 +197,8 @@ def _round_from_data(value: Mapping[str, Any]) -> EngineRoundResult:
 
 
 def engine_state_from_data(value: Mapping[str, Any]) -> EngineState:
+    """Decode and fully validate a locally persisted private engine state."""
+
     state = EngineState(
         seed=str(value["seed"]),
         status=EngineStatus(value["status"]),
@@ -263,6 +269,8 @@ def session_from_core_data(
     events: tuple[PublicEvent, ...],
     idempotency_records: tuple[IdempotencyRecord, ...],
 ) -> GameSession:
+    """Reconstruct and validate a local session from normalized storage records."""
+
     if value.get("schema_version") != SESSION_SCHEMA_VERSION:
         raise ValueError("unsupported game session schema")
     policy_value = value["policy_session"]
@@ -304,6 +312,8 @@ def session_from_core_data(
 
 
 def request_fingerprint(body: Mapping[str, Any]) -> str:
+    """Hash canonical request content excluding its idempotency identifier."""
+
     encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -311,6 +321,8 @@ def request_fingerprint(body: Mapping[str, Any]) -> str:
 def response_record(
     request_id: str, request_hash: str, status_code: int, body: Mapping[str, Any]
 ) -> IdempotencyRecord:
+    """Seal one canonical JSON response for exact local request replay."""
+
     return IdempotencyRecord(
         request_id=request_id,
         request_hash=request_hash,
@@ -320,6 +332,8 @@ def response_record(
 
 
 def response_body(record: IdempotencyRecord) -> dict[str, Any]:
+    """Decode a previously sealed local idempotency response."""
+
     value = json.loads(record.response_json)
     if not isinstance(value, dict):
         raise ValueError("persisted idempotency response is not an object")
@@ -336,6 +350,8 @@ def make_event(
     request_id: str | None,
     payload: Mapping[str, int | str | bool | None],
 ) -> PublicEvent:
+    """Create one deterministic append-only public event record."""
+
     return PublicEvent(
         game_id=game_id,
         event_id=str(uuid5(NAMESPACE_URL, f"dracula:{game_id}:{sequence}")),
@@ -350,6 +366,8 @@ def make_event(
 
 
 def move_id_for(session: GameSession, hand_slot: int, position: int, card_id: str) -> str:
+    """Create an opaque local-session token for one current legal move."""
+
     message = (
         f"move-v1\0{session.game_id}\0{session.version}\0{hand_slot}\0{position}\0{card_id}"
     ).encode("utf-8")
@@ -358,6 +376,8 @@ def move_id_for(session: GameSession, hand_slot: int, position: int, card_id: st
 
 
 def resolve_human_move_id(session: GameSession, move_id: str) -> tuple[int, int] | None:
+    """Resolve an opaque local token only if it still names a current legal move."""
+
     state = session.engine_state
     if state.status is not EngineStatus.PLAYING or state.active_player is not session.human_role:
         return None
@@ -370,183 +390,9 @@ def resolve_human_move_id(session: GameSession, move_id: str) -> tuple[int, int]
     return None
 
 
-def phase_for_state(state: EngineState, human_role: EnginePlayer) -> ResumablePhase:
-    if state.status is EngineStatus.GAME_COMPLETE:
-        outcome = derive_game_outcome(state)
-        winner = (
-            "tie"
-            if outcome.winner is None
-            else "human"
-            if outcome.winner is human_role
-            else "opponent"
-        )
-        return GameCompletePhase(outcome=winner)
-    if state.status is EngineStatus.ROUND_COMPLETE:
-        return ScoringPhase(round_number=state.round_number, next_step_index=0)
-    if state.active_player is human_role:
-        return HumanTurnPhase()
-    return OpponentTurnPhase(status="ready")
-
-
-def _player_score(values: PlayerValues[int], human_role: EnginePlayer) -> PlayerScore:
-    return PlayerScore(human=values[human_role], opponent=values[other_player(human_role)])
-
-
-def _played_move(move: EnginePlayedMove) -> PlayedMove:
-    return PlayedMove(
-        player=move.player.value,
-        card_id=move.card_id,
-        hand_slot=move.hand_slot,
-        position=move.global_grid_index,
-        turn_number=move.turn_number,
-    )
-
-
-def _multiplier_label(line: LineScore) -> str:
-    cards = tuple(card_by_id(card_id) for card_id in line.cards)
-    if line.multiplier_reason is MultiplierReason.VAMPIRE:
-        return "Vampire"
-    if line.multiplier_reason is MultiplierReason.NONE:
-        return "No Multiplier"
-    if line.multiplier_reason is MultiplierReason.SAME_COLOR:
-        return f"3× {cards[0].color.value.title()}"
-    suit_counts = {suit: sum(card.suit is suit for card in cards) for suit in Suit}
-    suit = max(suit_counts, key=suit_counts.get)  # type: ignore[arg-type]
-    prefix = "2×" if line.multiplier_reason is MultiplierReason.SUIT_PAIR else "3×"
-    names = {Suit.CLUBS: "Clubs", Suit.DIAMONDS: "Diamonds", Suit.HEARTS: "Hearts", Suit.SPADES: "Spades"}
-    return f"{prefix} {names[suit]}"
-
-
-def _highlighted_cards(line: LineScore) -> tuple[str, ...]:
-    cards = tuple(card_by_id(card_id) for card_id in line.cards)
-    if line.multiplier_reason is MultiplierReason.NONE:
-        return ()
-    if line.multiplier_reason is MultiplierReason.VAMPIRE:
-        return tuple(card.card_id for card in cards if card.is_vampire)
-    if line.multiplier_reason is MultiplierReason.SUIT_PAIR:
-        counts = {suit: sum(card.suit is suit for card in cards) for suit in Suit}
-        repeated = max(counts, key=counts.get)  # type: ignore[arg-type]
-        return tuple(card.card_id for card in cards if card.suit is repeated)
-    return line.cards
-
-
-def _api_line(line: LineScore) -> ApiLineScore:
-    return ApiLineScore(
-        direction=line.orientation.value,
-        index=line.line_index,
-        card_ids=line.cards,
-        base_value=line.base_value,
-        multiplier=line.multiplier,  # type: ignore[arg-type]
-        multiplier_reason=line.multiplier_reason.value,
-        multiplier_label=_multiplier_label(line),
-        highlighted_card_ids=_highlighted_cards(line),
-        total=line.total,
-    )
-
-
-def _scoring_sequence(
-    result: EngineRoundResult,
-    human_role: EnginePlayer,
-    previous_totals: PlayerValues[int],
-) -> tuple[ScoringStep, ...]:
-    steps: list[ScoringStep] = []
-    for player in (result.dealer, other_player(result.dealer)):
-        lines = result.line_scores[player]
-        ranked_indices = sorted(range(3), key=lambda index: (-lines[index].total, index))
-        rank_by_index = {line_index: rank + 1 for rank, line_index in enumerate(ranked_indices)}
-        for line_index, line in enumerate(lines):
-            steps.append(
-                ScoringStep(
-                    kind="score_line",
-                    player=player.value,
-                    line=_api_line(line),
-                    details={
-                        "value_1": line.values[0],
-                        "value_2": line.values[1],
-                        "value_3": line.values[2],
-                        "base_value": line.base_value,
-                        "multiplier": line.multiplier,
-                        "total": line.total,
-                        "rank": rank_by_index[line_index],
-                    },
-                )
-            )
-    human_totals = sorted(
-        (line.total for line in result.line_scores[human_role]), reverse=True
-    )
-    opponent = other_player(human_role)
-    opponent_totals = sorted(
-        (line.total for line in result.line_scores[opponent]), reverse=True
-    )
-    selected_rank = 2
-    for rank in range(3):
-        tied = human_totals[rank] == opponent_totals[rank]
-        steps.append(
-            ScoringStep(
-                kind="compare_candidates",
-                player=None,
-                line=None,
-                details={
-                    "rank": rank + 1,
-                    "human_score": human_totals[rank],
-                    "opponent_score": opponent_totals[rank],
-                    "tied": tied,
-                },
-            )
-        )
-        if rank < 2 and not tied:
-            selected_rank = rank
-            break
-    steps.append(
-        ScoringStep(
-            kind="select_round_score",
-            player=None,
-            line=None,
-            details={
-                "rank": selected_rank + 1,
-                "human_score": result.round_scores[human_role],
-                "opponent_score": result.round_scores[opponent],
-            },
-        )
-    )
-    steps.append(
-        ScoringStep(
-            kind="update_total",
-            player=None,
-            line=None,
-            details={
-                "human_previous": previous_totals[human_role],
-                "human_round": result.round_scores[human_role],
-                "human_total": previous_totals[human_role] + result.round_scores[human_role],
-                "opponent_previous": previous_totals[opponent],
-                "opponent_round": result.round_scores[opponent],
-                "opponent_total": previous_totals[opponent] + result.round_scores[opponent],
-            },
-        )
-    )
-    return tuple(steps)
-
-
-def round_record(
-    result: EngineRoundResult,
-    human_role: EnginePlayer,
-    previous_totals: PlayerValues[int],
-) -> RoundRecord:
-    line_order = (result.dealer, other_player(result.dealer))
-    return RoundRecord(
-        round_number=result.round_number,
-        dealer=result.dealer.value,
-        coffin=result.coffin,
-        moves=tuple(_played_move(move) for move in result.moves),
-        line_scores=tuple(
-            _api_line(line) for player in line_order for line in result.line_scores[player]
-        ),
-        scoring_sequence=_scoring_sequence(result, human_role, previous_totals),
-        round_scores=_player_score(result.round_scores, human_role),
-    )
-
-
 def project_human_game(session: GameSession, *, narration_enabled: bool = False) -> HumanGameView:
+    """Project a private local session into its browser-safe compatibility view."""
+
     validate_session(session)
     state = session.engine_state
     running = PlayerValues(queen=0, king=0)
@@ -592,10 +438,10 @@ def project_human_game(session: GameSession, *, narration_enabled: bool = False)
         human_role=session.human_role.value,
         opponent_role=other_player(session.human_role).value,
         coffin=state.coffin,
-        current_round_moves=tuple(_played_move(move) for move in state.current_round_moves),
+        current_round_moves=tuple(played_move(move) for move in state.current_round_moves),
         pending_round_result=pending,
         completed_rounds=tuple(completed),
-        total_scores=_player_score(state.total_scores, session.human_role),
+        total_scores=player_score(state.total_scores, session.human_role),
         phase=session.phase,
         latest_event_sequence=len(session.events),
         narration_enabled=narration_enabled,

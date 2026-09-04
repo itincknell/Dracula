@@ -1,0 +1,26 @@
+.cheat-sheet-window + .footer-links { margin-top: 24px; }
+.rules-page { max-width: 820px; }
+.rules-page > .wordmark { display: inline-block; margin: 14px 0 20px; }
+
+.rules-page article {
+  margin-top: 18px;
+  padding: clamp(28px, 7vw, 66px);
+  border: 2px solid #552634;
+  color: var(--bone-dim);
+  background: repeating-linear-gradient(0deg, transparent 0 15px, rgb(255 255 255 / 1.5%) 16px), var(--panel);
+  box-shadow: 9px 11px 0 #020203;
+}
+
+.rules-page article > header > p:last-child { color: var(--bone); font-size: 19px; }
+.rules-page section, .rules-sources { margin-top: 42px; scroll-margin-top: 24px; }
+.rules-page h2 { margin: 0 0 12px; color: var(--bone); font-size: clamp(32px, 5vw, 44px); }
+.rules-page h3 { margin: 30px 0 8px; color: var(--gold); font-size: 25px; }
+.rules-page li + li { margin-top: 8px; }
+.rules-contents { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 30px; padding: 17px 0; border-block: 1px solid #52333d; font-size: 10px; text-transform: uppercase; }
+.rules-table-scroll { max-width: 100%; overflow-x: auto; }
+.rules-page table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 15px; }
+.rules-page th, .rules-page td { padding: 11px 12px; border: 1px solid #55343f; text-align: left; }
+.rules-page tbody tr:nth-child(even) { background: rgb(135 22 47 / 8%); }
+.rules-page thead th { color: var(--gold); background: var(--blood-dark); font-family: "Silkscreen", monospace; font-size: 10px; text-transform: uppercase; }
+.rules-sources { padding-top: 8px; border-top: 1px solid #52333d; }
+.rules-page h1 { font-size: clamp(56px, 9vw, 82px); }

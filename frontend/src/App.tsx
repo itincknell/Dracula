@@ -1,24 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiClient } from "./api";
 import { cardName } from "./cardAssets";
-import type { HumanGameView, Player } from "./contracts";
-import { GameController, useGameStore } from "./gameStore";
+import type { Player } from "./contractPrimitives";
+import type { HumanGameView } from "./statefulContracts";
+import { type GameControllerContract, useGameStore } from "./gameControllerContract";
 import { GameWindow } from "./gameplay";
 import { RulesPage } from "./RulesPage";
 import { siteLinks } from "./siteConfig";
+import { statelessApiClient } from "./statelessApi";
+import { StatelessGameController } from "./statelessGameStore";
 
 export type AppRoute =
   | { kind: "start" }
-  | { kind: "game"; gameId: string }
+  | { kind: "game" }
   | { kind: "rules" }
   | { kind: "not_found" };
 
-export function resolveRoute(pathname: string): AppRoute {
-  if (pathname === "/" || pathname === "/start") return { kind: "start" };
-  if (pathname === "/rules") return { kind: "rules" };
-  const gameMatch = pathname.match(/^\/games\/([^/]+)$/);
-  if (gameMatch?.[1]) return { kind: "game", gameId: decodeURIComponent(gameMatch[1]) };
+export function resolveRoute(hash: string): AppRoute {
+  if (hash === "" || hash === "#" || hash === "#/" || hash === "#/start") return { kind: "start" };
+  if (hash === "#/game") return { kind: "game" };
+  if (hash === "#/rules") return { kind: "rules" };
   return { kind: "not_found" };
 }
 
@@ -123,13 +124,21 @@ export function GameStart({
   controller,
   onGameCreated,
 }: {
-  controller: GameController;
-  onGameCreated: (gameId: string) => void;
+  controller: GameControllerContract;
+  onGameCreated: () => void;
 }) {
-  const { presentation } = useGameStore(controller);
+  const { view, presentation } = useGameStore(controller);
+  const routedToGame = useRef(false);
+
+  useEffect(() => {
+    if (view !== null && !routedToGame.current) {
+      routedToGame.current = true;
+      onGameCreated();
+    }
+  }, [onGameCreated, view]);
+
   const start = async (role: Player) => {
-    const view = await controller.createGame(role);
-    if (view !== null) onGameCreated(view.game_id);
+    await controller.createGame(role);
   };
   return (
     <main className="page-shell start-page">
@@ -169,25 +178,27 @@ export function GameStart({
 }
 
 function GamePage({
-  gameId,
   controller,
   navigate,
 }: {
-  gameId: string;
-  controller: GameController;
+  controller: GameControllerContract;
   navigate: (path: string) => void;
 }) {
   const { view, presentation } = useGameStore(controller);
+  const loadAttempted = useRef(false);
 
   useEffect(() => {
-    if (view?.game_id !== gameId) void controller.loadGame(gameId);
-  }, [controller, gameId, view?.game_id]);
+    if (view === null && !loadAttempted.current) {
+      loadAttempted.current = true;
+      void controller.loadGame("active");
+    }
+  }, [controller, view]);
 
-  const currentView = view?.game_id === gameId ? view : null;
+  const currentView = view;
   return (
     <main className="page-shell">
       <header className="game-heading">
-        <h1><a href="/" className="wordmark">Dracula</a></h1>
+        <h1><a href={siteLinks.home} className="wordmark">Dracula</a></h1>
         <span>{currentView === null ? "Loading game" : `Round ${currentView.round_number} of 6`}</span>
       </header>
       {currentView === null ? (
@@ -197,14 +208,17 @@ function GamePage({
           ) : (
             <>
               <p role="alert">{presentation.error.message}</p>
-              <button className="primary-action" type="button" onClick={() => void controller.loadGame(gameId)}>
+              <button className="primary-action" type="button" onClick={() => void controller.loadGame("active")}>
                 Retry
               </button>
             </>
           )}
         </section>
       ) : (
-        <GameWindow controller={controller} onNewGame={() => navigate("/")} />
+        <GameWindow controller={controller} onNewGame={() => {
+          controller.clearGame();
+          navigate("/");
+        }} />
       )}
       {currentView === null ? null : <SeenCardsExpando view={currentView} />}
       <FooterLinks />
@@ -217,32 +231,40 @@ function NotFoundPage() {
     <main className="page-shell start-page">
       <section className="start-card">
         <h1>Page not found</h1>
-        <a className="primary-action" href="/">Return to Dracula</a>
+        <a className="primary-action" href={siteLinks.home}>Return to Dracula</a>
       </section>
     </main>
   );
 }
 
-export function App({ controller: suppliedController }: { controller?: GameController }) {
-  const controller = useMemo(() => suppliedController ?? new GameController(apiClient), [suppliedController]);
-  const [route, setRoute] = useState(() => resolveRoute(window.location.pathname));
+export function App({ controller: suppliedController }: { controller?: GameControllerContract }) {
+  const controller = useMemo(
+    () => suppliedController ?? new StatelessGameController(statelessApiClient),
+    [suppliedController],
+  );
+  const [route, setRoute] = useState(() => resolveRoute(window.location.hash));
 
   useEffect(() => {
-    const updateRoute = () => setRoute(resolveRoute(window.location.pathname));
+    const updateRoute = () => setRoute(resolveRoute(window.location.hash));
     window.addEventListener("popstate", updateRoute);
-    return () => window.removeEventListener("popstate", updateRoute);
+    window.addEventListener("hashchange", updateRoute);
+    return () => {
+      window.removeEventListener("popstate", updateRoute);
+      window.removeEventListener("hashchange", updateRoute);
+    };
   }, []);
 
   const navigate = useCallback((path: string) => {
-    window.history.pushState({}, "", path);
-    setRoute(resolveRoute(path));
+    const hash = path === "/" ? "#/" : `#${path}`;
+    window.history.pushState({}, "", `${siteLinks.home}${hash}`);
+    setRoute(resolveRoute(hash));
   }, []);
 
   switch (route.kind) {
     case "start":
-      return <GameStart controller={controller} onGameCreated={(id) => navigate(`/games/${id}`)} />;
+      return <GameStart controller={controller} onGameCreated={() => navigate("/game")} />;
     case "game":
-      return <GamePage gameId={route.gameId} controller={controller} navigate={navigate} />;
+      return <GamePage controller={controller} navigate={navigate} />;
     case "rules":
       return <RulesPage />;
     case "not_found":

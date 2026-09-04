@@ -109,18 +109,37 @@ describe("accessible application surfaces", () => {
 });
 
 describe("responsive contract", () => {
-  it("encodes the documented floors, expanded play height, breakpoint, container query, and scrolling", async () => {
+  const readStyles = async (): Promise<string> => {
     const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const css = await readFile(path.join(frontendRoot, "src", "styles.css"), "utf8");
+    const styleRoot = path.join(frontendRoot, "src", "styles");
+    const files = await Promise.all([
+      "base.css",
+      "gameplay.css",
+      "scoring.css",
+      "rules.css",
+      "responsive.css",
+    ].map((file) => readFile(path.join(styleRoot, file), "utf8")));
+    return files.join("\n");
+  };
+
+  it("encodes the documented floors, expanded play height, breakpoint, container query, and scrolling", async () => {
+    const css = await readStyles();
     expect(css).toContain("--minimum-card-size: 64px");
     expect(css).toContain("min-height: 700px");
     expect(css).toContain("grid-template-rows: auto 170px auto auto");
     expect(css).toContain("@container game-layout (max-width: 899px)");
     expect(css).toContain("container-type: inline-size");
-    expect(css).toContain("min-width: 360px");
+    expect(css).toContain("min-width: 320px");
     expect(css).toContain("font-size: 14px");
     expect(css).toContain("overflow-y: auto");
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("keeps the coffin-card scale bounce without transform-upscaling its raster", async () => {
+    const css = await readStyles();
+    expect(css).toContain("@keyframes score-card-pop { 50% { width: 108%; height: 108%; } }");
+    expect(css).toContain("@keyframes score-card-ripple { 50% { width: 104.5%; height: 104.5%; } }");
+    expect(css).not.toContain(".scoring-card.score-pop { animation: score-pop");
   });
 
   it.each([

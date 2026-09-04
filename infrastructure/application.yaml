@@ -1,0 +1,432 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Stateless Dracula FastAPI, Lambda, Bedrock, and Regional HTTP API.
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks: [W1030]
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: dracula-api
+    AllowedPattern: "[a-z][a-z0-9-]{2,31}"
+  EnvironmentName:
+    Type: String
+    AllowedValues: [staging, production]
+  ImageUri:
+    Type: String
+    Description: Immutable ECR image URI including an at-sign SHA-256 digest.
+    AllowedPattern: ".+@sha256:[0-9a-f]{64}"
+  AllowedFrontendOrigin:
+    Type: String
+    AllowedPattern: "https://[^/]+"
+  LambdaMemoryMb:
+    Type: Number
+    Default: 2048
+    MinValue: 1024
+    MaxValue: 10240
+  LambdaTimeoutSeconds:
+    Type: Number
+    Default: 20
+    MinValue: 10
+    MaxValue: 28
+  ReservedConcurrency:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 20
+  ReplayCacheEntries:
+    Type: Number
+    Default: 256
+    MinValue: 0
+    MaxValue: 2048
+  NarrationEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  BedrockModelId:
+    Type: String
+    Default: ""
+  BedrockModelArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "(^$)|(^arn:aws[a-zA-Z-]*:bedrock:.+$)"
+  NarrationTimeoutSeconds:
+    Type: Number
+    Default: 8
+    MinValue: 1
+    MaxValue: 15
+  NarrationMaxTokens:
+    Type: Number
+    Default: 96
+    MinValue: 1
+    MaxValue: 256
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [7, 14, 30, 60, 90]
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 0
+    MinValue: 0
+  BudgetNotificationEmail:
+    Type: String
+    Default: ""
+  AlarmNotificationEmail:
+    Type: String
+    Default: ""
+  CustomDomainName:
+    Type: String
+    Default: ""
+  CustomDomainCertificateArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "(^$)|(^arn:aws[a-zA-Z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$)"
+
+Rules:
+  NarrationConfigurationIsComplete:
+    RuleCondition: !Equals [!Ref NarrationEnabled, "true"]
+    Assertions:
+      - Assert: !And
+          - !Not [!Equals [!Ref BedrockModelId, ""]]
+          - !Not [!Equals [!Ref BedrockModelArn, ""]]
+        AssertDescription: Narration requires both a Bedrock model ID and ARN.
+  CustomDomainConfigurationIsComplete:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref CustomDomainName, ""]
+            - !Equals [!Ref CustomDomainCertificateArn, ""]
+          - !And
+            - !Not [!Equals [!Ref CustomDomainName, ""]]
+            - !Not [!Equals [!Ref CustomDomainCertificateArn, ""]]
+        AssertDescription: Custom domain name and certificate ARN must be supplied together.
+  BudgetConfigurationIsComplete:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref MonthlyBudgetUsd, 0]
+            - !Equals [!Ref BudgetNotificationEmail, ""]
+          - !And
+            - !Not [!Equals [!Ref MonthlyBudgetUsd, 0]]
+            - !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
+        AssertDescription: Monthly budget and notification email must be supplied together.
+
+Conditions:
+  NarrationIsEnabled: !Equals [!Ref NarrationEnabled, "true"]
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
+  HasMonthlyBudget: !Not [!Equals [!Ref MonthlyBudgetUsd, 0]]
+  HasAlarmNotification: !Not [!Equals [!Ref AlarmNotificationEmail, ""]]
+
+Resources:
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProjectName}-${EnvironmentName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${ProjectName}-${EnvironmentName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteApplicationLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt FunctionLogGroup.Arn
+        - !If
+          - NarrationIsEnabled
+          - PolicyName: InvokeSelectedBedrockModel
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: bedrock:InvokeModel
+                  Resource: !Ref BedrockModelArn
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Application
+          Value: dracula
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  GameplayFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures: [arm64]
+      Code:
+        ImageUri: !Ref ImageUri
+      Description: Stateless Dracula gameplay and optional narration API.
+      Environment:
+        Variables:
+          DRACULA_BEDROCK_MODEL_ID: !Ref BedrockModelId
+          DRACULA_BEDROCK_REGION: !Ref AWS::Region
+          DRACULA_NARRATION_ENABLED: !Ref NarrationEnabled
+          DRACULA_NARRATION_MAX_TOKENS: !Ref NarrationMaxTokens
+          DRACULA_NARRATION_TIMEOUT_SECONDS: !Ref NarrationTimeoutSeconds
+          DRACULA_REPLAY_CACHE_ENTRIES: !Ref ReplayCacheEntries
+      EphemeralStorage:
+        Size: 512
+      FunctionName: !Sub ${ProjectName}-${EnvironmentName}
+      LoggingConfig:
+        ApplicationLogLevel: INFO
+        LogFormat: JSON
+        LogGroup: !Ref FunctionLogGroup
+        SystemLogLevel: WARN
+      MemorySize: !Ref LambdaMemoryMb
+      PackageType: Image
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      Role: !GetAtt FunctionRole.Arn
+      Timeout: !Ref LambdaTimeoutSeconds
+      Tags:
+        - Key: Application
+          Value: dracula
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      CorsConfiguration:
+        AllowHeaders: [content-type]
+        AllowMethods: [GET, POST]
+        AllowOrigins: [!Ref AllowedFrontendOrigin]
+        MaxAge: 86400
+      Description: Stateless Dracula gameplay HTTP API.
+      DisableExecuteApiEndpoint: false
+      Name: !Sub ${ProjectName}-${EnvironmentName}
+      ProtocolType: HTTP
+      Tags:
+        Application: dracula
+        Environment: !Ref EnvironmentName
+
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationMethod: POST
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt GameplayFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 29000
+
+  HealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizationType: NONE
+      RouteKey: GET /health
+      Target: !Sub integrations/${LambdaIntegration}
+
+  StartGameRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizationType: NONE
+      RouteKey: POST /games
+      Target: !Sub integrations/${LambdaIntegration}
+
+  CommandRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizationType: NONE
+      RouteKey: POST /games/command
+      Target: !Sub integrations/${LambdaIntegration}
+
+  ResumeRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizationType: NONE
+      RouteKey: POST /games/resume
+      Target: !Sub integrations/${LambdaIntegration}
+
+  NarrationRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizationType: NONE
+      RouteKey: POST /narration
+      Target: !Sub integrations/${LambdaIntegration}
+
+  HttpStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}
+      ApiId: !Ref HttpApi
+      AutoDeploy: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: false
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+      StageName: $default
+      Tags:
+        Application: dracula
+        Environment: !Ref EnvironmentName
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref GameplayFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*
+
+  OperationalAlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmNotification
+    Properties:
+      DisplayName: !Sub ${ProjectName}-${EnvironmentName}-alarms
+      Subscription:
+        - Endpoint: !Ref AlarmNotificationEmail
+          Protocol: email
+      Tags:
+        - Key: Application
+          Value: dracula
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  FunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmName: !Sub ${ProjectName}-${EnvironmentName}-lambda-errors
+      AlarmActions: !If
+        - HasAlarmNotification
+        - [!Ref OperationalAlarmTopic]
+        - !Ref AWS::NoValue
+      AlarmDescription: Stateless gameplay Lambda returned one or more errors in five minutes.
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref GameplayFunction
+      EvaluationPeriods: 1
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 300
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Application
+          Value: dracula
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  ApiServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmName: !Sub ${ProjectName}-${EnvironmentName}-api-5xx
+      AlarmActions: !If
+        - HasAlarmNotification
+        - [!Ref OperationalAlarmTopic]
+        - !Ref AWS::NoValue
+      AlarmDescription: Stateless gameplay HTTP API returned one or more 5xx responses in five minutes.
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref HttpApi
+        - Name: Stage
+          Value: $default
+      EvaluationPeriods: 1
+      MetricName: 5xx
+      Namespace: AWS/ApiGateway
+      Period: 300
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Application
+          Value: dracula
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  RegionalDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Condition: HasCustomDomain
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W1030]
+    Properties:
+      DomainName: !Ref CustomDomainName
+      DomainNameConfigurations:
+        - CertificateArn: !Ref CustomDomainCertificateArn
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+      Tags:
+        Application: dracula
+        Environment: !Ref EnvironmentName
+
+  RegionalDomainMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Condition: HasCustomDomain
+    Properties:
+      ApiId: !Ref HttpApi
+      DomainName: !Ref RegionalDomain
+      Stage: !Ref HttpStage
+
+  MonthlyCostBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasMonthlyBudget
+    Properties:
+      Budget:
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        BudgetName: !Sub ${ProjectName}-${EnvironmentName}-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: FORECASTED
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref BudgetNotificationEmail
+              SubscriptionType: EMAIL
+
+Outputs:
+  ApiId:
+    Value: !Ref HttpApi
+  DefaultApiUrl:
+    Value: !GetAtt HttpApi.ApiEndpoint
+  FunctionArn:
+    Value: !GetAtt GameplayFunction.Arn
+  RegionalCustomDomainTarget:
+    Condition: HasCustomDomain
+    Value: !GetAtt RegionalDomain.RegionalDomainName
+  RegionalHostedZoneId:
+    Condition: HasCustomDomain
+    Value: !GetAtt RegionalDomain.RegionalHostedZoneId
+  OperationalAlarmTopicArn:
+    Condition: HasAlarmNotification
+    Value: !Ref OperationalAlarmTopic

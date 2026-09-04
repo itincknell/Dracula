@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from dracula.api.contracts import (
@@ -23,19 +23,28 @@ from dracula.api.repository import (
     RequestIdConflict,
     SessionNotFound,
 )
+from dracula.api.policy import (
+    PolicyDescriptor,
+    PolicyExecutionError,
+    PolicyExecutor,
+    PolicyTurnRequest,
+    PolicyTurnResult,
+    ServiceResponse,
+    UnavailablePolicyExecutor,
+    zero_hidden_state,
+)
+from dracula.api.presentation import phase_for_state
 from dracula.api.session import (
     GameSession,
     PolicySession,
     PolicyTurnClaim,
     make_event,
-    phase_for_state,
     project_human_game,
     request_fingerprint,
     resolve_human_move_id,
     response_body,
     response_record,
     validate_hidden_state,
-    zero_hidden_state,
 )
 from dracula.cards import CARD_SCHEMA_VERSION
 from dracula.engine import (
@@ -52,58 +61,9 @@ from dracula.engine import (
 from dracula.randomness import RANDOMNESS_SCHEMA_VERSION
 
 
-@dataclass(frozen=True, slots=True)
-class PolicyDescriptor:
-    policy_id: str = "unconfigured"
-    policy_version: str = "unavailable"
-    artifact_id: str = "none"
-    artifact_sha256: str = "none"
-    observation_schema_version: str = "dracula-policy-observation-v1"
-    action_schema_version: str = "dracula-policy-action-v1"
-    hidden_state_schema_version: str = "dracula-policy-hidden-v1"
-    inference_profile: str = "local"
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyTurnRequest:
-    game_id: UUID
-    policy: PolicyDescriptor
-    turn_number: int
-    player: EnginePlayer
-    round_number: int
-    turn_kind: Any
-    policy_input: Any
-    action_table: tuple[Any, ...]
-    information_state: Any
-    hidden_state: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyTurnResult:
-    action_index: int | None
-    hidden_state: bytes | None
-
-
-class PolicyExecutionError(Exception):
-    """A retryable failure before a policy move has been committed."""
-
-
-class PolicyExecutor(Protocol):
-    def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult: ...
-
-
-class UnavailablePolicyExecutor:
-    def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
-        raise PolicyExecutionError("no gameplay policy is configured")
-
-
-@dataclass(frozen=True, slots=True)
-class ServiceResponse:
-    status_code: int
-    body: dict[str, Any]
-
-
 class GameplayService:
+    """Repository-backed transaction service retained for explicit local gameplay."""
+
     def __init__(
         self,
         repository: GameRepository,
@@ -265,6 +225,8 @@ class GameplayService:
         return ServiceResponse(record.status_code, response_body(record))
 
     def create_game(self, request: CreateGameRequest) -> ServiceResponse:
+        """Create one idempotent persisted local game and its opening events."""
+
         request_id = str(request.request_id)
         request_hash = request_fingerprint(self._request_data(request))
         existing = self.repository.find_create_request(request_id)
@@ -365,12 +327,16 @@ class GameplayService:
         return ServiceResponse(201, view.model_dump(mode="json"))
 
     def get_game(self, game_id: UUID) -> ServiceResponse:
+        """Return the latest public view of a persisted local game."""
+
         session = self._load(game_id)
         if isinstance(session, ServiceResponse):
             return session
         return self._response(self._view(session))
 
     def get_events(self, game_id: UUID, after_sequence: int = 0) -> ServiceResponse:
+        """Return local public events strictly after a sequence number."""
+
         session = self._load(game_id)
         if isinstance(session, ServiceResponse):
             return session
@@ -495,6 +461,8 @@ class GameplayService:
         return conflict or self._response(view)
 
     def human_move(self, game_id: UUID, request: MoveRequest) -> ServiceResponse:
+        """Idempotently apply one opaque human move token."""
+
         session = self._load(game_id)
         if isinstance(session, ServiceResponse):
             return session
@@ -527,6 +495,8 @@ class GameplayService:
     def opponent_turn(
         self, game_id: UUID, request: VersionedMutationRequest
     ) -> ServiceResponse:
+        """Claim or resume one persisted opponent inference transaction."""
+
         session = self._load(game_id)
         if isinstance(session, ServiceResponse):
             return session
@@ -695,6 +665,8 @@ class GameplayService:
         round_number: int,
         request: VersionedMutationRequest,
     ) -> ServiceResponse:
+        """Idempotently archive a scored round and deal or finish the game."""
+
         session = self._load(game_id)
         if isinstance(session, ServiceResponse):
             return session

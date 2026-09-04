@@ -60,7 +60,6 @@ from dracula.sam_policy import (
     SamPolicyContractError,
     SamPolicyModel,
     apply_representative_mask,
-    build_representative_action_projection,
     load_sam_policy_artifact,
     save_sam_policy_artifact,
 )

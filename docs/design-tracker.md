@@ -24,9 +24,22 @@ locked product and deployment contracts
 | --- | --- | --- | --- |
 | `SERVE-002` | Complete | Select the production controller. | User selection pins standalone `pi1`, artifact digest, one-inference action contract, and no fallback |
 | `ARCH-003` | Complete | Lock the final hosting and state topology. | GitHub Pages, Cloudflare DNS, API Gateway, stateless FastAPI/Lambda, local replay cache, embedded `pi1`, and no database are authoritative |
-| `APP-003` | Pending | Implement stateless seed-and-history gameplay. | Cache hit and miss replay identically, all six rounds complete, reload works, and malformed histories fail safely |
-| `NARRATOR-002` | Pending | Implement direct Bedrock narration at the locked cadence. | Opening, rounds 1–5 transitions, and final-result cues pass timing, grounding, timeout, and privacy tests |
+| `APP-003` | Complete | Implement stateless seed-and-history gameplay. | Cache hit and miss replay identically, all six rounds complete, reload works, and malformed histories fail safely |
+| `NARRATOR-002` | Complete | Implement direct Bedrock narration at the locked cadence. | Opening, rounds 1–5 transitions, and final-result cues pass timing, grounding, timeout, and privacy tests |
 | `RELEASE-001` | In progress | Package, provision, validate, and deploy the public application. | A clean commit produces the Lambda image and Pages build; staging and production smoke, rollback, alarms, budgets, and teardown pass |
+
+The reproducible local release candidate, alarm resources, cutover order, and
+rollback plan are complete. The personal AWS account, `us-east-1`, Amazon Nova
+Lite, Dracula voice, `/Dracula/`, proxied Cloudflare API record, and no public
+seed/history disclosure are selected. Hosted staging awaits a renewed AWS
+session. Post-staging resource/notification settings and final go-live
+authorization remain in
+[remaining user decisions](../reports/active/remaining-user-decisions.md).
+
+The final-sprint hygiene pass removes generated build contexts and caches,
+keeps the selected model only in ignored training evidence, and names the
+active standalone artifact setting independently from the historical `pi0`
+continuation artifact.
 
 ## Completed foundations
 

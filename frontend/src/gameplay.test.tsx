@@ -67,7 +67,7 @@ describe("game start", () => {
 
     await userEvent.click(screen.getByRole("button", { name: `Start as ${role === "queen" ? "Queen" : "King"}` }));
     expect(createGame).toHaveBeenCalledWith({ human_role: role, request_id: requestId });
-    expect(onGameCreated).toHaveBeenCalledWith(`game-${role}`);
+    expect(onGameCreated).toHaveBeenCalledWith();
     expect(screen.getByRole("link", { name: "Read the rules" })).toHaveAttribute("target", "_blank");
   });
 });

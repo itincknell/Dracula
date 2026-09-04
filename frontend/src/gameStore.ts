@@ -1,25 +1,7 @@
-import { useSyncExternalStore } from "react";
-
 import { ApiError, type ApiClient } from "./api";
-import type { ApiErrorResponse, HumanGameView, LegalMove, Player } from "./contracts";
-
-export type PendingAction =
-  | "create_game"
-  | "load_game"
-  | "human_move"
-  | "opponent_turn"
-  | "round_advance";
-
-export interface PresentationState {
-  pending: PendingAction | null;
-  selectedHandSlot: number | null;
-  error: ApiErrorResponse | null;
-}
-
-export interface GameStoreState {
-  view: HumanGameView | null;
-  presentation: PresentationState;
-}
+import type { LegalMove, Player } from "./contractPrimitives";
+import type { ApiErrorResponse, HumanGameView } from "./statefulContracts";
+import type { GameStoreState, NarrationState, PresentationState } from "./gameControllerContract";
 
 export interface GameControllerOptions {
   requestId?: () => string;
@@ -32,6 +14,12 @@ const emptyPresentation = (): PresentationState => ({
   error: null,
 });
 
+const disabledNarration = (): NarrationState => ({
+  enabled: false,
+  pending: false,
+  messages: [],
+});
+
 const networkError = (error: unknown): ApiErrorResponse => ({
   schema_version: "dracula-error-v1",
   code: "dependency_unavailable",
@@ -42,7 +30,11 @@ const networkError = (error: unknown): ApiErrorResponse => ({
 });
 
 export class GameController {
-  private state: GameStoreState = { view: null, presentation: emptyPresentation() };
+  private state: GameStoreState = {
+    view: null,
+    presentation: emptyPresentation(),
+    narration: disabledNarration(),
+  };
   private readonly listeners = new Set<() => void>();
   private readonly requestId: () => string;
   private readonly opponentPollDelay: () => Promise<void>;
@@ -81,6 +73,7 @@ export class GameController {
     const selectedHandSlot = clearSelection ? null : this.state.presentation.selectedHandSlot;
     this.publish({
       view,
+      narration: this.state.narration,
       presentation: {
         ...this.state.presentation,
         selectedHandSlot,
@@ -94,6 +87,7 @@ export class GameController {
     const view = response.current_game ?? this.state.view;
     this.publish({
       view,
+      narration: this.state.narration,
       presentation: {
         pending: null,
         selectedHandSlot: null,
@@ -104,7 +98,11 @@ export class GameController {
 
   async createGame(humanRole: Player): Promise<HumanGameView | null> {
     if (this.state.presentation.pending !== null) return null;
-    this.publish({ view: null, presentation: { ...emptyPresentation(), pending: "create_game" } });
+    this.publish({
+      view: null,
+      presentation: { ...emptyPresentation(), pending: "create_game" },
+      narration: disabledNarration(),
+    });
     try {
       const result = await this.api.createGame({
         human_role: humanRole,
@@ -140,6 +138,18 @@ export class GameController {
 
   clearError(): void {
     this.updatePresentation({ error: null });
+  }
+
+  clearGame(): void {
+    this.publish({
+      view: null,
+      presentation: emptyPresentation(),
+      narration: disabledNarration(),
+    });
+  }
+
+  revealNarration(): void {
+    // Stateful local gameplay retains its existing narrator/event lifecycle.
   }
 
   selectCard(handSlot: number): boolean {
@@ -256,8 +266,4 @@ export class GameController {
       return false;
     }
   }
-}
-
-export function useGameStore(controller: GameController): GameStoreState {
-  return useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
 }

@@ -10,6 +10,8 @@ from torch import Tensor, nn
 from dracula.cards import CARD_COUNT
 from dracula.randomness import derive_seed
 
+# These versions bind tensor layout, action relabeling, and deterministic
+# initialization in datasets and deployable artifacts.
 MODEL_SCHEMA_VERSION = "dracula-bgc-card-policy-v2"
 OBSERVATION_SCHEMA_VERSION = "dracula-observation-card-set-v2"
 ACTION_SCHEMA_VERSION = "dracula-card-candidate-action-map-v2"
@@ -28,6 +30,8 @@ POLICY_GRID_INDICES = (0, 1, 2, 3, 5, 6, 7, 8)
 COFFIN_FEATURES = COFFIN_POSITION_COUNT * CARD_COUNT
 STATUS_FEATURES = 3 * CARD_COUNT
 CONTEXT_FEATURES = 11
+# The compact 659-bit input is 9×54 coffin occupancy, 3×54 card status, and
+# eleven lifecycle bits. Current hand membership is already one status row.
 COFFIN_START = 0
 STATUS_START = COFFIN_FEATURES
 CONTEXT_START = STATUS_START + STATUS_FEATURES
@@ -42,6 +46,8 @@ class BGCPolicyModelError(ValueError):
 def derive_policy_initialization(
     run_root_seed: str, model_id: str, initialization_ordinal: int
 ) -> tuple[bytes, int]:
+    """Derive the model-local initialization seed without using global RNG state."""
+
     if (
         not isinstance(run_root_seed, str)
         or not run_root_seed
@@ -93,6 +99,8 @@ def candidate_card_indices(observation: Tensor) -> tuple[Tensor, Tensor]:
     if torch.any(counts < 1) or torch.any(counts > HAND_CANDIDATE_COUNT):
         raise BGCPolicyModelError("active observations require one to four hand cards")
     card_ids = torch.arange(CARD_COUNT, device=batch.device).expand(batch.shape[0], -1)
+    # Missing cards receive a sentinel larger than every card index. Stable
+    # sorting therefore yields canonical active candidates followed by padding.
     ordered = torch.where(in_hand, card_ids, torch.full_like(card_ids, CARD_COUNT))
     candidates = torch.sort(ordered, dim=1, stable=True).values[:, :HAND_CANDIDATE_COUNT]
     present = candidates < CARD_COUNT
@@ -210,6 +218,8 @@ class BGCPolicyModel(nn.Module):
         digest, seed = derive_policy_initialization(
             run_root_seed, model_id, initialization_ordinal
         )
+        # Module constructors consume PyTorch's global RNG before explicit
+        # initialization, so preserve it across the complete construction.
         global_state = torch.random.get_rng_state()
         try:
             self.card_embedding = nn.Embedding(CARD_COUNT, 32)
@@ -243,16 +253,24 @@ class BGCPolicyModel(nn.Module):
             raise RuntimeError("BGC card policy parameter count differs")
 
     def forward(self, observation: Tensor) -> Tensor:
+        """Return raw 4×8 candidate-card/destination logits."""
+
         single = observation.ndim == 1
         batch = observation.unsqueeze(0) if single else observation
+        # Candidate rows are derived from current card membership, not permanent
+        # engine hand-slot identities.
         candidates, present = candidate_card_indices(batch)
         safe_candidates = candidates.clamp_max(CARD_COUNT - 1)
         candidate_embeddings = self.card_embedding(safe_candidates)
         candidate_features = self.activation(self.card_encoder(candidate_embeddings))
         candidate_features = candidate_features * present.unsqueeze(-1).to(candidate_features.dtype)
+        # Sum pooling makes the shared hand representation independent of the
+        # compact candidate-row order while retaining card-specific pair inputs.
         hand_summary = self.activation(self.hand_set_encoder(candidate_features.sum(dim=1)))
 
         coffin = batch[:, COFFIN_START:STATUS_START].reshape(-1, COFFIN_POSITION_COUNT, CARD_COUNT)
+        # One-hot coffin rows select the matching shared card embedding; empty
+        # positions contribute zeros and retain a separate occupancy bit.
         coffin_cards = coffin.to(candidate_features.dtype) @ self.card_embedding.weight
         positions = self.coffin_position_embedding.weight.unsqueeze(0).expand(batch.shape[0], -1, -1)
         occupied = coffin.any(dim=2, keepdim=True).to(candidate_features.dtype)
@@ -263,6 +281,8 @@ class BGCPolicyModel(nn.Module):
         context = batch[:, CONTEXT_START:].to(candidate_features.dtype)
         status_features = self.activation(self.status_encoder(statuses))
         context_features = self.activation(self.context_encoder(context))
+        # The shared state sees the complete hand set, all coffin positions,
+        # global card status, and lifecycle context once per decision.
         fused = torch.cat(
             (hand_summary, coffin_features.flatten(start_dim=1), status_features, context_features),
             dim=1,
@@ -271,6 +291,8 @@ class BGCPolicyModel(nn.Module):
         shared = self.shared_normalization(shared)
         shared = self.activation(self.shared_output(shared))
         destinations = coffin_features.index_select(1, self.policy_grid_indices)
+        # A shared scorer then evaluates every current-card/destination pair
+        # against the same state representation.
         pairs = torch.cat(
             (
                 candidate_features[:, :, None, :].expand(-1, -1, POLICY_POSITION_COUNT, -1),

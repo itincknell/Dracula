@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const projectRoot = path.resolve(frontendRoot, "..");
 const sourceRoot = path.resolve(frontendRoot, "..", "Cards (large)");
 const customRoot = path.join(frontendRoot, "assets", "cards");
 const destinationRoot = path.join(frontendRoot, "public", "cards");
@@ -62,7 +61,14 @@ for (const vampireId of ["V1", "V2"]) {
   );
 }
 
-await copyFile(
-  path.join(projectRoot, "Dracula.png"),
-  path.join(frontendRoot, "public", "dracula.png"),
-);
+const portraits = [
+  "dracula-angry-frown.jpg",
+  "dracula-angrier-frown.jpg",
+  "dracula-angriest-grimace.jpg",
+  "dracula-winning-grin.jpg",
+];
+for (const portrait of portraits) {
+  if (!(await exists(path.join(frontendRoot, "public", "portraits", portrait)))) {
+    throw new Error(`required Dracula portrait is missing: ${portrait}`);
+  }
+}

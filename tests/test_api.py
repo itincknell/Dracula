@@ -65,7 +65,7 @@ def test_api_import_does_not_load_training_or_aws_dependencies() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import dracula.api.app; "
+                "import sys; import dracula.api.app; import dracula.api.production; "
                 "forbidden=('torch','boto3','botocore','sagemaker'); "
                 "loaded={name for name in sys.modules if name.split('.')[0] in forbidden}; "
                 "assert not loaded, loaded"

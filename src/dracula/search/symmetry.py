@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Sequence
 
 COFFIN_POSITION_COUNT = 9
+# The table is a versioned gameplay/search contract, not a general geometric
+# symmetry algorithm.
 DESTINATION_SYMMETRY_SCHEMA_VERSION = (
     "dracula-early-destination-symmetry-v1"
 )
@@ -17,6 +19,8 @@ class DestinationSymmetryError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class DestinationSymmetryGroup:
+    """One designated proxy destination and its equivalent concrete members."""
+
     representative_grid_index: int
     member_grid_indices: tuple[int, ...]
 
@@ -47,12 +51,16 @@ def _group(
     representative_position: int,
     *member_positions: int,
 ) -> DestinationSymmetryGroup:
+    """Convert the rules table's one-based positions to engine indexes."""
+
     return DestinationSymmetryGroup(
         representative_position - 1,
         tuple(position - 1 for position in member_positions),
     )
 
 
+# Keys use the rules document's one-based coffin positions. These seven cases
+# are exhaustive; all other legal destinations remain independent.
 _AUTHORIZED_GROUPS = {
     frozenset({5}): (
         _group(2, 2, 8),
@@ -92,15 +100,18 @@ _AUTHORIZED_GROUPS = {
 
 
 def _orthogonally_adjacent(first: int, second: int) -> bool:
+    """Return whether two row-major coffin indexes share an edge."""
+
     first_row, first_column = divmod(first, 3)
     second_row, second_column = divmod(second, 3)
-    return (
-        abs(first_row - second_row) + abs(first_column - second_column)
-        == 1
-    )
+    row_distance = abs(first_row - second_row)
+    column_distance = abs(first_column - second_column)
+    return row_distance + column_distance == 1
 
 
 def _legal_destinations(occupied: frozenset[int]) -> tuple[int, ...]:
+    """Return empty positions sharing an edge with the current coffin."""
+
     return tuple(
         destination
         for destination in range(COFFIN_POSITION_COUNT)

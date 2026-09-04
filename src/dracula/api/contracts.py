@@ -37,6 +37,8 @@ class ContractModel(BaseModel):
 
 
 class HealthResponse(ContractModel):
+    """Local API health and configured dependency status."""
+
     schema_version: Literal["dracula-health-v1"] = HEALTH_SCHEMA_VERSION
     api_version: Literal["dracula-api-v1"] = API_VERSION
     status: Literal["ok"] = "ok"
@@ -44,11 +46,15 @@ class HealthResponse(ContractModel):
 
 
 class PlayerScore(ContractModel):
+    """One score pair expressed as human and opponent values."""
+
     human: int = Field(ge=0)
     opponent: int = Field(ge=0)
 
 
 class PlayedMove(ContractModel):
+    """Public accepted placement including its original hand slot."""
+
     player: Player
     card_id: str
     hand_slot: int = Field(ge=0, le=3)
@@ -57,6 +63,8 @@ class PlayedMove(ContractModel):
 
 
 class LineScore(ContractModel):
+    """Browser-safe arithmetic and highlighting facts for one scored line."""
+
     direction: Literal["row", "column"]
     index: int = Field(ge=0, le=2)
     card_ids: tuple[str, str, str]
@@ -75,6 +83,8 @@ class LineScore(ContractModel):
 
 
 class ScoringStep(ContractModel):
+    """One deterministic instruction in the round-scoring animation."""
+
     kind: Literal[
         "score_line",
         "compare_candidates",
@@ -87,6 +97,8 @@ class ScoringStep(ContractModel):
 
 
 class RoundRecord(ContractModel):
+    """Public cards, moves, calculations, and result for one finished round."""
+
     round_number: int = Field(ge=1, le=6)
     dealer: Player
     coffin: tuple[str, str, str, str, str, str, str, str, str]
@@ -97,6 +109,8 @@ class RoundRecord(ContractModel):
 
 
 class LegalMove(ContractModel):
+    """Opaque local-session move token and its visible placement details."""
+
     move_id: str
     card_id: str
     hand_slot: int = Field(ge=0, le=3)
@@ -104,6 +118,8 @@ class LegalMove(ContractModel):
 
 
 class PublicEvent(ContractModel):
+    """Append-only local gameplay event with contiguous sequence identity."""
+
     schema_version: Literal["dracula-public-event-v1"] = EVENT_SCHEMA_VERSION
     game_id: UUID
     event_id: str
@@ -125,10 +141,14 @@ class PublicEvent(ContractModel):
 
 
 class HumanTurnPhase(ContractModel):
+    """Phase in which the browser may submit one human placement."""
+
     kind: Literal["human_turn"] = "human_turn"
 
 
 class OpponentTurnPhase(ContractModel):
+    """Ready, pending, or failed local opponent-turn phase."""
+
     kind: Literal["opponent_turn"] = "opponent_turn"
     status: Literal["ready", "pending", "failed"]
     job_id: str | None = None
@@ -136,6 +156,8 @@ class OpponentTurnPhase(ContractModel):
 
 
 class NarrationPhase(ContractModel):
+    """Legacy local phase retained for stateful response compatibility."""
+
     kind: Literal["narration"] = "narration"
     status: Literal["ready", "pending", "failed"]
     event_id: str
@@ -144,6 +166,8 @@ class NarrationPhase(ContractModel):
 
 
 class ScoringPhase(ContractModel):
+    """Phase identifying the completed round awaiting score presentation."""
+
     kind: Literal["scoring"] = "scoring"
     round_number: int = Field(ge=1, le=6)
     next_step_index: int = Field(ge=0)
@@ -151,11 +175,15 @@ class ScoringPhase(ContractModel):
 
 
 class RoundAdvancePhase(ContractModel):
+    """Legacy local phase awaiting acknowledgement of a scored round."""
+
     kind: Literal["round_advance"] = "round_advance"
     round_number: int = Field(ge=1, le=6)
 
 
 class GameCompletePhase(ContractModel):
+    """Terminal phase carrying only the public game outcome."""
+
     kind: Literal["game_complete"] = "game_complete"
     outcome: Literal["human", "opponent", "tie"]
 
@@ -172,6 +200,8 @@ ResumablePhase = Annotated[
 
 
 class PublicGameView(ContractModel):
+    """Shared public lifecycle, board, score, and phase fields."""
+
     schema_version: Literal["dracula-human-game-view-v1"] = GAME_VIEW_SCHEMA_VERSION
     game_id: UUID
     version: int = Field(ge=0)
@@ -193,17 +223,23 @@ class PublicGameView(ContractModel):
 
 
 class HumanGameView(PublicGameView):
+    """Local-session game view extended with human hand and legal moves."""
+
     human_hand: CardSlot
     legal_moves: tuple[LegalMove, ...]
     events: tuple[PublicEvent, ...]
 
 
 class EventsResponse(ContractModel):
+    """Local append-only events after a requested sequence number."""
+
     events: tuple[PublicEvent, ...]
     latest_sequence: int = Field(ge=0)
 
 
 class CreateGameRequest(ContractModel):
+    """Idempotent local request selecting role and optional game seed."""
+
     human_role: Player
     request_id: UUID
     seed: str | None = None
@@ -217,17 +253,23 @@ class CreateGameRequest(ContractModel):
 
 
 class MoveRequest(ContractModel):
+    """Idempotent local placement request using an opaque legal-move token."""
+
     move_id: str
     expected_version: int = Field(ge=0)
     request_id: UUID
 
 
 class VersionedMutationRequest(ContractModel):
+    """Idempotent local mutation bound to the caller's current game version."""
+
     expected_version: int = Field(ge=0)
     request_id: UUID
 
 
 class ApiErrorResponse(ContractModel):
+    """Local API error with optional authoritative recovery view."""
+
     schema_version: Literal["dracula-error-v1"] = ERROR_SCHEMA_VERSION
     code: Literal[
         "not_found",

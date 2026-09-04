@@ -11,7 +11,7 @@ from uuid import UUID
 
 import torch
 
-from dracula.api.service import (
+from dracula.api.policy import (
     PolicyDescriptor,
     PolicyTurnRequest,
     PolicyTurnResult,

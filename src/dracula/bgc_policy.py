@@ -28,6 +28,8 @@ from dracula.bgc_policy_model import (
     derive_policy_initialization,
 )
 
+# Artifacts bind every model, tensor, loss, optimizer, and snapshot contract
+# needed to reject historical or incompatible policy files.
 BGC_POLICY_MODEL_SCHEMA_VERSION = "dracula-bgc-card-policy-v2"
 BGC_POLICY_ARTIFACT_SCHEMA_VERSION = "dracula-bgc-card-policy-artifact-v2"
 BGC_POLICY_SNAPSHOT_SCHEMA_VERSION = "dracula-bgc-card-policy-snapshot-v2"
@@ -38,6 +40,8 @@ BGC_POLICY_CANDIDATE_STATUS = "unaccepted"
 
 @dataclass(frozen=True, slots=True)
 class BGCPolicyArtifactMetadata:
+    """Complete provenance and compatibility identity for one policy artifact."""
+
     model_schema_version: str
     artifact_schema_version: str
     observation_schema_version: str
@@ -66,12 +70,16 @@ class BGCPolicyArtifactMetadata:
 
 @dataclass(frozen=True, slots=True)
 class LoadedBGCPolicyArtifact:
+    """Verified model, metadata, and immutable training configuration."""
+
     model: BGCPolicyModel
     metadata: BGCPolicyArtifactMetadata
     training_configuration: dict[str, object]
 
 
 def _state_dict_digest(state_dict: Mapping[str, Tensor]) -> str:
+    """Hash sorted tensor names, types, shapes, and contiguous CPU bytes."""
+
     digest = hashlib.sha256()
     for name, tensor in sorted(state_dict.items()):
         value = tensor.detach().cpu().contiguous()
@@ -85,6 +93,8 @@ def _state_dict_digest(state_dict: Mapping[str, Tensor]) -> str:
 def _canonical_configuration(
     configuration: Mapping[str, object],
 ) -> tuple[dict[str, object], str]:
+    """Round-trip a JSON configuration and return its canonical digest."""
+
     if not isinstance(configuration, Mapping) or any(
         not isinstance(key, str) for key in configuration
     ):
@@ -112,6 +122,8 @@ def _canonical_configuration(
 
 
 def _require_digest(value: object, label: str) -> str:
+    """Validate and return a lowercase SHA-256 digest."""
+
     if (
         not isinstance(value, str)
         or len(value) != 64
@@ -132,6 +144,8 @@ def build_bgc_policy_artifact(
     corpus_snapshot_digest: str,
     dataset_digest: str,
 ) -> dict[str, object]:
+    """Build a CPU-only policy payload after validating all bound identities."""
+
     if not isinstance(model, BGCPolicyModel):
         raise BGCPolicyModelError(
             "BGC policy artifact requires a BGCPolicyModel"
@@ -207,6 +221,8 @@ def save_bgc_policy_artifact(
     corpus_snapshot_digest: str,
     dataset_digest: str,
 ) -> None:
+    """Atomically save one validated standalone policy artifact."""
+
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     payload = build_bgc_policy_artifact(
@@ -217,6 +233,8 @@ def save_bgc_policy_artifact(
         corpus_snapshot_digest=corpus_snapshot_digest,
         dataset_digest=dataset_digest,
     )
+    # Replacement occurs only after the temporary payload is flushed, so an
+    # interruption cannot expose a partially written artifact at ``path``.
     temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
     try:
         torch.save(payload, temporary)
@@ -228,6 +246,8 @@ def save_bgc_policy_artifact(
 
 
 def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
+    """Load only an exact, finite, digest-consistent v2 policy artifact."""
+
     try:
         payload = torch.load(Path(path), map_location="cpu", weights_only=True)
     except (OSError, RuntimeError, ValueError) as error:
@@ -255,6 +275,8 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
         raise BGCPolicyModelError(
             "BGC policy artifact metadata is invalid"
         ) from error
+    # Schema equality is deliberately exact: loading never guesses migrations
+    # for tensor layouts or training contracts.
     expected = {
         "model_schema_version": BGC_POLICY_MODEL_SCHEMA_VERSION,
         "artifact_schema_version": BGC_POLICY_ARTIFACT_SCHEMA_VERSION,

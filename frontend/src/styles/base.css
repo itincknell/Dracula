@@ -1,0 +1,201 @@
+:root {
+  --narrow-breakpoint: 900px;
+  --minimum-card-size: 64px;
+  --minimum-hand-card-size: 72px;
+  --dracula-portrait-aspect: 4 / 3;
+  --dracula-avatar-size: 64px;
+  --mobile-commentary-height: 72px;
+  --void: #07060a;
+  --night: #0d0b12;
+  --panel: #141019;
+  --blood-dark: #3c0917;
+  --blood: #87162f;
+  --blood-hot: #c12746;
+  --bone: #eee1bb;
+  --bone-dim: #b9a98e;
+  --ash: #766d6d;
+  --gold: #d9a441;
+  --cyan: #55d9cf;
+  --danger: #ff4769;
+  color: var(--bone);
+  background: var(--void);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: var(--void);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    linear-gradient(rgb(255 255 255 / 1.8%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 1.4%) 1px, transparent 1px),
+    radial-gradient(circle at 50% -10%, rgb(135 22 47 / 32%), transparent 42rem),
+    linear-gradient(150deg, #0c0810 0%, #050508 70%);
+  background-size: 4px 4px, 4px 4px, auto, auto;
+}
+
+body::after {
+  position: fixed;
+  z-index: 999;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  opacity: 0.22;
+  background: repeating-linear-gradient(to bottom, transparent 0, transparent 3px, rgb(0 0 0 / 22%) 4px);
+  mix-blend-mode: multiply;
+}
+
+button, a { font: inherit; }
+button { border-radius: 0; }
+a { color: var(--gold); text-decoration-thickness: 1px; text-underline-offset: 4px; }
+
+button:focus-visible,
+a:focus-visible,
+.turn-status:focus-visible,
+[tabindex="0"]:focus-visible {
+  outline: 3px solid var(--cyan);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 7px rgb(85 217 207 / 18%);
+}
+
+::selection { color: var(--void); background: var(--cyan); }
+
+.page-shell {
+  width: min(1240px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 28px;
+}
+
+.start-page {
+  position: relative;
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 26px;
+}
+
+.start-page::before {
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  left: 50%;
+  width: min(86vw, 900px);
+  aspect-ratio: 1;
+  border: 1px solid rgb(193 39 70 / 22%);
+  content: "";
+  transform: translate(-50%, -50%) rotate(45deg);
+  box-shadow: 0 0 0 36px rgb(193 39 70 / 3%), 0 0 120px rgb(135 22 47 / 16%);
+}
+
+.start-card,
+.loading-panel {
+  position: relative;
+  width: min(660px, calc(100vw - 32px));
+  padding: clamp(36px, 7vw, 76px);
+  border: 2px solid var(--blood-hot);
+  color: var(--bone);
+  text-align: center;
+  background: linear-gradient(135deg, rgb(255 255 255 / 4%) 0 10%, transparent 10% 90%, rgb(0 0 0 / 20%) 90%), var(--panel);
+  box-shadow: 0 0 0 5px var(--void), 0 0 0 7px #4a1723, 12px 14px 0 #020204, 0 28px 90px rgb(0 0 0 / 62%);
+  clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 18px, 100% calc(100% - 18px), calc(100% - 18px) 100%, 18px 100%, 0 calc(100% - 18px), 0 18px);
+}
+
+.start-card::after,
+.loading-panel::after {
+  position: absolute;
+  inset: 12px;
+  border: 1px solid rgb(217 164 65 / 38%);
+  content: "";
+  pointer-events: none;
+}
+
+.loading-panel { margin: 10vh auto; }
+
+.eyebrow,
+.commentary-status,
+.series-label,
+.rules-contents { font-family: "Silkscreen", "IBM Plex Mono", monospace; }
+
+.eyebrow {
+  margin: 0 0 13px;
+  color: var(--gold);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1, h2, h3, .wordmark, .score-heading { font-family: "Grenze Gotisch", Georgia, serif; }
+
+h1 {
+  margin: 0 0 18px;
+  color: var(--bone);
+  font-size: clamp(58px, 11vw, 104px);
+  font-weight: 700;
+  line-height: 0.78;
+  letter-spacing: 0.015em;
+  text-shadow: 3px 3px 0 var(--blood), 6px 6px 0 #080508;
+}
+
+h2, h3 { color: var(--bone); }
+p, a, button, li, td, th { font-size: 16px; line-height: 1.55; }
+
+.role-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin: 34px 0 24px;
+  flex-wrap: wrap;
+}
+
+.primary-action {
+  min-width: 190px;
+  min-height: 50px;
+  padding: 13px 22px;
+  border: 2px solid var(--gold);
+  color: var(--bone);
+  background: var(--blood-dark);
+  box-shadow: inset 0 0 0 3px #10080d, 5px 5px 0 #030204;
+  font-family: "Silkscreen", "IBM Plex Mono", monospace;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 100ms linear, background 100ms linear, transform 100ms linear, box-shadow 100ms linear;
+}
+
+.primary-action:hover:not(:disabled) {
+  color: #fff6d9;
+  background: var(--blood);
+  transform: translate(-2px, -2px);
+  box-shadow: inset 0 0 0 3px #250b14, 7px 7px 0 #030204;
+}
+
+.primary-action:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: inset 0 0 0 3px #250b14, 2px 2px 0 #030204; }
+.primary-action:disabled { color: var(--ash); border-color: #473e3e; cursor: wait; }
+.rules-link { color: var(--cyan); font-weight: 600; }
+.start-error { color: #ff7891; }
+
+.footer-links {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 30px;
+  padding: 12px;
+  font-family: "Silkscreen", "IBM Plex Mono", monospace;
+  text-transform: uppercase;
+}
+
+.footer-links a { color: var(--bone-dim); font-size: 11px; letter-spacing: 0.06em; }
+.footer-links a:hover { color: var(--cyan); }
