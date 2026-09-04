@@ -88,6 +88,9 @@ rather than repeated as active Markdown reports.
 
 ## Maintenance
 
+- [`maintenance/pi1-runtime-cleanup.md`](maintenance/pi1-runtime-cleanup.md)
+  records the direct 659-bit policy boundary, retired executable removal,
+  behavior-equivalence fixtures, and final validation.
 - [`maintenance/final-sprint-refactoring.md`](maintenance/final-sprint-refactoring.md)
   records the restrained production-path separation, naming normalization,
   behavior-preservation tests, and complete validation.

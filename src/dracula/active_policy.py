@@ -22,11 +22,8 @@ from dracula.bgc_policy import (
 )
 from dracula.bgc_policy_model import (
     BGCPolicyModel,
-    compact_action_tensor_from_legacy,
-    compact_observation_from_legacy,
-    legacy_action_index_from_compact,
 )
-from dracula.policy_adapter import PolicyContractError
+from dracula.api.policy import PolicyContractError
 from dracula.randomness import derive_seed
 from dracula.action_contract import (
     INFERENCE_DESTINATION_SCOPE,
@@ -37,7 +34,11 @@ from dracula.search.information import (
     INFORMATION_STATE_SCHEMA_VERSION,
     SearchInformationState,
     information_state_fingerprint,
-    policy_input_from_information_state,
+)
+from dracula.policy_observation import (
+    candidate_action_tensor,
+    encode_policy_observation,
+    engine_action_index_from_candidate,
 )
 from dracula.strategic_actions import (
     derive_strategic_destination_choice_seed,
@@ -45,9 +46,8 @@ from dracula.strategic_actions import (
     strategic_action_groups,
 )
 
-# This legacy literal is part of the selected policy's concrete-move behavior.
-ACTIVE_POLICY_LEGACY_REQUEST_NAMESPACE = "dracula-pi0-standalone-request-v1"
-ACTIVE_POLICY_REQUEST_NAMESPACE = ACTIVE_POLICY_LEGACY_REQUEST_NAMESPACE
+# The literal predates pi1; changing it would change deterministic paired moves.
+ACTIVE_POLICY_REQUEST_NAMESPACE = "dracula-pi0-standalone-request-v1"
 ACTIVE_POLICY_IDENTITY = "standalone-policy-v1"
 ACTIVE_POLICY_ACTION_SCHEMA_VERSION = "dracula-action-map-v1"
 ACTIVE_POLICY_STATE_SCHEMA_VERSION = "stateless-v1"
@@ -114,29 +114,27 @@ class ActivePolicyRuntime:
         if should_stop is not None and should_stop():
             raise InterruptedError("active policy inference interrupted")
         started = time.perf_counter()
-        policy_input = policy_input_from_information_state(information)
-        # Search symmetry supplies one proxy per strategic group before logits
-        # are compacted into current-card rows for this model generation.
+        engine_legal_mask = torch.tensor(information.legal_mask, dtype=torch.bool)
+        # Symmetry supplies one proxy per strategic group in engine-slot rows;
+        # candidate rows are then derived from current-card membership.
         groups = strategic_action_groups(information, True)
         projection = build_representative_action_projection(
-            policy_input.legal_mask, groups
+            engine_legal_mask, groups
         )
-        observation = compact_observation_from_legacy(policy_input.observation)
-        compact_mask = compact_action_tensor_from_legacy(
-            policy_input.observation, projection.mask
-        )
+        observation = encode_policy_observation(information)
+        compact_mask = candidate_action_tensor(information, projection.mask)
         with torch.inference_mode():
             logits = self.model(observation)
         compact_representative = select_representative_action(logits, compact_mask)
         if not isinstance(compact_representative, int):
             raise ValueError("single-state active policy returned batched selection")
-        representative = legacy_action_index_from_compact(
-            policy_input.observation, compact_representative
+        representative = engine_action_index_from_candidate(
+            information, compact_representative
         )
         # Concrete paired placement uses a separate deterministic stream, so it
         # cannot alter which strategic group the model selected.
         request_seed = derive_seed(
-            ACTIVE_POLICY_LEGACY_REQUEST_NAMESPACE,
+            ACTIVE_POLICY_REQUEST_NAMESPACE,
             fixture_id,
             information_state_fingerprint(information),
             self.artifact_digest,
@@ -220,7 +218,6 @@ class ActivePolicyExecutor:
 
 
 __all__ = (
-    "ACTIVE_POLICY_LEGACY_REQUEST_NAMESPACE",
     "ACTIVE_POLICY_REQUEST_NAMESPACE",
     "ActivePolicyDecision",
     "ActivePolicyExecutor",

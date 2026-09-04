@@ -1,35 +1,29 @@
-"""Physical D0 migration from stable hand slots to card-set candidates."""
+"""Verified reader for the sealed 659-bit card-set training corpus."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import torch
-from torch import Tensor
-
 from dracula.bgc_policy_model import (
     ACTION_COUNT,
     ACTION_SCHEMA_VERSION,
     HAND_CANDIDATE_COUNT,
     OBSERVATION_SCHEMA_VERSION,
-    OBSERVATION_SIZE,
     POLICY_POSITION_COUNT,
-    compact_action_tensor_from_legacy,
-    compact_observation_from_legacy,
+    OBSERVATION_SIZE,
 )
 from dracula.bgc_policy_training import (
     BGCPolicyTrainingError,
     OUTER_SIMULATION_BUDGET,
+    _assert_no_forbidden_keys,
     _decode_packed,
     _load_json,
     _unpack_bytes,
-    load_bgc_policy_snapshot,
 )
 
 MIGRATION_SCHEMA_VERSION = "dracula-bgc-card-set-migration-v1"
@@ -53,196 +47,12 @@ def _file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _atomic_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    try:
-        with temporary.open("wb") as handle:
-            handle.write(_canonical(value) + b"\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _pack(values: tuple[bool, ...]) -> bytes:
     packed = bytearray((len(values) + 7) // 8)
     for index, value in enumerate(values):
         if value:
             packed[index // 8] |= 1 << (7 - index % 8)
     return bytes(packed)
-
-
-def _tensor_from_bits(value: bytes, bit_count: int) -> Tensor:
-    return torch.tensor(_unpack_bytes(value, bit_count), dtype=torch.bool)
-
-
-def _slot_to_candidate(observation: Tensor) -> dict[int, int]:
-    hand = observation[: 4 * 54].reshape(4, 54)
-    mapping: dict[int, int] = {}
-    candidate = 0
-    for slot in range(4):
-        if bool(hand[slot].any().item()):
-            mapping[slot] = candidate
-            candidate += 1
-    if not 1 <= candidate <= 4:
-        raise BGCPolicyTrainingError("legacy row has no current hand card")
-    return mapping
-
-
-def _map_action(action: int, mapping: dict[int, int]) -> int:
-    if type(action) is not int or not 0 <= action < ACTION_COUNT:
-        raise BGCPolicyTrainingError("legacy action index is invalid")
-    slot, destination = divmod(action, POLICY_POSITION_COUNT)
-    if slot not in mapping:
-        raise BGCPolicyTrainingError("legacy action names an empty hand slot")
-    return mapping[slot] * POLICY_POSITION_COUNT + destination
-
-
-def _migrate_row(raw: dict[str, object]) -> dict[str, object]:
-    legacy_packed = _decode_packed(
-        raw["observation_packed"], byte_count=110, bit_count=875, label="observation"
-    )
-    legacy_observation = _tensor_from_bits(legacy_packed, 875)
-    compact_observation = compact_observation_from_legacy(legacy_observation)
-    mapping = _slot_to_candidate(legacy_observation)
-    legal_packed = _decode_packed(
-        raw["legal_mask_packed"], byte_count=4, bit_count=32, label="legal mask"
-    )
-    legal = _tensor_from_bits(legal_packed, 32).reshape(4, 8)
-    compact_legal = compact_action_tensor_from_legacy(legacy_observation, legal)
-
-    raw_groups = raw["strategic_groups"]
-    raw_representatives = raw["strategic_group_representatives"]
-    raw_visits = raw["strategic_group_visits"]
-    if not all(isinstance(value, list) for value in (raw_groups, raw_representatives, raw_visits)):
-        raise BGCPolicyTrainingError("legacy strategic groups are malformed")
-    translated = []
-    for members, representative, visits in zip(
-        raw_groups, raw_representatives, raw_visits, strict=True  # type: ignore[arg-type]
-    ):
-        if not isinstance(members, list) or type(representative) is not int or type(visits) is not int:
-            raise BGCPolicyTrainingError("legacy strategic group entry is malformed")
-        translated.append(
-            (
-                _map_action(representative, mapping),
-                [_map_action(member, mapping) for member in members],
-                visits,
-            )
-        )
-    translated.sort(key=lambda item: item[0])
-    if sum(item[2] for item in translated) != OUTER_SIMULATION_BUDGET:
-        raise BGCPolicyTrainingError("migrated visits do not sum to 128")
-    selected = _map_action(raw["selected_group_representative"], mapping)  # type: ignore[arg-type]
-    representatives = [item[0] for item in translated]
-    if selected not in representatives:
-        raise BGCPolicyTrainingError("migrated selected action is absent")
-    legal_actions = {index for index, allowed in enumerate(compact_legal.flatten()) if bool(allowed)}
-    group_actions = {member for _, members, _ in translated for member in members}
-    if legal_actions != group_actions:
-        raise BGCPolicyTrainingError("migrated groups do not partition legal actions")
-
-    migrated = {
-        key: raw[key]
-        for key in (
-            "dealer",
-            "fixture_id",
-            "information_state_fingerprint",
-            "placement_number",
-            "player",
-            "round_number",
-            "search_config_digest",
-            "trajectory_profile",
-        )
-    }
-    migrated.update(
-        {
-            "action_schema_version": ACTION_SCHEMA_VERSION,
-            "legal_mask_packed": base64.b64encode(
-                _pack(tuple(bool(value) for value in compact_legal.flatten().tolist()))
-            ).decode("ascii"),
-            "observation_packed": base64.b64encode(
-                _pack(tuple(bool(value) for value in compact_observation.tolist()))
-            ).decode("ascii"),
-            "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
-            "row_schema_version": ROW_SCHEMA_VERSION,
-            "selected_group_representative": selected,
-            "strategic_group_representatives": representatives,
-            "strategic_group_visits": [item[2] for item in translated],
-            "strategic_groups": [item[1] for item in translated],
-        }
-    )
-    return migrated
-
-
-def migrate_snapshot(source_snapshot: str | Path, output_directory: str | Path) -> dict[str, object]:
-    snapshot = load_bgc_policy_snapshot(source_snapshot)
-    output = Path(output_directory).expanduser().resolve()
-    if output.exists() and any(output.iterdir()):
-        raise BGCPolicyTrainingError("migrated corpus output must be empty")
-    output.mkdir(parents=True, exist_ok=True)
-    games: list[dict[str, object]] = []
-    placement_counts = {overlay: {str(value): 0 for value in range(1, 8)} for overlay in ("training", "validation")}
-    try:
-        for game in snapshot.games:
-            source_path = snapshot.corpus_directory / game.relative_path
-            source_document = _load_json(source_path)
-            content = source_document.get("content")
-            if not isinstance(content, dict) or content.get("ordinal") != game.ordinal:
-                raise BGCPolicyTrainingError("source game content differs during migration")
-            raw_rows = content.get("rows")
-            if not isinstance(raw_rows, list) or len(raw_rows) != 42:
-                raise BGCPolicyTrainingError("source game rows differ during migration")
-            rows = [_migrate_row(row) for row in raw_rows if isinstance(row, dict)]
-            if len(rows) != 42:
-                raise BGCPolicyTrainingError("source game contains a malformed row")
-            migrated_content = {
-                "fixture_id": game.fixture_id,
-                "game_schema_version": GAME_SCHEMA_VERSION,
-                "ordinal": game.ordinal,
-                "overlay": game.overlay,
-                "rows": rows,
-                "source_content_digest": game.content_digest,
-                "trajectory_profile": game.trajectory_profile,
-            }
-            document = {"content": migrated_content, "content_digest": _digest(migrated_content)}
-            relative = f"games/{game.ordinal:06d}.json"
-            destination = output / relative
-            _atomic_json(destination, document)
-            games.append(
-                {
-                    "content_digest": document["content_digest"],
-                    "file_digest": _file_digest(destination),
-                    "fixture_id": game.fixture_id,
-                    "ordinal": game.ordinal,
-                    "overlay": game.overlay,
-                    "path": relative,
-                    "row_count": 42,
-                    "trajectory_profile": game.trajectory_profile,
-                }
-            )
-            for row in rows:
-                placement_counts[game.overlay][str(row["placement_number"])] += 1
-        content = {
-            "action_schema_version": ACTION_SCHEMA_VERSION,
-            "corpus_schema_version": CORPUS_SCHEMA_VERSION,
-            "game_count": len(games),
-            "games": games,
-            "loader_schema_version": LOADER_SCHEMA_VERSION,
-            "migration_schema_version": MIGRATION_SCHEMA_VERSION,
-            "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
-            "placement_counts": placement_counts,
-            "row_count": len(games) * 42,
-            "source_snapshot_digest": snapshot.snapshot_digest,
-            "source_snapshot_path": str(snapshot.path),
-        }
-        manifest = {"content": content, "content_digest": _digest(content)}
-        _atomic_json(output / "corpus-manifest.json", manifest)
-        return manifest
-    except BaseException:
-        # An incomplete output is never accepted because it has no root manifest.
-        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,6 +141,7 @@ def _load_migrated_split(root: Path, entries: list[dict[str, object]], overlay: 
         content = document.get("content")
         if not isinstance(content, dict) or _digest(content) != document.get("content_digest"):
             raise BGCPolicyTrainingError("migrated game content digest changed")
+        _assert_no_forbidden_keys(content)
         for raw in content["rows"]:  # type: ignore[index]
             if not isinstance(raw, dict) or raw.get("row_schema_version") != ROW_SCHEMA_VERSION:
                 raise BGCPolicyTrainingError("migrated row schema differs")
@@ -443,9 +254,7 @@ def load_migrated_policy_dataset(path: str | Path) -> MigratedPolicyDatasetBundl
 
 __all__ = (
     "CORPUS_SCHEMA_VERSION",
-    "MIGRATION_SCHEMA_VERSION",
     "MigratedPolicyDataset",
     "MigratedPolicyDatasetBundle",
     "load_migrated_policy_dataset",
-    "migrate_snapshot",
 )

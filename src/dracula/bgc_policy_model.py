@@ -18,9 +18,7 @@ ACTION_SCHEMA_VERSION = "dracula-card-candidate-action-map-v2"
 INITIALIZATION_SCHEMA_VERSION = "dracula-bgc-card-policy-initialization-v2"
 INITIALIZATION_NAMESPACE = "dracula-bgc-card-policy-initialization-v2"
 
-LEGACY_OBSERVATION_SIZE = 875
-LEGACY_HAND_BITS = 4 * CARD_COUNT
-OBSERVATION_SIZE = LEGACY_OBSERVATION_SIZE - LEGACY_HAND_BITS
+OBSERVATION_SIZE = 659
 HAND_CANDIDATE_COUNT = 4
 POLICY_POSITION_COUNT = 8
 ACTION_COUNT = HAND_CANDIDATE_COUNT * POLICY_POSITION_COUNT
@@ -66,25 +64,6 @@ def derive_policy_initialization(
     return digest, int.from_bytes(digest[:8], "big", signed=False)
 
 
-def compact_observation_from_legacy(observation: Tensor) -> Tensor:
-    """Drop the redundant stable-slot field after proving exact membership."""
-
-    if not isinstance(observation, Tensor) or observation.dtype is not torch.bool:
-        raise BGCPolicyModelError("legacy observation must have Boolean dtype")
-    single = observation.ndim == 1
-    batch = observation.unsqueeze(0) if single else observation
-    if batch.ndim != 2 or batch.shape[0] < 1 or batch.shape[1] != LEGACY_OBSERVATION_SIZE:
-        raise BGCPolicyModelError("legacy observation must have shape [875] or [B,875]")
-    hand = batch[:, :LEGACY_HAND_BITS].reshape(-1, HAND_CANDIDATE_COUNT, CARD_COUNT)
-    if torch.any(hand.sum(dim=1) > 1) or torch.any(hand.sum(dim=2) > 1):
-        raise BGCPolicyModelError("legacy hand slots are not unique one-hot cards")
-    compact = batch[:, LEGACY_HAND_BITS:].clone()
-    in_hand = compact[:, IN_HAND_START : IN_HAND_START + CARD_COUNT]
-    if not torch.equal(hand.any(dim=1), in_hand):
-        raise BGCPolicyModelError("legacy hand slots differ from in-hand membership")
-    return compact.squeeze(0) if single else compact
-
-
 def candidate_card_indices(observation: Tensor) -> tuple[Tensor, Tensor]:
     """Return fixed-card-order candidates and their padding mask."""
 
@@ -107,85 +86,6 @@ def candidate_card_indices(observation: Tensor) -> tuple[Tensor, Tensor]:
     if single:
         return candidates.squeeze(0), present.squeeze(0)
     return candidates, present
-
-
-def compact_action_tensor_from_legacy(observation: Tensor, values: Tensor) -> Tensor:
-    """Relabel stable engine-slot rows as compact current-card rows."""
-
-    if observation.dtype is not torch.bool:
-        raise BGCPolicyModelError("legacy observation must have Boolean dtype")
-    single = observation.ndim == 1
-    observations = observation.unsqueeze(0) if single else observation
-    value_batch = values.unsqueeze(0) if single else values
-    if (
-        observations.ndim != 2
-        or observations.shape[1] != LEGACY_OBSERVATION_SIZE
-        or value_batch.ndim != 3
-        or value_batch.shape != (observations.shape[0], HAND_CANDIDATE_COUNT, POLICY_POSITION_COUNT)
-    ):
-        raise BGCPolicyModelError("legacy action tensor shape differs")
-    compact = compact_observation_from_legacy(observations)
-    candidates, candidate_present = candidate_card_indices(compact)
-    hand = observations[:, :LEGACY_HAND_BITS].reshape(-1, HAND_CANDIDATE_COUNT, CARD_COUNT)
-    slot_present = hand.any(dim=2)
-    slot_cards = hand.to(torch.int64).argmax(dim=2)
-    matches = (
-        slot_cards[:, :, None] == candidates[:, None, :]
-    ) & slot_present[:, :, None] & candidate_present[:, None, :]
-    if not torch.equal(matches.sum(dim=1), candidate_present.to(torch.int64)):
-        raise BGCPolicyModelError("legacy slots cannot map uniquely to card candidates")
-    result = torch.zeros_like(value_batch)
-    for candidate_row in range(HAND_CANDIDATE_COUNT):
-        source_rows = matches[:, :, candidate_row].to(torch.int64).argmax(dim=1)
-        gathered = value_batch.gather(
-            1,
-            source_rows[:, None, None].expand(-1, 1, POLICY_POSITION_COUNT),
-        ).squeeze(1)
-        result[:, candidate_row] = torch.where(
-            candidate_present[:, candidate_row, None], gathered, torch.zeros_like(gathered)
-        )
-    return result.squeeze(0) if single else result
-
-
-def legacy_action_index_from_compact(observation: Tensor, compact_action_index: int) -> int:
-    """Map one compact card-row action back to the engine's stable slot row."""
-
-    if observation.ndim != 1 or observation.shape != (LEGACY_OBSERVATION_SIZE,):
-        raise BGCPolicyModelError("legacy action mapping requires one [875] observation")
-    if type(compact_action_index) is not int or not 0 <= compact_action_index < ACTION_COUNT:
-        raise BGCPolicyModelError("compact action index is invalid")
-    candidate_row, destination = divmod(compact_action_index, POLICY_POSITION_COUNT)
-    compact = compact_observation_from_legacy(observation)
-    candidates, present = candidate_card_indices(compact)
-    if not bool(present[candidate_row].item()):
-        raise BGCPolicyModelError("compact action names a padded card row")
-    card_id = int(candidates[candidate_row].item())
-    hand = observation[:LEGACY_HAND_BITS].reshape(HAND_CANDIDATE_COUNT, CARD_COUNT)
-    matches = torch.nonzero(hand[:, card_id], as_tuple=False).flatten()
-    if len(matches) != 1:
-        raise BGCPolicyModelError("compact card does not identify one engine slot")
-    return int(matches[0].item()) * POLICY_POSITION_COUNT + destination
-
-
-def compact_action_index_from_legacy(observation: Tensor, legacy_action_index: int) -> int:
-    """Map one engine stable-slot action to its compact current-card row."""
-
-    if observation.ndim != 1 or observation.shape != (LEGACY_OBSERVATION_SIZE,):
-        raise BGCPolicyModelError("compact action mapping requires one [875] observation")
-    if type(legacy_action_index) is not int or not 0 <= legacy_action_index < ACTION_COUNT:
-        raise BGCPolicyModelError("legacy action index is invalid")
-    slot, destination = divmod(legacy_action_index, POLICY_POSITION_COUNT)
-    hand = observation[:LEGACY_HAND_BITS].reshape(HAND_CANDIDATE_COUNT, CARD_COUNT)
-    card_matches = torch.nonzero(hand[slot], as_tuple=False).flatten()
-    if len(card_matches) != 1:
-        raise BGCPolicyModelError("legacy action names an empty hand slot")
-    candidates, present = candidate_card_indices(compact_observation_from_legacy(observation))
-    rows = torch.nonzero(
-        present & candidates.eq(int(card_matches[0].item())), as_tuple=False
-    ).flatten()
-    if len(rows) != 1:
-        raise BGCPolicyModelError("legacy card does not identify one compact row")
-    return int(rows[0].item()) * POLICY_POSITION_COUNT + destination
 
 
 def _initialize(module: nn.Module, seed: int) -> None:
@@ -321,9 +221,5 @@ __all__ = (
     "POLICY_GRID_INDICES",
     "POLICY_POSITION_COUNT",
     "candidate_card_indices",
-    "compact_action_tensor_from_legacy",
-    "compact_action_index_from_legacy",
-    "compact_observation_from_legacy",
     "derive_policy_initialization",
-    "legacy_action_index_from_compact",
 )

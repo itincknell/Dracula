@@ -1,35 +1,46 @@
-"""Card-set observation and compact candidate policy invariants."""
+"""Direct card-set observation and compact candidate policy invariants."""
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
+import pytest
 import torch
 
+from dracula.active_policy import ActivePolicyRuntime
 from dracula.bgc_policy_model import (
     BGCPolicyModel,
     OBSERVATION_SIZE,
     PARAMETER_COUNT,
     candidate_card_indices,
-    compact_action_index_from_legacy,
-    compact_action_tensor_from_legacy,
-    compact_observation_from_legacy,
-    legacy_action_index_from_compact,
 )
-from dracula.bridge import build_policy_turn_context
-from dracula.engine import EnginePlayer, create_game
+from dracula.engine import apply_move, create_game, legal_moves
+from dracula.policy_observation import (
+    candidate_action_index_from_engine,
+    candidate_action_tensor,
+    encode_policy_observation,
+    engine_action_index_from_candidate,
+)
+from dracula.search.information import information_state_from_engine
 
 
-def _legacy():
+ROOT = Path(__file__).resolve().parents[1]
+SELECTED_ARTIFACT = (
+    ROOT / "runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt"
+)
+
+
+def _information():
     state = create_game("bgc-card-policy-v2-fixture")
-    assert state.active_player is not None
-    return build_policy_turn_context(state, state.active_player).input
+    return information_state_from_engine(state)
 
 
-def test_card_set_shapes_and_exact_parameter_count() -> None:
-    legacy = _legacy()
-    observation = compact_observation_from_legacy(legacy.observation)
+def test_direct_card_set_shapes_and_exact_parameter_count() -> None:
+    observation = encode_policy_observation(_information())
     model = BGCPolicyModel(
         run_root_seed="bgc-card-model-test",
-        model_id="pi0",
+        model_id="pi1",
         initialization_ordinal=0,
     )
     candidates, present = candidate_card_indices(observation)
@@ -41,36 +52,33 @@ def test_card_set_shapes_and_exact_parameter_count() -> None:
     assert PARAMETER_COUNT == 754_601
 
 
-def test_legacy_slot_permutations_have_identical_card_set_inputs_and_actions() -> None:
-    legacy = _legacy()
-    permutation = torch.tensor((2, 0, 3, 1))
-    permuted_observation = legacy.observation.clone()
-    permuted_observation[:216] = legacy.observation[:216].reshape(4, 54).index_select(
-        0, permutation
-    ).flatten()
-    permuted_mask = legacy.legal_mask.index_select(0, permutation)
-    assert torch.equal(
-        compact_observation_from_legacy(legacy.observation),
-        compact_observation_from_legacy(permuted_observation),
+def test_direct_observations_match_frozen_pre_cleanup_fixtures() -> None:
+    expected = (
+        "880dbad90758315bec5da197a6932f9ae949f06294c73f829283c6c5f668fe4a",
+        "7f97a139f89a3fb85b1dda482f0f3f65b844c70222cf06c73162329effb2e639",
+        "6df85b298e1d0b82205761dd1352b9b3615da510d6cdd71931a8b84f64ecc591",
+        "118a287940067fa0845cb39692ebec4632e52a51c242088310b86b77e8c2421d",
+        "6506b744e76c1e71a2aa7b77b94bbd550bec1accbcfa053e915ff8e6b6605a22",
+        "4c3e073d0102ccaa1890fbb803238f1b5608dee2fc12d471fdfbba458c595b75",
+        "ce37a0d1e5a8a76748d74eb22ef5c98b9d37a849bd40b8c91ec7255b3b76cdf2",
     )
-    assert torch.equal(
-        compact_action_tensor_from_legacy(legacy.observation, legacy.legal_mask),
-        compact_action_tensor_from_legacy(permuted_observation, permuted_mask),
-    )
+    state = create_game("pi1-direct-queen")
+    actual = []
+    for _ in range(7):
+        observation = encode_policy_observation(information_state_from_engine(state))
+        actual.append(hashlib.sha256(observation.numpy().tobytes()).hexdigest())
+        state = apply_move(state, legal_moves(state, state.active_player)[0]).state
+    assert tuple(actual) == expected
 
 
-def test_model_initialization_is_deterministic_and_does_not_use_slot_embeddings() -> None:
+def test_model_initialization_is_deterministic_and_has_no_slot_embeddings() -> None:
     torch.manual_seed(17)
     global_state = torch.random.get_rng_state().clone()
     first = BGCPolicyModel(
-        run_root_seed="bgc-card-model-test",
-        model_id="pi0",
-        initialization_ordinal=0,
+        run_root_seed="bgc-card-model-test", model_id="pi1", initialization_ordinal=0
     )
     second = BGCPolicyModel(
-        run_root_seed="bgc-card-model-test",
-        model_id="pi0",
-        initialization_ordinal=0,
+        run_root_seed="bgc-card-model-test", model_id="pi1", initialization_ordinal=0
     )
     assert all(
         torch.equal(left, right)
@@ -81,11 +89,11 @@ def test_model_initialization_is_deterministic_and_does_not_use_slot_embeddings(
 
 
 def test_batch_equivalence_gradients_and_action_round_trip() -> None:
-    legacy = _legacy()
-    observation = compact_observation_from_legacy(legacy.observation)
+    information = _information()
+    observation = encode_policy_observation(information)
     model = BGCPolicyModel(
         run_root_seed="bgc-card-model-batch-test",
-        model_id="pi0",
+        model_id="pi1",
         initialization_ordinal=0,
     )
     individual = model(observation)
@@ -94,19 +102,43 @@ def test_batch_equivalence_gradients_and_action_round_trip() -> None:
     assert torch.equal(batched[0], batched[1])
     batched.square().mean().backward()
     assert all(
-        parameter.grad is not None
-        and torch.isfinite(parameter.grad).all()
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
         for parameter in model.parameters()
     )
-    for legacy_index in torch.nonzero(
-        legacy.legal_mask.flatten(), as_tuple=False
+    legal = torch.tensor(information.legal_mask, dtype=torch.bool)
+    compact = candidate_action_tensor(information, legal)
+    for compact_index in torch.nonzero(
+        compact.flatten(), as_tuple=False
     ).flatten().tolist():
-        compact_index = compact_action_index_from_legacy(
-            legacy.observation, legacy_index
+        engine_index = engine_action_index_from_candidate(information, compact_index)
+        assert candidate_action_index_from_engine(information, engine_index) == compact_index
+
+
+@pytest.mark.skipif(not SELECTED_ARTIFACT.is_file(), reason="local pi1 artifact absent")
+def test_selected_artifact_matches_pre_cleanup_logits_and_actions() -> None:
+    expected = (
+        ("48724f8ae407964c2db1686e7c30d717cc21772042d9457eae4055a2ac38ab82", 17, 22),
+        ("5f17692aaca65b3d9e3bd96e53e7caf04335bc78e58d997c37f1808d0d9f85e2", 22, 22),
+        ("b0dbf34005820e0381fd489431a265971d285995f2cb681d9392b50b4219fe26", 29, 29),
+        ("e908f1b3e1e257ac387ae773f22c9a650dc499201f5c8333dc7a464062c101ac", 22, 22),
+        ("973304b77219ed992a627450641ce55cdb91049f03b6c5f8e5b3871cef3cc380", 18, 18),
+        ("75fe4716c73cbaa03fa24feb0c01c4b0eb3b55f7312b25057e78d4fdf92b5784", 22, 22),
+        ("c5cefaa98d891a134deae5e7ddd9357c66b4f0c2a7c75ae25acf743aa1f0dcd9", 31, 31),
+    )
+    runtime = ActivePolicyRuntime.from_artifact(SELECTED_ARTIFACT)
+    state = create_game("pi1-direct-queen")
+    for placement, (logits_digest, representative, concrete) in enumerate(
+        expected, start=1
+    ):
+        information = information_state_from_engine(state)
+        with torch.inference_mode():
+            logits = runtime.model(encode_policy_observation(information))
+        decision = runtime.decide(
+            information,
+            fixture_id="pi1-direct-queen",
+            decision_index=placement,
         )
-        assert (
-            legacy_action_index_from_compact(
-                legacy.observation, compact_index
-            )
-            == legacy_index
-        )
+        assert hashlib.sha256(logits.numpy().tobytes()).hexdigest() == logits_digest
+        assert decision.representative_action_index == representative
+        assert decision.concrete_action_index == concrete
+        state = apply_move(state, legal_moves(state, state.active_player)[0]).state

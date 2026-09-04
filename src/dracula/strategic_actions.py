@@ -10,7 +10,6 @@ from dracula.search.information import (
     SearchInformationState,
     information_state_fingerprint,
 )
-from dracula.search.planner import SearchContractViolation
 from dracula.search.symmetry import destination_symmetry_groups
 
 # These literals determine persisted group identity and concrete paired choices.
@@ -20,6 +19,10 @@ STRATEGIC_DESTINATION_CHOICE_PROFILE = "derived-fair-coin-after-group-selection-
 _POLICY_POSITION_BY_GRID_INDEX = {
     grid_index: position for position, grid_index in enumerate(POLICY_GRID_INDICES)
 }
+
+
+class StrategicActionError(ValueError):
+    """Legal actions cannot form or resolve an authoritative strategic group."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,14 +41,14 @@ class StrategicActionGroup:
 
     def __post_init__(self) -> None:
         if type(self.hand_slot) is not int or not 0 <= self.hand_slot < HAND_SLOT_COUNT:
-            raise SearchContractViolation("strategic group hand slot is invalid")
+            raise StrategicActionError("strategic group hand slot is invalid")
         if (
             type(self.representative_action_index) is not int
             or not 0 <= self.representative_action_index < ACTION_COUNT
             or self.representative_action_index // len(POLICY_GRID_INDICES)
             != self.hand_slot
         ):
-            raise SearchContractViolation(
+            raise StrategicActionError(
                 "strategic group representative action is invalid"
             )
         if (
@@ -55,7 +58,7 @@ class StrategicActionGroup:
                 self.representative_action_index % len(POLICY_GRID_INDICES)
             ]
         ):
-            raise SearchContractViolation(
+            raise StrategicActionError(
                 "strategic group representative destination is invalid"
             )
         if (
@@ -69,7 +72,7 @@ class StrategicActionGroup:
                 for action_index in self.member_action_indices
             )
         ):
-            raise SearchContractViolation("strategic group member actions are invalid")
+            raise StrategicActionError("strategic group member actions are invalid")
         if (
             not isinstance(self.member_grid_indices, tuple)
             or len(self.member_grid_indices) != len(self.member_action_indices)
@@ -80,7 +83,7 @@ class StrategicActionGroup:
             != self.member_grid_indices
             or self.representative_action_index not in self.member_action_indices
         ):
-            raise SearchContractViolation(
+            raise StrategicActionError(
                 "strategic group member destinations are invalid"
             )
 
@@ -104,11 +107,11 @@ def strategic_action_groups(
     """Partition legal actions by hand slot and the authoritative symmetry table."""
 
     if not isinstance(information, SearchInformationState):
-        raise SearchContractViolation(
+        raise StrategicActionError(
             "strategic grouping requires a player information state"
         )
     if type(destination_symmetry_enabled) is not bool:
-        raise SearchContractViolation("destination symmetry flag must be Boolean")
+        raise StrategicActionError("destination symmetry flag must be Boolean")
     legal = set(legal_action_indices(information))
     if not destination_symmetry_enabled:
         return tuple(
@@ -142,7 +145,7 @@ def strategic_action_groups(
                     for grid_index in destination_group.member_grid_indices
                 )
             except KeyError as error:
-                raise SearchContractViolation(
+                raise StrategicActionError(
                     "the center cannot be a strategic destination"
                 ) from error
             representative_action = (
@@ -166,7 +169,7 @@ def strategic_action_groups(
     # A strategic reduction is valid only when every concrete legal action is
     # represented exactly once.
     if len(set(grouped)) != len(grouped) or set(grouped) != legal:
-        raise SearchContractViolation(
+        raise StrategicActionError(
             "strategic action groups do not partition legal actions"
         )
     return tuple(groups)
@@ -218,7 +221,7 @@ def select_concrete_action_index(
             if candidate.representative_action_index == representative_action_index
         )
     except StopIteration as error:
-        raise SearchContractViolation(
+        raise StrategicActionError(
             "selected representative is not a legal strategic action"
         ) from error
     if len(group.member_action_indices) == 1:
@@ -230,11 +233,11 @@ def select_concrete_action_index(
             Sha256CounterStream(choice_seed).randbelow(2)
         ]
     else:
-        raise SearchContractViolation(
+        raise StrategicActionError(
             "authorized destination groups must contain one or two members"
         )
     if selected not in legal_action_indices(information):
-        raise SearchContractViolation(
+        raise StrategicActionError(
             "resolved strategic destination is not currently legal"
         )
     return selected

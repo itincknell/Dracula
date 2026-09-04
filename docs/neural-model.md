@@ -177,7 +177,8 @@ For every legal hand card:
 
 The reduction applies independently to each hand card. Different hand cards
 remain different actions. The center position has no action logit. The complete
-authoritative table is in [information-set search](search.md#authoritative-early-turn-symmetry).
+authoritative table is in
+[symmetry and move selection](search.md#authoritative-early-turn-symmetry).
 
 Each strategic group's exact root visit count is assigned to its designated
 proxy action. No mirrored-destination averaging or pooling occurs. Counts sum

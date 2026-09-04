@@ -15,7 +15,8 @@ action, and resolves paired destinations with the established fair coin.
 
 `pi1` runs once per non-forced Dracula move inside the FastAPI Lambda. There is
 no deployed search, hybrid controller, value head, recurrence, SageMaker
-endpoint, or silent fallback. Nested Sam remains an explicit local comparison.
+endpoint, or silent fallback. Retired controller implementations are available
+from Git history rather than the installed application.
 
 ## Production gameplay is stateless
 

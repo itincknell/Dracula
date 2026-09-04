@@ -17,6 +17,43 @@ PI1_RELATIVE_PATH = Path(
 PI1_SHA256 = "70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c"
 CONTEXT_SCHEMA = "dracula-lambda-build-context-v1"
 
+RUNTIME_MODULES = (
+    "__init__.py",
+    "action_contract.py",
+    "active_policy.py",
+    "bgc_policy.py",
+    "bgc_policy_model.py",
+    "bridge.py",
+    "cards.py",
+    "engine.py",
+    "engine_dealing.py",
+    "engine_serialization.py",
+    "engine_types.py",
+    "engine_validation.py",
+    "policy_observation.py",
+    "production_logging.py",
+    "randomness.py",
+    "scoring.py",
+    "strategic_actions.py",
+)
+RUNTIME_API_MODULES = (
+    "__init__.py",
+    "bedrock.py",
+    "contracts.py",
+    "narration.py",
+    "policy.py",
+    "presentation.py",
+    "production.py",
+    "production_config.py",
+    "stateless_app.py",
+    "stateless_contracts.py",
+    "stateless_http.py",
+    "stateless_projection.py",
+    "stateless_routes.py",
+    "stateless_service.py",
+)
+RUNTIME_SEARCH_MODULES = ("__init__.py", "information.py", "symmetry.py")
+
 
 class ReleaseBuildError(ValueError):
     """The release context cannot be constructed without ambiguity."""
@@ -58,6 +95,25 @@ def _copy_tree(source: Path, destination: Path) -> None:
             ".DS_Store",
         ),
     )
+
+
+def _copy_runtime_source(source_root: Path, destination_root: Path) -> None:
+    """Copy the production import closure without training or local API code."""
+
+    source_package = source_root / "dracula"
+    destination_package = destination_root / "dracula"
+    for relative_directory, modules in (
+        (Path(), RUNTIME_MODULES),
+        (Path("api"), RUNTIME_API_MODULES),
+        (Path("search"), RUNTIME_SEARCH_MODULES),
+    ):
+        destination = destination_package / relative_directory
+        destination.mkdir(parents=True, exist_ok=True)
+        for module in modules:
+            source = source_package / relative_directory / module
+            if not source.is_file():
+                raise ReleaseBuildError(f"required runtime module is absent: {source}")
+            shutil.copy2(source, destination / module)
 
 
 def _manifest_files(root: Path) -> list[dict[str, object]]:
@@ -107,7 +163,7 @@ def build_context(root: Path, artifact: Path, output: Path) -> dict[str, object]
                 raise ReleaseBuildError(f"required container file is absent: {source}")
             shutil.copy2(source, temporary / name)
         shutil.copy2(root / "pyproject.toml", temporary / "pyproject.toml")
-        _copy_tree(root / "src", temporary / "src")
+        _copy_runtime_source(root / "src", temporary / "src")
         (temporary / "artifacts").mkdir()
         shutil.copy2(artifact, temporary / "artifacts" / "pi1.pt")
 

@@ -587,7 +587,7 @@ class GameplayService:
                     player=opponent,
                     round_number=state.round_number,
                     turn_kind=context.kind,
-                    policy_input=context.input,
+                    policy_input=None,
                     action_table=context.action_table,
                     information_state=information_state,
                     hidden_state=claimed.policy_session.hidden_state,

@@ -58,6 +58,10 @@ def test_release_context_contains_only_verified_selected_artifact(tmp_path: Path
     assert not (output / "tests").exists()
     assert not tuple(output.rglob("*.sqlite3"))
     assert not tuple(output.rglob("__pycache__"))
+    assert not (output / "src/dracula/bgc_policy_training.py").exists()
+    assert not (output / "src/dracula/bgc_policy_migration.py").exists()
+    assert not (output / "src/dracula/api/service.py").exists()
+    assert (output / "src/dracula/api/production.py").is_file()
     assert json.loads((output / "release-manifest.json").read_text()) == manifest
 
 

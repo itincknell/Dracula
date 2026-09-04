@@ -13,7 +13,7 @@ import torch
 from torch import Tensor
 
 from dracula.cards import CARD_IDS
-from dracula.sam_policy import (
+from dracula.action_contract import (
     DESTINATION_SYMMETRY_SCHEMA_VERSION,
     REPRESENTATIVE_MASK_SCHEMA_VERSION,
 )

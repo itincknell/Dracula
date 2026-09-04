@@ -11,6 +11,10 @@ from dracula.engine import EnginePlayer
 HIDDEN_STATE_BYTES = 128 * 4
 
 
+class PolicyContractError(ValueError):
+    """A configured policy request or response violates its boundary."""
+
+
 def zero_hidden_state() -> bytes:
     """Return the fixed empty recurrent state required by compatibility callers."""
 

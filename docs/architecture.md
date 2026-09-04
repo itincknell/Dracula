@@ -44,8 +44,7 @@ The refactored Python runtime has explicit, cycle-free owners:
   `engine_dealing`, `scoring`, `engine_validation`, and
   `engine_serialization` respectively.
 - `search.information` owns actor-visible state and fingerprints;
-  `search.determinization` owns private hidden-world reconstruction used only
-  by search controllers.
+  `search.symmetry` owns the exhaustive early-turn destination table.
 - `strategic_actions` owns strategic groups and deterministic concrete-member
   choice. `action_contract` owns representative masks, proxy mapping, and
   standalone output resolution.
@@ -60,9 +59,9 @@ The refactored Python runtime has explicit, cycle-free owners:
 - `api.narration` owns grounded cue construction and failure isolation while
   `api.bedrock` owns provider transport.
 
-Maintained code imports these owner modules directly. `dracula.engine`,
-`dracula.search`, and historical model/search modules retain narrow
-compatibility exports for existing callers and sealed-artifact readers.
+Maintained code imports these owner modules directly. The only retained model
+compatibility code is the verified reader for the sealed 659-bit `pi1`
+training corpus.
 
 The frontend follows the same separation:
 
@@ -159,8 +158,9 @@ The word `unaccepted` is historical training nomenclature; the user has now
 selected this exact artifact for production. The release build copies and
 verifies it inside the Lambda image.
 
-Nested Sam, BGC controllers, `pi0`, PPO, response rankers, and hybrid search are
-explicit historical or diagnostic controls. They are not production fallbacks.
+Nested search, BGC controllers, `pi0`, PPO, response rankers, and hybrid search
+are historical evidence only. Their executable implementations are not part of
+the installed application.
 
 ## Narrator scheduling
 
@@ -204,11 +204,9 @@ model, prompt, controller, or engine operation.
 
 ## Local architecture
 
-SQLite and the existing session-oriented API remain useful local development
-and historical test infrastructure. They are not the production persistence
-design. In-memory repositories remain unit-test fixtures. The final sprint adds
-the stateless routes and replay cache without deleting the validated local
-engine, transaction, or recovery tests.
+SQLite and the session-oriented API remain narrowly isolated local-development
+and historical-record infrastructure. The normal local preview uses the same
+stateless routes and replay cache as production.
 
 ## Required invariants
 

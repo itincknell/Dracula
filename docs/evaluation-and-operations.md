@@ -70,10 +70,9 @@ game, expected traffic, and a bounded abuse case.
 
 ## Local development
 
-Local FastAPI continues to use SQLite for existing development, transaction,
-and gameplay-record tests. That local repository is not a production adapter.
-The default local preview selects the exact `pi1` artifact. Nested Sam and other
-controllers require explicit comparison commands and never act as fallbacks.
+The normal local preview uses the stateless API and exact `pi1` artifact.
+SQLite remains only for explicit historical-record inspection and the retained
+local-stateful compatibility tests; it is not a production adapter.
 
 ```bash
 make dev

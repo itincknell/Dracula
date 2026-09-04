@@ -15,12 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dracula-belief-greedy-miner = "dracula.belief_greedy_miner:main"
-dracula-bgc-policy-evaluation = "dracula.bgc_policy_evaluation:main"
 dracula-bgc-policy-training = "dracula.bgc_policy_training:main"
-dracula-bgc-pi0-miner = "dracula.bgc_pi0_miner:main"
-dracula-sam-miner = "dracula.sam_miner:main"
-dracula-sam-policy-training = "dracula.sam_policy_training:main"
 
 [project.optional-dependencies]
 test = [
