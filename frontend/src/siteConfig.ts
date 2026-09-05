@@ -1,3 +1,8 @@
+/**
+ * Resolves navigation links for local development and the deployed Pages path.
+ * Build-time values may replace defaults, while callers receive one stable set
+ * of home, rules, about, and contact destinations.
+ */
 export interface SiteLinks {
   home: string;
   rules: string;

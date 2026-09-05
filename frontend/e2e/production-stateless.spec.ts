@@ -1,3 +1,8 @@
+/**
+ * Exercises the built frontend against a production-shaped stateless server.
+ * Browser tests cover complete play, reload recovery, responsive layout, and
+ * public asset/API configuration across desktop and mobile viewports.
+ */
 import { expect, test, type Page } from "@playwright/test";
 
 interface Envelope {

@@ -1,54 +1,41 @@
-"""Standalone runtime for the selected production policy artifact."""
+"""Adapt the selected standalone policy to live gameplay decisions.
+
+The runtime loads one verified artifact, performs actor-visible masked inference,
+resolves paired destinations deterministically, and returns one legal action
+through the shared gameplay-policy boundary.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import torch
-
+from dracula.action_contract import POLICY_DESTINATION_SCOPE
 from dracula.api.policy import (
+    PolicyContractError,
     PolicyDescriptor,
     PolicyTurnRequest,
     PolicyTurnResult,
 )
-from dracula.bgc_policy import (
-    BGC_POLICY_CANDIDATE_STATUS,
-    load_bgc_policy_artifact,
-)
-from dracula.bgc_policy_model import (
-    BGCPolicyModel,
-)
-from dracula.api.policy import PolicyContractError
+from dracula.bgc_policy import load_bgc_policy_artifact
+from dracula.bgc_policy_model import BGCPolicyModel
+from dracula.policy_observation import select_policy_group
 from dracula.randomness import derive_seed
-from dracula.action_contract import (
-    INFERENCE_DESTINATION_SCOPE,
-    build_representative_action_projection,
-    select_representative_action,
-)
 from dracula.search.information import (
     INFORMATION_STATE_SCHEMA_VERSION,
     SearchInformationState,
     information_state_fingerprint,
 )
-from dracula.policy_observation import (
-    candidate_action_tensor,
-    encode_policy_observation,
-    engine_action_index_from_candidate,
-)
 from dracula.strategic_actions import (
     derive_strategic_destination_choice_seed,
     select_concrete_action_index,
-    strategic_action_groups,
 )
 
-# The literal predates pi1; changing it would change deterministic paired moves.
+# The selected artifact's validated paired-destination behavior depends on this
+# exact seed namespace.
 ACTIVE_POLICY_REQUEST_NAMESPACE = "dracula-pi0-standalone-request-v1"
-ACTIVE_POLICY_IDENTITY = "standalone-policy-v1"
 ACTIVE_POLICY_ACTION_SCHEMA_VERSION = "dracula-action-map-v1"
 ACTIVE_POLICY_STATE_SCHEMA_VERSION = "stateless-v1"
 LOGGER = logging.getLogger("uvicorn.error")
@@ -56,7 +43,7 @@ LOGGER = logging.getLogger("uvicorn.error")
 
 @dataclass(frozen=True, slots=True)
 class ActivePolicyDecision:
-    """Selected proxy, resolved legal action, and measured inference latency."""
+    """Selected proxy, resolved legal action, and complete decision latency."""
 
     representative_action_index: int
     concrete_action_index: int
@@ -71,19 +58,9 @@ class ActivePolicyRuntime:
         model: BGCPolicyModel,
         *,
         artifact_digest: str,
-        artifact_identity: str,
     ) -> None:
-        if not isinstance(model, BGCPolicyModel):
-            raise ValueError("active policy requires BGCPolicyModel")
-        if len(artifact_digest) != 64 or any(
-            character not in "0123456789abcdef" for character in artifact_digest
-        ):
-            raise ValueError("active policy artifact digest is invalid")
-        if not artifact_identity:
-            raise ValueError("active policy artifact identity is invalid")
         self.model = model.cpu().eval().requires_grad_(False)
         self.artifact_digest = artifact_digest
-        self.artifact_identity = artifact_identity
 
     @classmethod
     def from_artifact(cls, path: str | Path) -> ActivePolicyRuntime:
@@ -91,14 +68,9 @@ class ActivePolicyRuntime:
 
         artifact_path = Path(path).expanduser().resolve()
         loaded = load_bgc_policy_artifact(artifact_path)
-        # Training artifacts retain their candidate marker; production approval
-        # is the separately pinned release digest, not a mutation of the file.
-        if loaded.metadata.candidate_status != BGC_POLICY_CANDIDATE_STATUS:
-            raise ValueError("active policy input must be an unaccepted candidate")
         return cls(
             loaded.model,
-            artifact_digest=hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
-            artifact_identity=loaded.metadata.state_dict_digest,
+            artifact_digest=loaded.artifact_digest,
         )
 
     def decide(
@@ -107,30 +79,12 @@ class ActivePolicyRuntime:
         *,
         fixture_id: str,
         decision_index: int,
-        should_stop: Callable[[], bool] | None = None,
     ) -> ActivePolicyDecision:
         """Run one actor-visible inference and resolve its paired destination."""
 
-        if should_stop is not None and should_stop():
-            raise InterruptedError("active policy inference interrupted")
         started = time.perf_counter()
-        engine_legal_mask = torch.tensor(information.legal_mask, dtype=torch.bool)
-        # Symmetry supplies one proxy per strategic group in engine-slot rows;
-        # candidate rows are then derived from current-card membership.
-        groups = strategic_action_groups(information, True)
-        projection = build_representative_action_projection(
-            engine_legal_mask, groups
-        )
-        observation = encode_policy_observation(information)
-        compact_mask = candidate_action_tensor(information, projection.mask)
-        with torch.inference_mode():
-            logits = self.model(observation)
-        compact_representative = select_representative_action(logits, compact_mask)
-        if not isinstance(compact_representative, int):
-            raise ValueError("single-state active policy returned batched selection")
-        representative = engine_action_index_from_candidate(
-            information, compact_representative
-        )
+        selected_group = select_policy_group(self.model, information)
+        representative = selected_group.representative_action_index
         # Concrete paired placement uses a separate deterministic stream, so it
         # cannot alter which strategic group the model selected.
         request_seed = derive_seed(
@@ -141,16 +95,14 @@ class ActivePolicyRuntime:
             str(decision_index),
         )
         concrete = select_concrete_action_index(
-            information,
-            representative,
+            selected_group,
             derive_strategic_destination_choice_seed(
                 request_seed,
-                INFERENCE_DESTINATION_SCOPE,
+                POLICY_DESTINATION_SCOPE,
                 information,
-                representative,
+                selected_group,
                 0,
             ),
-            True,
         )
         return ActivePolicyDecision(
             representative_action_index=representative,
@@ -164,10 +116,7 @@ class ActivePolicyExecutor:
 
     def __init__(self, artifact_path: str | Path) -> None:
         self.policy = ActivePolicyRuntime.from_artifact(artifact_path)
-
-    @property
-    def descriptor(self) -> PolicyDescriptor:
-        return PolicyDescriptor(
+        self._descriptor = PolicyDescriptor(
             policy_id="standalone-bgc-policy",
             policy_version="dracula-standalone-bgc-policy-v1",
             artifact_id=f"sha256:{self.policy.artifact_digest}",
@@ -177,6 +126,10 @@ class ActivePolicyExecutor:
             hidden_state_schema_version=ACTIVE_POLICY_STATE_SCHEMA_VERSION,
             inference_profile="representative-argmax-v1",
         )
+
+    @property
+    def descriptor(self) -> PolicyDescriptor:
+        return self._descriptor
 
     def invoke(self, request: PolicyTurnRequest) -> PolicyTurnResult:
         if request.policy != self.descriptor:
@@ -198,8 +151,13 @@ class ActivePolicyExecutor:
             decision_index=request.turn_number,
         )
         selected = decision.concrete_action_index
-        if selected >= len(request.action_table) or request.action_table[selected] is None:
-            raise PolicyContractError("policy selected an action outside service legality")
+        if (
+            selected >= len(request.action_table)
+            or request.action_table[selected] is None
+        ):
+            raise PolicyContractError(
+                "policy selected an action outside service legality"
+            )
         LOGGER.info(
             (
                 "standalone-policy turn artifact_sha256=%s game_id=%s "

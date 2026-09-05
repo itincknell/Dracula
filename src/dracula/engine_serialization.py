@@ -1,9 +1,15 @@
-"""Canonical private engine serialization and state fingerprints."""
+"""Serialize and restore complete private engine states canonically.
+
+This format supports trusted local persistence and deterministic fingerprints.
+Its output contains hidden game data and must never become a public response.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
+from typing import Any
 
 from dracula.cards import CARD_SCHEMA_VERSION
 from dracula.engine_types import (
@@ -13,7 +19,10 @@ from dracula.engine_types import (
     EnginePlayer,
     EngineRoundResult,
     EngineState,
+    EngineStatus,
+    LineOrientation,
     LineScore,
+    MultiplierReason,
     PlayerValues,
 )
 from dracula.engine_validation import validate_state
@@ -107,8 +116,84 @@ def canonical_state_data(state: EngineState) -> dict[str, object]:
     }
 
 
+def _played_move_from_data(value: Mapping[str, Any]) -> EnginePlayedMove:
+    return EnginePlayedMove(
+        player=EnginePlayer(value["player"]),
+        card_id=str(value["card_id"]),
+        hand_slot=int(value["hand_slot"]),
+        global_grid_index=int(value["global_grid_index"]),
+        turn_number=int(value["turn_number"]),
+    )
+
+
+def _line_score_from_data(value: Mapping[str, Any]) -> LineScore:
+    return LineScore(
+        orientation=LineOrientation(value["orientation"]),
+        line_index=int(value["line_index"]),
+        cards=tuple(value["cards"]),  # type: ignore[arg-type]
+        values=tuple(int(item) for item in value["values"]),  # type: ignore[arg-type]
+        base_value=int(value["base_value"]),
+        multiplier=int(value["multiplier"]),
+        multiplier_reason=MultiplierReason(value["multiplier_reason"]),
+        total=int(value["total"]),
+    )
+
+
+def _player_values_from_data(
+    value: Mapping[str, Any], decode: Any
+) -> PlayerValues[Any]:
+    return PlayerValues(queen=decode(value["queen"]), king=decode(value["king"]))
+
+
+def _round_result_from_data(value: Mapping[str, Any]) -> EngineRoundResult:
+    return EngineRoundResult(
+        round_number=int(value["round_number"]),
+        dealer=EnginePlayer(value["dealer"]),
+        coffin=tuple(value["coffin"]),  # type: ignore[arg-type]
+        moves=tuple(_played_move_from_data(item) for item in value["moves"]),
+        line_scores=_player_values_from_data(
+            value["line_scores"],
+            lambda lines: tuple(_line_score_from_data(line) for line in lines),
+        ),
+        round_scores=_player_values_from_data(value["round_scores"], int),
+    )
+
+
+def engine_state_from_data(value: Mapping[str, Any]) -> EngineState:
+    """Decode and fully validate a canonical private engine-state mapping."""
+
+    state = EngineState(
+        seed=str(value["seed"]),
+        status=EngineStatus(value["status"]),
+        round_number=int(value["round_number"]),
+        dealer=EnginePlayer(value["dealer"]),
+        active_player=(
+            None
+            if value["active_player"] is None
+            else EnginePlayer(value["active_player"])
+        ),
+        stock=tuple(value["stock"]),
+        hands=_player_values_from_data(value["hands"], lambda hand: tuple(hand)),
+        coffin=tuple(value["coffin"]),  # type: ignore[arg-type]
+        current_round_moves=tuple(
+            _played_move_from_data(item) for item in value["current_round_moves"]
+        ),
+        pending_round_result=(
+            None
+            if value["pending_round_result"] is None
+            else _round_result_from_data(value["pending_round_result"])
+        ),
+        completed_rounds=tuple(
+            _round_result_from_data(item) for item in value["completed_rounds"]
+        ),
+        total_scores=_player_values_from_data(value["total_scores"], int),
+    )
+    validate_state(state)
+    return state
+
+
 def canonical_state_json(state: EngineState) -> str:
-    """Serialize the complete private state with compatibility-stable field order."""
+    """Serialize the complete private state with fingerprint-stable field order."""
 
     # Dictionary insertion order is part of the fingerprint contract.
     return json.dumps(

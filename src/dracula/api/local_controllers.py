@@ -1,4 +1,8 @@
-"""Explicit selection of the production policy for local gameplay."""
+"""Resolve explicitly named opponent controllers for local gameplay.
+
+The selected standalone policy is loaded from its configured artifact path.
+Unknown or unavailable controllers fail rather than falling back silently.
+"""
 
 from __future__ import annotations
 

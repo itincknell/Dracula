@@ -1,26 +1,35 @@
-"""Amazon Bedrock Runtime transport for grounded Dracula narration."""
+"""Send bounded grounded-narration requests to Amazon Bedrock Runtime.
+
+The adapter builds the Nova request payload, applies timeout and output limits,
+parses plain text defensively, and reports failures without affecting gameplay.
+"""
 
 from __future__ import annotations
 
 import math
 import os
 import time
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from dracula.api.narration import (
     BEDROCK_MODEL_ID_ENV,
     BEDROCK_REGION_ENV,
     DEFAULT_NARRATION_MAX_TOKENS,
     DEFAULT_NARRATION_TIMEOUT_SECONDS,
-    MAX_NARRATION_CHARACTERS,
     NARRATION_MAX_TOKENS_ENV,
     NARRATION_TIMEOUT_SECONDS_ENV,
-    BedrockRuntimeClient,
     NarrationConfigurationError,
     NarrationPrompt,
     NarrationProviderError,
     NarrationProviderResult,
+    validate_narration_text,
 )
+
+
+class BedrockRuntimeClient(Protocol):
+    """Narrow portion of the AWS Bedrock client consumed by the adapter."""
+
+    def converse(self, **kwargs: object) -> Mapping[str, object]: ...
 
 
 def parse_bedrock_text(
@@ -47,13 +56,10 @@ def parse_bedrock_text(
     except (KeyError, TypeError) as error:
         raise NarrationProviderError("Bedrock returned malformed narration") from error
 
-    cleaned = text.strip()
-    if (
-        not cleaned
-        or len(cleaned) > MAX_NARRATION_CHARACTERS
-        or any(ord(character) < 32 and character not in "\n\t" for character in cleaned)
-    ):
-        raise NarrationProviderError("Bedrock returned invalid narration text")
+    try:
+        cleaned = validate_narration_text(text)
+    except NarrationProviderError as error:
+        raise NarrationProviderError("Bedrock returned invalid narration text") from error
 
     usage = response.get("usage")
     input_tokens: int | None = None

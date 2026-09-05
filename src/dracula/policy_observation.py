@@ -1,12 +1,31 @@
-"""Direct player-visible observation and compact action mappings for pi1."""
+"""Encode player-visible state and translate model actions into engine moves.
+
+The engine stores the four dealt cards in slots 0–3. Playing a card empties its
+original slot, so a remaining hand might be ``(None, card B, None, card D)``.
+The model does not attach meaning to those permanent slot numbers. It packs the
+remaining cards in canonical card-ID order instead:
+
+``model row 0 -> card B -> engine slot 1``
+``model row 1 -> card D -> engine slot 3``
+``model rows 2 and 3 -> unused padding``
+
+Each row contains scores for eight destinations. The engine and model therefore
+both use a ``[4, 8]`` action array, but their rows can identify different card
+locations. This module performs that conversion in both directions.
+"""
 
 from __future__ import annotations
 
 import torch
 from torch import Tensor
 
+from dracula.action_contract import (
+    build_representative_action_mask,
+    select_representative_action,
+)
 from dracula.bgc_policy_model import (
     ACTION_COUNT,
+    BGCPolicyModel,
     COFFIN_POSITION_COUNT,
     COFFIN_START,
     CONTEXT_FEATURES,
@@ -19,6 +38,11 @@ from dracula.bgc_policy_model import (
 )
 from dracula.cards import CARD_COUNT, CARD_INDEX_BY_ID
 from dracula.search.information import SearchInformationState
+from dracula.strategic_actions import (
+    StrategicActionGroup,
+    strategic_action_groups,
+    strategic_group_for_representative,
+)
 
 ROUND_COUNT = 6
 PROGRESS_COUNT = 4
@@ -27,6 +51,9 @@ UNSEEN_START = IN_HAND_START + CARD_COUNT
 ROUND_START = CONTEXT_START
 PROGRESS_START = ROUND_START + ROUND_COUNT
 DEALER_INDEX = PROGRESS_START + PROGRESS_COUNT
+
+if DEALER_INDEX + 1 != OBSERVATION_SIZE or CONTEXT_FEATURES != 11:
+    raise RuntimeError("policy observation constants do not match the model input")
 
 
 class PolicyObservationError(ValueError):
@@ -58,78 +85,95 @@ def encode_policy_observation(information: SearchInformationState) -> Tensor:
     observation[ROUND_START + information.round_number - 1] = True
     observation[PROGRESS_START + own_decision_index] = True
     observation[DEALER_INDEX] = information.player is information.dealer
-    if observation.shape != (OBSERVATION_SIZE,) or CONTEXT_FEATURES != 11:
-        raise PolicyObservationError("pi1 observation layout differs")
     return observation
 
 
-def _candidate_slots(information: SearchInformationState) -> tuple[int, ...]:
-    """Map canonical current-card rows to the state's stable engine slots."""
+def _engine_slots_for_model_rows(
+    information: SearchInformationState,
+) -> tuple[int, ...]:
+    """Return the stable engine slot represented by each packed model row."""
 
-    slots = tuple(
-        slot for slot, card_id in enumerate(information.own_hand) if card_id is not None
+    engine_slots = tuple(
+        engine_slot
+        for engine_slot, card_id in enumerate(information.own_hand)
+        if card_id is not None
     )
-    if not 1 <= len(slots) <= HAND_CANDIDATE_COUNT:
-        raise PolicyObservationError("active information has no current card")
-    # Engine hands retain fixed card-ID order, so occupied slots already have
-    # the exact canonical order used by candidate_card_indices.
-    return slots
+    # The original hand is sorted once when dealt. Removing played cards leaves
+    # the occupied engine slots in the same card-ID order used by model rows.
+    return engine_slots
 
 
-def candidate_action_tensor(
-    information: SearchInformationState, values: Tensor
+def pack_action_rows_for_model(
+    information: SearchInformationState, engine_slot_values: Tensor
 ) -> Tensor:
-    """Relabel engine-slot action rows as canonical current-card rows."""
+    """Pack action data from stable engine-slot rows into model candidate rows.
 
-    if not isinstance(values, Tensor) or values.shape != (
+    For an engine hand ``(card, None, card, None)``, engine rows 0 and 2 become
+    model rows 0 and 1; model rows 2 and 3 remain zero padding.
+    """
+
+    if not isinstance(engine_slot_values, Tensor) or engine_slot_values.shape != (
         HAND_CANDIDATE_COUNT,
         POLICY_POSITION_COUNT,
     ):
         raise PolicyObservationError("action tensor must have shape [4,8]")
-    result = torch.zeros_like(values)
-    for candidate_row, slot in enumerate(_candidate_slots(information)):
-        result[candidate_row] = values[slot]
-    return result
+    candidate_values = torch.zeros_like(engine_slot_values)
+    for candidate_row, engine_slot in enumerate(
+        _engine_slots_for_model_rows(information)
+    ):
+        candidate_values[candidate_row] = engine_slot_values[engine_slot]
+    return candidate_values
 
 
-def engine_action_index_from_candidate(
-    information: SearchInformationState, candidate_action_index: int
+def engine_action_index_from_model(
+    information: SearchInformationState, model_action_index: int
 ) -> int:
-    """Map a compact candidate action back to its legal engine-slot index."""
+    """Translate one flattened model action back to its stable engine slot."""
 
     if (
-        type(candidate_action_index) is not int
-        or not 0 <= candidate_action_index < ACTION_COUNT
+        type(model_action_index) is not int
+        or not 0 <= model_action_index < ACTION_COUNT
     ):
-        raise PolicyObservationError("candidate action index is invalid")
-    candidate_row, destination = divmod(
-        candidate_action_index, POLICY_POSITION_COUNT
-    )
-    slots = _candidate_slots(information)
-    if candidate_row >= len(slots):
-        raise PolicyObservationError("candidate action names a padding row")
-    return slots[candidate_row] * POLICY_POSITION_COUNT + destination
+        raise PolicyObservationError("model action index is invalid")
+    model_row, destination = divmod(model_action_index, POLICY_POSITION_COUNT)
+    engine_slots = _engine_slots_for_model_rows(information)
+    if model_row >= len(engine_slots):
+        raise PolicyObservationError("model action names a padding row")
+    engine_slot = engine_slots[model_row]
+    return engine_slot * POLICY_POSITION_COUNT + destination
 
 
-def candidate_action_index_from_engine(
-    information: SearchInformationState, engine_action_index: int
-) -> int:
-    """Map an engine-slot action to the corresponding current-card row."""
+def select_policy_group(
+    model: BGCPolicyModel,
+    information: SearchInformationState,
+) -> StrategicActionGroup:
+    """Select one legal strategic group from an actor-visible state.
 
-    if type(engine_action_index) is not int or not 0 <= engine_action_index < ACTION_COUNT:
-        raise PolicyObservationError("engine action index is invalid")
-    slot, destination = divmod(engine_action_index, POLICY_POSITION_COUNT)
-    try:
-        candidate_row = _candidate_slots(information).index(slot)
-    except ValueError as error:
-        raise PolicyObservationError("engine action names an empty hand slot") from error
-    return candidate_row * POLICY_POSITION_COUNT + destination
+    The representative mask is converted to model rows before masked argmax;
+    the selected action is then converted back to its engine-row group.
+    """
+
+    # Groups and this first mask use permanent engine hand-slot indexes.
+    groups = strategic_action_groups(information)
+    engine_mask = torch.tensor(information.legal_mask, dtype=torch.bool)
+    representative_mask = build_representative_action_mask(engine_mask, groups)
+
+    # The network's rows contain only the remaining cards, packed without holes.
+    model_mask = pack_action_rows_for_model(information, representative_mask)
+    with torch.inference_mode():
+        logits = model(encode_policy_observation(information))
+
+    model_action = select_representative_action(logits, model_mask)
+
+    # Convert the packed model row back to the engine slot used by the groups.
+    representative = engine_action_index_from_model(information, model_action)
+    return strategic_group_for_representative(groups, representative)
 
 
 __all__ = (
     "PolicyObservationError",
-    "candidate_action_index_from_engine",
-    "candidate_action_tensor",
     "encode_policy_observation",
-    "engine_action_index_from_candidate",
+    "engine_action_index_from_model",
+    "pack_action_rows_for_model",
+    "select_policy_group",
 )

@@ -1,3 +1,8 @@
+/**
+ * Implements the browser's HTTP client for the stateless gameplay API.
+ * It resolves local or production origins, sends recovery envelopes and
+ * commands, and validates every untrusted JSON response before returning it.
+ */
 import {
   assertNarrationResponse,
   assertStatelessApiErrorResponse,

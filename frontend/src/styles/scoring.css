@@ -1,3 +1,8 @@
+/*
+ * Styles scoring calculations, animation frames, and completed-round cards.
+ * The selectors preserve fixed alignment and reserved space while React moves
+ * through the deterministic scoring timeline.
+ */
 .scoring-presentation {
   z-index: 2;
   grid-column: 1 / -1;

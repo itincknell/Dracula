@@ -1,4 +1,8 @@
-"""Pure line, coffin, round, and game scoring rules."""
+"""Calculate Dracula scores from completed coffin arrangements.
+
+This module owns line arithmetic, Vampire behavior, multipliers, round totals,
+and game tie-breaking. Its functions are pure and do not advance engine state.
+"""
 
 from __future__ import annotations
 
@@ -128,6 +132,17 @@ def resolve_round_scores(
     return PlayerValues(queen=queen_sorted[selected_index], king=king_sorted[selected_index])
 
 
+def round_scores_from_lines(
+    line_scores: PlayerValues[tuple[LineScore, LineScore, LineScore]],
+) -> PlayerValues[int]:
+    """Resolve a round directly from its already-computed line scores."""
+
+    return resolve_round_scores(
+        tuple(line.total for line in line_scores.queen),
+        tuple(line.total for line in line_scores.king),
+    )
+
+
 def make_round_result(state: EngineState) -> EngineRoundResult:
     """Derive the auditable public result from a completed private round state."""
 
@@ -135,10 +150,7 @@ def make_round_result(state: EngineState) -> EngineRoundResult:
         raise MalformedState("a round result requires a completed coffin")
     coffin = state.coffin  # type: ignore[assignment]
     line_scores = score_coffin(coffin)
-    round_scores = resolve_round_scores(
-        tuple(line.total for line in line_scores.queen),
-        tuple(line.total for line in line_scores.king),
-    )
+    round_scores = round_scores_from_lines(line_scores)
     return EngineRoundResult(
         round_number=state.round_number,
         dealer=state.dealer,

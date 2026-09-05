@@ -1,3 +1,8 @@
+/**
+ * Verifies local defaults and build-time overrides for public navigation links.
+ * Tests keep the GitHub Pages subpath and personal-site destinations explicit
+ * without involving routing or network requests.
+ */
 import { describe, expect, it } from "vitest";
 
 import { resolveSiteLinks } from "./siteConfig";

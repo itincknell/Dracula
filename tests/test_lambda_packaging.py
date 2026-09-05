@@ -1,4 +1,8 @@
-"""Release-context, logging, and infrastructure contract checks."""
+"""Verify the Lambda build context and static deployment contracts.
+
+Tests protect the pinned policy digest, production import closure, exclusion of
+local artifacts, structured logging, infrastructure parameters, and workflows.
+"""
 
 from __future__ import annotations
 
@@ -73,26 +77,18 @@ def test_release_context_fails_closed_on_wrong_artifact(tmp_path: Path) -> None:
         builder.build_context(ROOT, wrong, tmp_path / "context")
 
 
-def test_release_context_tree_copy_ignores_generated_python_metadata(
+def test_release_context_cli_reports_an_absolute_output(
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     builder = _load_builder()
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (source / "__pycache__").mkdir()
-    (source / "__pycache__/module.pyc").write_bytes(b"generated")
-    (source / "package.egg-info").mkdir()
-    (source / "package.egg-info/PKG-INFO").write_text(
-        "generated\n", encoding="utf-8"
-    )
+    output = tmp_path / "context"
 
-    destination = tmp_path / "destination"
-    builder._copy_tree(source, destination)
+    assert builder.main(("--artifact", str(ARTIFACT), "--output", str(output))) == 0
 
-    assert (destination / "module.py").is_file()
-    assert not (destination / "__pycache__").exists()
-    assert not (destination / "package.egg-info").exists()
+    result = json.loads(capsys.readouterr().out)
+    assert result["output"] == output.as_posix()
+    assert result["artifact_sha256"] == EXPECTED_ARTIFACT_SHA256
 
 
 def test_release_source_filter_rejects_generated_python_metadata(

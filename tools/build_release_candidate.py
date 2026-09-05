@@ -1,4 +1,8 @@
-"""Seal a deterministic manifest for the locally validated production candidate."""
+"""Assemble the deterministic identity of a production release candidate.
+
+The manifest binds source, π1, frontend, container, infrastructure, dependencies,
+and validation evidence without deploying or publishing any resource.
+"""
 
 from __future__ import annotations
 

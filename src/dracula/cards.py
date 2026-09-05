@@ -1,4 +1,8 @@
-"""Canonical Dracula card definitions and indexes."""
+"""Define the immutable card set and its canonical ordering.
+
+The engine and model share these identifiers and indexes, so their order is a
+compatibility boundary for shuffling, serialization, and tensor encoding.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,8 @@
-"""Minimal JSON formatter for container stdout and CloudWatch ingestion."""
+"""Format production log records as compact structured JSON.
+
+The Lambda container writes these records to standard output for CloudWatch.
+Callers remain responsible for excluding seeds, histories, and private state.
+"""
 
 from __future__ import annotations
 

@@ -1,11 +1,14 @@
-"""Public projection boundary for replayed stateless engine state."""
+"""Convert reconstructed private engine state into the public game view.
+
+The projection exposes the human hand, public coffin, scores, phases, and legal
+human commands while withholding Dracula's hand and policy/search diagnostics.
+"""
 
 from __future__ import annotations
 
 from typing import Protocol
 
-from dracula.api.contracts import PlayerScore
-from dracula.api.presentation import phase_for_state, round_record
+from dracula.api.presentation import phase_for_state, player_score, round_record
 from dracula.api.stateless_contracts import (
     StatelessHumanGameView,
     StatelessLegalMove,
@@ -115,10 +118,7 @@ def project_stateless_game(game: PublicGameSource) -> StatelessHumanGameView:
         current_round_moves=tuple(_visible_move(move) for move in state.current_round_moves),
         pending_round_result=pending,
         completed_rounds=tuple(completed),
-        total_scores=PlayerScore(
-            human=state.total_scores[human_role],
-            opponent=state.total_scores[opponent],
-        ),
+        total_scores=player_score(state.total_scores, human_role),
         phase=phase_for_state(state, human_role),
         human_hand=state.hands[human_role],
         legal_moves=legal,

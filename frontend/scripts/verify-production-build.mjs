@@ -1,3 +1,8 @@
+/**
+ * Inspects the generated frontend distribution before publication.
+ * It verifies required entry files, the locked Pages base and API origin, and
+ * the absence of localhost references from production JavaScript and HTML.
+ */
 import { access, readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 

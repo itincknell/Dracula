@@ -1,3 +1,8 @@
+/**
+ * Verifies the pure scoring model and deterministic animation timeline.
+ * Tests protect arithmetic presentation, frame order, labels, and durations
+ * independently from React rendering and timers.
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -58,16 +63,13 @@ describe("deterministic scoring state machine", () => {
     expect(model.selection.rank).toBe(selectedRank);
   });
 
-  it("bypasses both narrator waits when narration is disabled", () => {
+  it("keeps narration outside the scoring timeline", () => {
     const model = createScoringModel(scoringRecord(), "queen");
-    const disabled = createScoringTimeline(model, false);
-    const enabled = createScoringTimeline(model, true);
-    expect(disabled.some((frame) => frame.kind === "narrator_wait")).toBe(false);
-    expect(enabled.filter((frame) => frame.kind === "narrator_wait")).toHaveLength(2);
+    expect(createScoringTimeline(model)).toHaveLength(49 + model.comparisons.length);
   });
 
   it("uses the same ordered information states with shorter reduced-motion timing", () => {
-    const timeline = createScoringTimeline(createScoringModel(scoringRecord(), "queen"), false);
+    const timeline = createScoringTimeline(createScoringModel(scoringRecord(), "queen"));
     const ordinaryKinds = timeline.map((frame) => frame.kind);
     const reducedKinds = [...timeline].map((frame) => frame.kind);
     expect(reducedKinds).toEqual(ordinaryKinds);

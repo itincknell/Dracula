@@ -1,3 +1,8 @@
+/*
+ * Styles the active game board, hand, coffin, Dracula bar, and cheat sheet.
+ * Rules here establish the approved desktop geometry before responsive.css
+ * supplies the corresponding narrow-layout overrides.
+ */
 .cheat-sheet-window {
   width: 100%;
   margin-top: 24px;

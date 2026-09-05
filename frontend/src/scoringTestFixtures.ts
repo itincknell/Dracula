@@ -1,11 +1,16 @@
-import gameViewFixture from "../../contracts/v1/human-game-view.json";
+/**
+ * Builds reusable public round records for scoring presentation tests.
+ * Central fixtures keep score arithmetic and phase shapes consistent while
+ * individual tests vary only the behavior they intend to exercise.
+ */
 import type {
-  HumanGameView,
   LineScore,
   Player,
   RoundRecord,
   ScoringStep,
-} from "./contracts";
+} from "./contractPrimitives";
+import type { HumanGameView } from "./gameView";
+import { testGameView } from "./testGameController";
 
 const coffin: RoundRecord["coffin"] = [
   "AC", "2D", "3S",
@@ -83,7 +88,6 @@ export interface ScoringFixtureOptions {
   selectedRank?: 1 | 2 | 3;
   thirdRankTied?: boolean;
   roundNumber?: number;
-  narrationEnabled?: boolean;
 }
 
 export function scoringRecord(options: ScoringFixtureOptions = {}): RoundRecord {
@@ -164,8 +168,7 @@ export function scoringView(options: ScoringFixtureOptions = {}): HumanGameView 
   const record = scoringRecord(options);
   const humanRole = options.humanRole ?? "queen";
   return {
-    ...(structuredClone(gameViewFixture) as unknown as HumanGameView),
-    version: 8,
+    ...testGameView(),
     status: "round_complete",
     round_number: record.round_number,
     turn_number: 8,
@@ -184,6 +187,5 @@ export function scoringView(options: ScoringFixtureOptions = {}): HumanGameView 
       next_step_index: 0,
       pending_narration_id: null,
     },
-    narration_enabled: options.narrationEnabled ?? false,
   };
 }

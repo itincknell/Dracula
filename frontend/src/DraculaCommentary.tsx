@@ -1,6 +1,11 @@
+/**
+ * Presents Dracula's portrait and progressively typed narration text.
+ * Portrait selection follows the public score state, while timers coordinate
+ * text reveal and preserve the approved static final-loss behavior.
+ */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { HumanGameView } from "./statefulContracts";
+import type { HumanGameView } from "./gameView";
 import type { NarrationState } from "./gameControllerContract";
 
 export type DraculaMood = "default" | "angrier" | "angriest" | "winning";
@@ -97,13 +102,6 @@ function CommentaryContents({
   dialogueKey: string;
 }) {
   const [mood, setMood] = useState<DraculaMood>("default");
-  const gameId = useRef(view.game_id);
-
-  useLayoutEffect(() => {
-    if (gameId.current === view.game_id) return;
-    gameId.current = view.game_id;
-    setMood("default");
-  }, [view.game_id]);
 
   const beginDialogue = () => {
     setMood(draculaMood(view));

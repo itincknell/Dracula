@@ -1,29 +1,29 @@
-"""Compatible FastAPI entry point for local and stateless gameplay."""
+"""Assemble explicitly selected local or stateless FastAPI applications.
+
+Local mode wires the SQLite session service; stateless mode wires replay-based
+production services. Configuration never silently switches between them.
+"""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from uuid import UUID
 
-from fastapi import FastAPI, Path as ApiPath, Query, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
-from dracula.api.contracts import (
-    API_VERSION,
-    ApiErrorResponse,
-    CreateGameRequest,
-    EventsResponse,
-    HealthResponse,
-    HumanGameView,
-    MoveRequest,
-    VersionedMutationRequest,
-)
+from dracula.api.contracts import API_VERSION
 from dracula.api.bedrock import BedrockRuntimeAdapter
 from dracula.api.local_controllers import resolve_local_controller
+from dracula.api.local_routes import configure_local_routes
 from dracula.api.narration import NarrationAdapter
-from dracula.api.policy import PolicyDescriptor, PolicyExecutor, ServiceResponse
+from dracula.api.policy import PolicyDescriptor, PolicyExecutor
+from dracula.api.production_config import (
+    DEFAULT_REPLAY_CACHE_ENTRIES,
+    NARRATION_ENABLED_ENV,
+    REPLAY_CACHE_ENTRIES_ENV,
+    boolean_environment,
+    nonnegative_integer_environment,
+)
 from dracula.api.repository import (
     GameRepository,
     InMemoryGameRepository,
@@ -34,21 +34,7 @@ from dracula.api.stateless_app import create_stateless_app
 
 LOCAL_GAME_SEED_ENV = "DRACULA_LOCAL_GAME_SEED"
 GAMEPLAY_MODE_ENV = "DRACULA_GAMEPLAY_MODE"
-REPLAY_CACHE_ENTRIES_ENV = "DRACULA_REPLAY_CACHE_ENTRIES"
 DEFAULT_GAMEPLAY_MODE = "local"
-DEFAULT_REPLAY_CACHE_ENTRIES = 256
-
-
-def _environment_flag(name: str, *, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be a boolean value")
 
 
 def _default_repository() -> GameRepository:
@@ -60,28 +46,11 @@ def _default_repository() -> GameRepository:
     return SQLiteGameRepository(database_path)
 
 
-def _nonnegative_integer_environment(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError as error:
-        raise ValueError(f"{name} must be a non-negative integer") from error
-    if value < 0:
-        raise ValueError(f"{name} must be a non-negative integer")
-    return value
-
-
 def _gameplay_mode(value: str | None) -> str:
     resolved = DEFAULT_GAMEPLAY_MODE if value is None else value.strip().lower()
     if resolved not in {"local", "stateless"}:
         raise ValueError(f"{GAMEPLAY_MODE_ENV} must be local or stateless")
     return resolved
-
-
-def _json(response: ServiceResponse) -> JSONResponse:
-    return JSONResponse(status_code=response.status_code, content=response.body)
 
 
 def create_app(
@@ -97,7 +66,7 @@ def create_app(
     """Assemble an explicitly selected local-stateful or stateless application."""
 
     resolved_narration = (
-        _environment_flag("DRACULA_NARRATION_ENABLED", default=False)
+        boolean_environment(NARRATION_ENABLED_ENV, False)
         if narration_enabled is None
         else narration_enabled
     )
@@ -115,7 +84,7 @@ def create_app(
         if repository is not None:
             raise ValueError("stateless gameplay cannot be configured with a repository")
         cache_entries = (
-            _nonnegative_integer_environment(
+            nonnegative_integer_environment(
                 REPLAY_CACHE_ENTRIES_ENV, DEFAULT_REPLAY_CACHE_ENTRIES
             )
             if replay_cache_entries is None
@@ -145,97 +114,11 @@ def create_app(
         game_seed_factory=(None if local_game_seed is None else lambda: local_game_seed),
     )
 
-    @application.exception_handler(RequestValidationError)
-    async def validation_error(
-        _request: Request, _error: RequestValidationError
-    ) -> JSONResponse:
-        body = ApiErrorResponse(
-            code="validation_error",
-            message="request did not match the API contract",
-            retryable=False,
-        )
-        return JSONResponse(status_code=422, content=body.model_dump(mode="json"))
-
-    @application.get("/health", response_model=HealthResponse)
-    def health() -> HealthResponse:
-        return HealthResponse(narration_enabled=resolved_narration)
-
-    @application.post(
-        "/games",
-        response_model=HumanGameView,
-        status_code=201,
-        responses={409: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
+    configure_local_routes(
+        application,
+        gameplay=application.state.gameplay_service,
+        narration_enabled=resolved_narration,
     )
-    def start_game(request: CreateGameRequest) -> JSONResponse:
-        return _json(application.state.gameplay_service.create_game(request))
-
-    @application.get(
-        "/games/{game_id}",
-        response_model=HumanGameView,
-        responses={404: {"model": ApiErrorResponse}},
-    )
-    def get_game(game_id: UUID) -> JSONResponse:
-        return _json(application.state.gameplay_service.get_game(game_id))
-
-    @application.post(
-        "/games/{game_id}/moves",
-        response_model=HumanGameView,
-        responses={
-            404: {"model": ApiErrorResponse},
-            409: {"model": ApiErrorResponse},
-            422: {"model": ApiErrorResponse},
-        },
-    )
-    def submit_move(game_id: UUID, request: MoveRequest) -> JSONResponse:
-        return _json(application.state.gameplay_service.human_move(game_id, request))
-
-    @application.post(
-        "/games/{game_id}/opponent-turn",
-        response_model=HumanGameView,
-        responses={
-            202: {"model": HumanGameView},
-            404: {"model": ApiErrorResponse},
-            409: {"model": ApiErrorResponse},
-            422: {"model": ApiErrorResponse},
-            503: {"model": ApiErrorResponse},
-        },
-    )
-    def opponent_turn(
-        game_id: UUID, request: VersionedMutationRequest
-    ) -> JSONResponse:
-        return _json(application.state.gameplay_service.opponent_turn(game_id, request))
-
-    @application.post(
-        "/games/{game_id}/rounds/{round_number}/advance",
-        response_model=HumanGameView,
-        responses={
-            404: {"model": ApiErrorResponse},
-            409: {"model": ApiErrorResponse},
-            422: {"model": ApiErrorResponse},
-        },
-    )
-    def advance_round(
-        game_id: UUID,
-        request: VersionedMutationRequest,
-        round_number: int = ApiPath(ge=1, le=6),
-    ) -> JSONResponse:
-        return _json(
-            application.state.gameplay_service.advance_round(
-                game_id, round_number, request
-            )
-        )
-
-    @application.get(
-        "/games/{game_id}/events",
-        response_model=EventsResponse,
-        responses={404: {"model": ApiErrorResponse}, 422: {"model": ApiErrorResponse}},
-    )
-    def get_events(
-        game_id: UUID, after_sequence: int = Query(default=0, ge=0)
-    ) -> JSONResponse:
-        return _json(
-            application.state.gameplay_service.get_events(game_id, after_sequence)
-        )
 
     return application
 

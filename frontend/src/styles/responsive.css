@@ -1,3 +1,8 @@
+/*
+ * Applies the approved narrow-container and mobile presentation overrides.
+ * These rules coordinate vertical ordering, reserved animation/dialogue space,
+ * card sizing, and overflow behavior without changing desktop defaults.
+ */
 @container game-layout (max-width: 899px) {
   .game-window { grid-template-columns: 1fr; min-height: auto; }
   .commentary-panel { grid-row: 1; grid-template-columns: 72px minmax(0, 1fr); grid-template-rows: var(--mobile-commentary-height); height: var(--mobile-commentary-height); border-left: 0; border-bottom: 2px solid #4b2730; }

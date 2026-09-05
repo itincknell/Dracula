@@ -1,4 +1,8 @@
-"""Deterministic mapping between engine moves and the policy action grid."""
+"""Translate between engine moves and the fixed policy action space.
+
+The bridge builds actor-relative legal action tables and maps their indexes
+back to concrete moves without exposing authoritative hidden engine state.
+"""
 
 from __future__ import annotations
 

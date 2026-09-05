@@ -1,3 +1,8 @@
+/**
+ * Verifies that every canonical card resolves to a real bundled image asset.
+ * The suite protects manifest completeness, readable naming, and file presence
+ * rather than testing browser image rendering.
+ */
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

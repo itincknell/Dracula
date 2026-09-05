@@ -1,4 +1,8 @@
-"""Public web API contract and import-boundary tests."""
+"""Verify shared public API models and application import boundaries.
+
+The tests protect public serialization, strict field handling, and side-effect-
+free imports without duplicating complete gameplay transaction coverage.
+"""
 
 from __future__ import annotations
 

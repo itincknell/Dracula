@@ -1,3 +1,8 @@
+/*
+ * Defines shared visual tokens, typography, page framing, and basic controls.
+ * Component-specific layout remains in the later stylesheets so this file owns
+ * the stable retro visual foundation used by every page and viewport.
+ */
 :root {
   --narrow-breakpoint: 900px;
   --minimum-card-size: 64px;

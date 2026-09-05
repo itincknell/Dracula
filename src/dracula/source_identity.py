@@ -1,4 +1,8 @@
-"""Git and authored-source identity used by reproducible training artifacts."""
+"""Identify the authored source tree used to produce training artifacts.
+
+The resulting Git revision and canonical file digest distinguish code identity
+from generated data, caches, and other ignored runtime material.
+"""
 
 from __future__ import annotations
 

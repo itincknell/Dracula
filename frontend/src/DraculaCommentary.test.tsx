@@ -1,17 +1,23 @@
 // @vitest-environment jsdom
 
+/**
+ * Verifies portrait selection, typed dialogue, and commentary timing.
+ * Fake timers isolate the approved transitions and final-loss portrait behavior
+ * from the rest of the gameplay and scoring presentation.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import gameViewFixture from "../../contracts/v1/human-game-view.json";
-import type { HumanGameView } from "./contracts";
+import type { HumanGameView } from "./gameView";
 import {
   currentDialogueIsVisible,
   DraculaCommentary,
   draculaMood,
   RetroDialogue,
 } from "./DraculaCommentary";
+import { testGameView } from "./testGameController";
 
 afterEach(() => {
   cleanup();
@@ -19,10 +25,7 @@ afterEach(() => {
 });
 
 function view(changes: Partial<HumanGameView> = {}): HumanGameView {
-  return {
-    ...(structuredClone(gameViewFixture) as unknown as HumanGameView),
-    ...changes,
-  };
+  return testGameView(undefined, changes);
 }
 
 describe("Dracula portrait state", () => {
@@ -206,7 +209,7 @@ describe("Dracula portrait state", () => {
       status: "game_complete",
       total_scores: { human: 104, opponent: 100 },
     });
-    const rendered = render(
+    let rendered = render(
       <DraculaCommentary
         view={finalLoss}
         narration={{ enabled: true, pending: false, messages: ["Impossible!"] }}
@@ -214,15 +217,15 @@ describe("Dracula portrait state", () => {
     );
 
     act(() => vi.advanceTimersByTime(34));
-    const portrait = rendered.container.querySelector(".portrait-placeholder");
+    let portrait = rendered.container.querySelector(".portrait-placeholder");
     expect(portrait).toHaveAttribute("data-mood", "angriest");
     expect(portrait).not.toHaveAttribute("data-animated");
 
-    rendered.rerender(
+    rendered.unmount();
+    rendered = render(
       <DraculaCommentary
         view={{
           ...finalLoss,
-          game_id: `${finalLoss.game_id}-next`,
           round_number: 1,
           status: "playing",
           total_scores: { human: 0, opponent: 0 },
@@ -230,6 +233,7 @@ describe("Dracula portrait state", () => {
         narration={{ enabled: true, pending: false, messages: ["Welcome."] }}
       />,
     );
+    portrait = rendered.container.querySelector(".portrait-placeholder");
     expect(portrait).toHaveAttribute("data-mood", "default");
     expect(portrait).not.toHaveAttribute("data-animated");
   });

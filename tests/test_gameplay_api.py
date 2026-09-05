@@ -1,4 +1,8 @@
-"""Lifecycle, transaction, and privacy tests for the local gameplay API."""
+"""Exercise local SQLite-backed gameplay transactions and public projections.
+
+The suite covers lifecycle commands, retries, repository conflicts, recorded
+sessions, policy calls, and exclusion of private engine state from responses.
+"""
 
 from __future__ import annotations
 
@@ -12,12 +16,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dracula.api.app import create_app
+from dracula.api.policy import PolicyDescriptor, PolicyTurnResult
 from dracula.api.repository import (
     GameRepository,
     InMemoryGameRepository,
     SQLiteGameRepository,
 )
-from dracula.api.service import PolicyDescriptor, PolicyTurnResult
 from dracula.engine import EnginePlayer, EngineStatus, legal_moves
 
 pytestmark = pytest.mark.filterwarnings(

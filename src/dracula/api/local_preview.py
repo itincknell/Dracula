@@ -1,4 +1,8 @@
-"""Production-shaped local preview with deterministic placeholder narration."""
+"""Run the production-shaped stateless app for local browser review.
+
+Gameplay uses the selected standalone policy, while narration uses deterministic
+grounded placeholder text so UI timing can be tested without calling Bedrock.
+"""
 
 from __future__ import annotations
 

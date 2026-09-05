@@ -1,10 +1,17 @@
-"""Versioned artifact and loss contract for BGC visit distillation."""
+"""Create and verify standalone BGC policy artifacts.
+
+Artifacts bind model weights to their tensor, action, symmetry, initialization,
+source, dataset, and training identities. Strict checks occur once at load time
+before the model enters ordinary inference.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import pickle
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
@@ -12,14 +19,11 @@ from typing import Mapping
 import torch
 from torch import Tensor
 
-from dracula.cards import CARD_IDS
-from dracula.action_contract import (
-    DESTINATION_SYMMETRY_SCHEMA_VERSION,
-    REPRESENTATIVE_MASK_SCHEMA_VERSION,
-)
+from dracula.action_contract import REPRESENTATIVE_MASK_SCHEMA_VERSION
 from dracula.bgc_policy_model import (
     ACTION_SCHEMA_VERSION,
     INITIALIZATION_SCHEMA_VERSION,
+    MODEL_SCHEMA_VERSION,
     OBSERVATION_SCHEMA_VERSION,
     PARAMETER_COUNT,
     POLICY_GRID_INDICES,
@@ -27,14 +31,17 @@ from dracula.bgc_policy_model import (
     BGCPolicyModelError,
     derive_policy_initialization,
 )
+from dracula.cards import CARD_IDS
+from dracula.search.symmetry import DESTINATION_SYMMETRY_SCHEMA_VERSION
 
-# Artifacts bind every model, tensor, loss, optimizer, and snapshot contract
-# needed to reject historical or incompatible policy files.
-BGC_POLICY_MODEL_SCHEMA_VERSION = "dracula-bgc-card-policy-v2"
+# The artifact format identifies serialization. The versions stored inside it
+# separately identify model compatibility and training provenance.
 BGC_POLICY_ARTIFACT_SCHEMA_VERSION = "dracula-bgc-card-policy-artifact-v2"
 BGC_POLICY_SNAPSHOT_SCHEMA_VERSION = "dracula-bgc-card-policy-snapshot-v2"
 BGC_POLICY_OPTIMIZER_VERSION = "dracula-bgc-card-policy-optimizer-v2"
 BGC_POLICY_LOSS_SCHEMA_VERSION = "dracula-bgc-visit-distribution-loss-v1"
+# Release selection pins the immutable artifact by file digest; the artifact's
+# training-time candidate status is not rewritten during deployment.
 BGC_POLICY_CANDIDATE_STATUS = "unaccepted"
 
 
@@ -70,14 +77,15 @@ class BGCPolicyArtifactMetadata:
 
 @dataclass(frozen=True, slots=True)
 class LoadedBGCPolicyArtifact:
-    """Verified model, metadata, and immutable training configuration."""
+    """Verified model, metadata, canonical configuration, and file identity."""
 
     model: BGCPolicyModel
     metadata: BGCPolicyArtifactMetadata
     training_configuration: dict[str, object]
+    artifact_digest: str
 
 
-def _state_dict_digest(state_dict: Mapping[str, Tensor]) -> str:
+def state_dict_digest(state_dict: Mapping[str, Tensor]) -> str:
     """Hash sorted tensor names, types, shapes, and contiguous CPU bytes."""
 
     digest = hashlib.sha256()
@@ -91,7 +99,7 @@ def _state_dict_digest(state_dict: Mapping[str, Tensor]) -> str:
 
 
 def _canonical_configuration(
-    configuration: Mapping[str, object],
+    configuration: object,
 ) -> tuple[dict[str, object], str]:
     """Round-trip a JSON configuration and return its canonical digest."""
 
@@ -174,7 +182,7 @@ def build_bgc_policy_artifact(
             "BGC policy parameters must be finite float32"
         )
     metadata = BGCPolicyArtifactMetadata(
-        model_schema_version=BGC_POLICY_MODEL_SCHEMA_VERSION,
+        model_schema_version=MODEL_SCHEMA_VERSION,
         artifact_schema_version=BGC_POLICY_ARTIFACT_SCHEMA_VERSION,
         observation_schema_version=OBSERVATION_SCHEMA_VERSION,
         action_schema_version=ACTION_SCHEMA_VERSION,
@@ -201,7 +209,7 @@ def build_bgc_policy_artifact(
             corpus_snapshot_digest, "corpus snapshot digest"
         ),
         dataset_digest=_require_digest(dataset_digest, "dataset digest"),
-        state_dict_digest=_state_dict_digest(state_dict),
+        state_dict_digest=state_dict_digest(state_dict),
     )
     return {
         "format_version": BGC_POLICY_ARTIFACT_SCHEMA_VERSION,
@@ -245,12 +253,22 @@ def save_bgc_policy_artifact(
         temporary.unlink(missing_ok=True)
 
 
-def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
-    """Load only an exact, finite, digest-consistent v2 policy artifact."""
+def _read_artifact_payload(path: str | Path) -> tuple[bytes, dict[str, object]]:
+    """Deserialize the four-field artifact envelope without trusting its contents."""
 
     try:
-        payload = torch.load(Path(path), map_location="cpu", weights_only=True)
-    except (OSError, RuntimeError, ValueError) as error:
+        artifact_bytes = Path(path).read_bytes()
+        payload = torch.load(
+            io.BytesIO(artifact_bytes), map_location="cpu", weights_only=True
+        )
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        EOFError,
+        IndexError,
+        pickle.UnpicklingError,
+    ) as error:
         raise BGCPolicyModelError(
             "BGC policy artifact could not be loaded"
         ) from error
@@ -263,6 +281,12 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
         raise BGCPolicyModelError("BGC policy artifact payload is invalid")
     if payload["format_version"] != BGC_POLICY_ARTIFACT_SCHEMA_VERSION:
         raise BGCPolicyModelError("BGC policy artifact format is incompatible")
+    return artifact_bytes, payload
+
+
+def _artifact_metadata(payload: Mapping[str, object]) -> BGCPolicyArtifactMetadata:
+    """Parse and verify the artifact's compatibility and provenance metadata."""
+
     raw_metadata = payload["metadata"]
     if (
         not isinstance(raw_metadata, dict)
@@ -275,10 +299,10 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
         raise BGCPolicyModelError(
             "BGC policy artifact metadata is invalid"
         ) from error
-    # Schema equality is deliberately exact: loading never guesses migrations
-    # for tensor layouts or training contracts.
-    expected = {
-        "model_schema_version": BGC_POLICY_MODEL_SCHEMA_VERSION,
+
+    # Tensor shapes alone cannot detect changed input or action semantics.
+    expected_metadata_values = {
+        "model_schema_version": MODEL_SCHEMA_VERSION,
         "artifact_schema_version": BGC_POLICY_ARTIFACT_SCHEMA_VERSION,
         "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "action_schema_version": ACTION_SCHEMA_VERSION,
@@ -293,7 +317,7 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
         "card_ids": CARD_IDS,
         "policy_grid_indices": POLICY_GRID_INDICES,
     }
-    for field, value in expected.items():
+    for field, value in expected_metadata_values.items():
         if getattr(metadata, field) != value:
             raise BGCPolicyModelError(
                 f"BGC policy artifact {field} is incompatible"
@@ -324,24 +348,45 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
         raise BGCPolicyModelError(
             "artifact initialization identity is inconsistent"
         )
+    return metadata
+
+
+def _artifact_configuration(
+    payload: Mapping[str, object],
+    metadata: BGCPolicyArtifactMetadata,
+) -> dict[str, object]:
+    """Verify the recorded training configuration against its digest."""
+
     configuration, config_digest = _canonical_configuration(
-        payload["training_configuration"]  # type: ignore[arg-type]
+        payload["training_configuration"]
     )
     if config_digest != metadata.training_config_digest:
         raise BGCPolicyModelError(
             "artifact training configuration digest differs"
         )
+    return configuration
+
+
+def _artifact_model(
+    payload: Mapping[str, object],
+    metadata: BGCPolicyArtifactMetadata,
+) -> BGCPolicyModel:
+    """Validate the serialized tensors and load them into the exact model shape."""
+
     model = BGCPolicyModel(
         run_root_seed=metadata.run_root_seed,
         model_id=metadata.model_id,
         initialization_ordinal=metadata.initialization_ordinal,
     )
-    state_dict = payload["state_dict"]
+    raw_state_dict = payload["state_dict"]
     expected_state = model.state_dict()
-    if not isinstance(state_dict, dict) or set(state_dict) != set(expected_state):
+    if not isinstance(raw_state_dict, dict) or set(raw_state_dict) != set(
+        expected_state
+    ):
         raise BGCPolicyModelError("artifact state-dict keys are incompatible")
+    state_dict: dict[str, Tensor] = {}
     for name, expected_tensor in expected_state.items():
-        value = state_dict[name]
+        value = raw_state_dict[name]
         if (
             not isinstance(value, Tensor)
             or value.device.type != "cpu"
@@ -352,7 +397,8 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
             raise BGCPolicyModelError(
                 f"artifact tensor is incompatible: {name}"
             )
-    if _state_dict_digest(state_dict) != metadata.state_dict_digest:
+        state_dict[name] = value
+    if state_dict_digest(state_dict) != metadata.state_dict_digest:
         raise BGCPolicyModelError("artifact state-dict digest differs")
     try:
         model.load_state_dict(state_dict, strict=True)
@@ -360,14 +406,28 @@ def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
         raise BGCPolicyModelError(
             "artifact state dict could not be loaded"
         ) from error
-    return LoadedBGCPolicyArtifact(model, metadata, configuration)
+    return model
+
+
+def load_bgc_policy_artifact(path: str | Path) -> LoadedBGCPolicyArtifact:
+    """Load one policy after verifying its envelope, metadata, and tensors."""
+
+    artifact_bytes, payload = _read_artifact_payload(path)
+    metadata = _artifact_metadata(payload)
+    configuration = _artifact_configuration(payload, metadata)
+    model = _artifact_model(payload, metadata)
+    return LoadedBGCPolicyArtifact(
+        model,
+        metadata,
+        configuration,
+        hashlib.sha256(artifact_bytes).hexdigest(),
+    )
 
 
 __all__ = (
     "BGC_POLICY_ARTIFACT_SCHEMA_VERSION",
     "BGC_POLICY_CANDIDATE_STATUS",
     "BGC_POLICY_LOSS_SCHEMA_VERSION",
-    "BGC_POLICY_MODEL_SCHEMA_VERSION",
     "BGC_POLICY_OPTIMIZER_VERSION",
     "BGC_POLICY_SNAPSHOT_SCHEMA_VERSION",
     "BGCPolicyArtifactMetadata",
@@ -375,4 +435,5 @@ __all__ = (
     "build_bgc_policy_artifact",
     "load_bgc_policy_artifact",
     "save_bgc_policy_artifact",
+    "state_dict_digest",
 )

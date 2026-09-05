@@ -1,4 +1,8 @@
-"""Deterministic shuffle, dealer selection, and round dealing."""
+"""Create deterministic decks and deal one Dracula round.
+
+The functions here preserve the game's packet order and canonical hand order.
+They return deal data but do not construct or mutate complete engine states.
+"""
 
 from __future__ import annotations
 

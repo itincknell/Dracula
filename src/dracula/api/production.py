@@ -1,4 +1,8 @@
-"""Explicit stateless ASGI entry point for the production Lambda runtime."""
+"""Create the stateless ASGI application used by the Lambda container.
+
+At process startup it loads production configuration, the pinned standalone
+policy, and the explicitly enabled narration adapter, then exposes FastAPI.
+"""
 
 from dracula.api.bedrock import BedrockRuntimeAdapter
 from dracula.api.production_config import ProductionSettings

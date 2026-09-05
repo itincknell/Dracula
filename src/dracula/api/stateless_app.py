@@ -1,4 +1,8 @@
-"""Assembly of the production-neutral stateless FastAPI application."""
+"""Assemble the production-neutral stateless FastAPI application.
+
+Explicit policy and narration dependencies are wired with CORS and request-body
+middleware. This assembly has no database or controller fallback.
+"""
 
 from __future__ import annotations
 

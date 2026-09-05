@@ -1,3 +1,8 @@
+/**
+ * Builds the deterministic presentation timeline for completed-round scoring.
+ * Pure functions derive line calculations, transitions, totals, and display
+ * durations without reading React state or changing authoritative game data.
+ */
 import type { LineScore, Player, RoundRecord, ScoringStep } from "./contractPrimitives";
 
 export interface PresentedLine {
@@ -54,7 +59,6 @@ export type ScoringFrame =
   | { kind: "multiplier_factor"; orientationIndex: 0 | 1; lineIndex: 0 | 1 | 2 }
   | { kind: "line_total"; orientationIndex: 0 | 1; lineIndex: 0 | 1 | 2 }
   | { kind: "orientation_ranked"; orientationIndex: 0 | 1 }
-  | { kind: "narrator_wait"; orientationIndex: 0 | 1 }
   | { kind: "orientation_handoff" }
   | { kind: "compare_rank"; comparisonIndex: number }
   | { kind: "select_round_score" }
@@ -69,7 +73,6 @@ export interface ScoringTiming {
   multiplierFactor: number;
   lineTotal: number;
   orientationRanked: number;
-  narratorWait: number;
   orientationHandoff: number;
   compareRank: number;
   selectRoundScore: number;
@@ -96,7 +99,6 @@ export const SCORING_TIMING: ScoringTiming = {
   multiplierFactor: atPlaybackRate(360),
   lineTotal: atPlaybackRate(460),
   orientationRanked: atPlaybackRate(650),
-  narratorWait: 1_500,
   orientationHandoff: atPlaybackRate(1_200),
   compareRank: atPlaybackRate(700),
   selectRoundScore: atPlaybackRate(800),
@@ -241,10 +243,7 @@ export function createScoringModel(
   };
 }
 
-export function createScoringTimeline(
-  model: ScoringPresentationModel,
-  narrationEnabled: boolean,
-): ScoringFrame[] {
+export function createScoringTimeline(model: ScoringPresentationModel): ScoringFrame[] {
   const frames: ScoringFrame[] = [{ kind: "entering" }];
   model.orientations.forEach((orientation, orientationIndexValue) => {
     const orientationIndex = orientationIndexValue as 0 | 1;
@@ -261,7 +260,6 @@ export function createScoringTimeline(
       );
     });
     frames.push({ kind: "orientation_ranked", orientationIndex });
-    if (narrationEnabled) frames.push({ kind: "narrator_wait", orientationIndex });
     if (orientationIndex === 0) frames.push({ kind: "orientation_handoff" });
   });
   model.comparisons.forEach((_comparison, comparisonIndex) => {
@@ -290,7 +288,6 @@ export function scoringFrameDuration(
     multiplier_factor: timing.multiplierFactor,
     line_total: timing.lineTotal,
     orientation_ranked: timing.orientationRanked,
-    narrator_wait: timing.narratorWait,
     orientation_handoff: timing.orientationHandoff,
     compare_rank: timing.compareRank,
     select_round_score: timing.selectRoundScore,

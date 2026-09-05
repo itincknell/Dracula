@@ -1,3 +1,8 @@
+/**
+ * Configures production-shaped browser tests for the built frontend.
+ * Playwright starts the deterministic stateless fixture and Vite preview with
+ * the selected local π1 artifact, then runs one serial desktop/mobile project.
+ */
 import { defineConfig } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

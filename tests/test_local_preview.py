@@ -1,4 +1,8 @@
-"""Local preview dialogue stays deterministic and grounded by cue facts."""
+"""Protect the deterministic narration used by the local browser preview.
+
+These focused tests verify that placeholder lines use supplied public cue facts
+and remain suitable for exercising the production frontend's dialogue timing.
+"""
 
 from __future__ import annotations
 

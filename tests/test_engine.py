@@ -1,4 +1,8 @@
-"""Rule, lifecycle, immutability, and replay tests for the game engine."""
+"""Exercise the complete deterministic game engine and its rule boundaries.
+
+Fixtures cover legal moves, immutable transitions, scoring, round advancement,
+complete games, serialization, and fixed replay results.
+"""
 
 from __future__ import annotations
 

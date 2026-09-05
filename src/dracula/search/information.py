@@ -1,16 +1,20 @@
-"""Immutable player-visible state used by the selected policy."""
+"""Project private engine state into an immutable actor-visible state.
+
+The projection retains public history and the acting player's own cards while
+erasing the opponent hand, stock order, engine seed, and sampled-world details.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import cast
 
 from dracula.bridge import (
     COFFIN_POSITION_COUNT,
     HAND_SLOT_COUNT,
     POLICY_GRID_INDICES,
-    action_index_for_move,
     player_relative_grid_index,
 )
 from dracula.cards import CARD_COUNT, CARD_IDS, CARD_INDEX_BY_ID, sort_card_ids
@@ -24,12 +28,14 @@ from dracula.engine import (
     EngineState,
     EngineStatus,
     PlayerValues,
-    legal_moves,
+    SimulationEngineState,
     other_player,
-    resolve_round_scores,
     score_coffin,
     validate_state,
 )
+from dracula.engine_types import empty_adjacent_grid_indices, orthogonally_adjacent
+from dracula.scoring import round_scores_from_lines
+
 # The schema literal and serialized field order define policy request identity.
 INFORMATION_STATE_SCHEMA_VERSION = "dracula-search-information-v1"
 
@@ -120,12 +126,6 @@ def _validate_card_ids(values: tuple[str, ...], label: str) -> None:
         raise InformationContractViolation(f"{label} contains duplicate cards")
 
 
-def _adjacent(first: int, second: int) -> bool:
-    first_row, first_column = divmod(first, 3)
-    second_row, second_column = divmod(second, 3)
-    return abs(first_row - second_row) + abs(first_column - second_column) == 1
-
-
 def _validate_public_moves(
     moves: tuple[PublicPlayedMove, ...],
     dealer: EnginePlayer,
@@ -158,20 +158,14 @@ def _validate_public_moves(
         grid_index = move.global_grid_index
         if type(grid_index) is not int or not 0 <= grid_index < COFFIN_POSITION_COUNT:
             raise InformationContractViolation("public move has an invalid position")
-        if grid_index in occupied or not any(_adjacent(grid_index, prior) for prior in occupied):
+        if grid_index in occupied or not any(
+            orthogonally_adjacent(grid_index, prior) for prior in occupied
+        ):
             raise InformationContractViolation("public move history is not a legal coffin growth")
         if coffin[grid_index] != move.card_id:
             raise InformationContractViolation("public move does not match the coffin")
         occupied.add(grid_index)
         seen_cards.add(move.card_id)
-
-
-def _round_scores(coffin: tuple[str, ...]) -> PlayerValues[int]:
-    lines = score_coffin(coffin)
-    return resolve_round_scores(
-        tuple(line.total for line in lines.queen),
-        tuple(line.total for line in lines.king),
-    )
 
 
 def _validate_public_round(record: PublicRoundRecord) -> None:
@@ -189,65 +183,82 @@ def _validate_public_round(record: PublicRoundRecord) -> None:
     _validate_public_moves(record.moves, record.dealer, record.coffin, complete=True)
     if record.coffin[CENTER_GRID_INDEX] in {move.card_id for move in record.moves}:
         raise InformationContractViolation("public round center cannot also be a move")
-    if record.round_scores != _round_scores(record.coffin):
+    if record.round_scores != round_scores_from_lines(
+        score_coffin(record.coffin)
+    ):
         raise InformationContractViolation("public round scores do not match its coffin")
 
 
 def _validate_public_history(history: PublicGameHistory) -> None:
     """Verify active lifecycle, archived rounds, totals, and public card uniqueness."""
 
-    if history.status is not EngineStatus.PLAYING:
+    _validate_public_history_fields(
+        status=history.status,
+        round_number=history.round_number,
+        dealer=history.dealer,
+        active_player=history.active_player,
+        total_scores=history.total_scores,
+        completed_rounds=history.completed_rounds,
+        current_coffin=history.current_coffin,
+        current_round_moves=history.current_round_moves,
+    )
+
+
+def _validate_public_history_fields(
+    *,
+    status: EngineStatus,
+    round_number: int,
+    dealer: EnginePlayer,
+    active_player: EnginePlayer,
+    total_scores: PlayerValues[int],
+    completed_rounds: tuple[PublicRoundRecord, ...],
+    current_coffin: tuple[str | None, ...],
+    current_round_moves: tuple[PublicPlayedMove, ...],
+) -> None:
+    """Validate public-history fields shared by both visible-state records."""
+
+    if status is not EngineStatus.PLAYING:
         raise InformationContractViolation("search information requires an active round")
-    if type(history.round_number) is not int or not 1 <= history.round_number <= ROUNDS_PER_GAME:
+    if type(round_number) is not int or not 1 <= round_number <= ROUNDS_PER_GAME:
         raise InformationContractViolation("current public round number is invalid")
-    if not isinstance(history.dealer, EnginePlayer) or not isinstance(
-        history.active_player, EnginePlayer
-    ):
+    if not isinstance(dealer, EnginePlayer) or not isinstance(active_player, EnginePlayer):
         raise InformationContractViolation("public roles are invalid")
-    if not isinstance(history.completed_rounds, tuple) or len(history.completed_rounds) != (
-        history.round_number - 1
-    ):
+    if not isinstance(completed_rounds, tuple) or len(completed_rounds) != round_number - 1:
         raise InformationContractViolation("completed public rounds do not match current round")
-    for index, record in enumerate(history.completed_rounds, start=1):
+    for index, record in enumerate(completed_rounds, start=1):
         _validate_public_round(record)
         if record.round_number != index:
             raise InformationContractViolation("completed public rounds are out of order")
         expected_dealer = (
-            history.dealer
-            if (history.round_number - index) % 2 == 0
-            else other_player(history.dealer)
+            dealer if (round_number - index) % 2 == 0 else other_player(dealer)
         )
         if record.dealer is not expected_dealer:
             raise InformationContractViolation("public dealer alternation is invalid")
     expected_totals = PlayerValues(
-        queen=sum(record.round_scores.queen for record in history.completed_rounds),
-        king=sum(record.round_scores.king for record in history.completed_rounds),
+        queen=sum(record.round_scores.queen for record in completed_rounds),
+        king=sum(record.round_scores.king for record in completed_rounds),
     )
-    if history.total_scores != expected_totals:
+    if total_scores != expected_totals:
         raise InformationContractViolation("public totals do not match completed rounds")
-    if not isinstance(history.current_coffin, tuple) or len(history.current_coffin) != (
-        COFFIN_POSITION_COUNT
-    ):
+    if not isinstance(current_coffin, tuple) or len(current_coffin) != COFFIN_POSITION_COUNT:
         raise InformationContractViolation("current public coffin must contain nine positions")
-    current_cards = _card_ids(history.current_coffin)
+    current_cards = _card_ids(current_coffin)
     _validate_card_ids(current_cards, "current public coffin")
-    if history.current_coffin[CENTER_GRID_INDEX] is None:
+    if current_coffin[CENTER_GRID_INDEX] is None:
         raise InformationContractViolation("current public coffin is missing its center")
     _validate_public_moves(
-        history.current_round_moves,
-        history.dealer,
-        history.current_coffin,
+        current_round_moves,
+        dealer,
+        current_coffin,
         complete=False,
     )
     expected_active = (
-        other_player(history.dealer)
-        if len(history.current_round_moves) % 2 == 0
-        else history.dealer
+        other_player(dealer) if len(current_round_moves) % 2 == 0 else dealer
     )
-    if history.active_player is not expected_active:
+    if active_player is not expected_active:
         raise InformationContractViolation("active player does not match public turn order")
 
-    public_cards = [card for record in history.completed_rounds for card in record.coffin]
+    public_cards = [card for record in completed_rounds for card in record.coffin]
     public_cards.extend(current_cards)
     if len(public_cards) != len(set(public_cards)):
         raise InformationContractViolation("public history reuses a physical card")
@@ -294,10 +305,10 @@ def public_history_from_engine(state: EngineState) -> PublicGameHistory:
     return _public_history_from_validated_engine(state)
 
 
-def _relative_coffin(
+def _transpose_coffin_for_player(
     coffin: tuple[str | None, ...], player: EnginePlayer
 ) -> tuple[str | None, ...]:
-    """Rotate the authoritative coffin into the player's scoring frame."""
+    """Transpose a coffin between global and player-relative scoring frames."""
 
     result: list[str | None] = [None] * COFFIN_POSITION_COUNT
     for global_index, card_id in enumerate(coffin):
@@ -319,16 +330,34 @@ def information_state_from_engine(
     return _information_state_from_validated_engine(state, selected)
 
 
+def information_state_from_simulation(
+    state: SimulationEngineState,
+) -> SearchInformationState:
+    """Give a simulated actor the same private-data erasure used at the root."""
+
+    if not isinstance(state, SimulationEngineState) or state.active_player is None:
+        raise InformationContractViolation(
+            "simulation information requires an active sampled state"
+        )
+    # Search transitions preserve the sampled state's engine invariants. Avoid
+    # repeating whole-deck validation at every simulated decision.
+    return _information_state_from_validated_engine(state, state.active_player)
+
+
 def _information_state_from_validated_engine(
     state: EngineState, player: EnginePlayer
 ) -> SearchInformationState:
-    """Construct actor-visible fields without creating a legacy model tensor."""
+    """Construct the complete decision state visible to the acting player."""
 
-    public_history = _public_history_from_validated_engine(state)
     own_hand = state.hands[player]
+    completed_rounds = tuple(_public_round(result) for result in state.completed_rounds)
+    current_round_moves = tuple(_public_move(move) for move in state.current_round_moves)
+    relative_coffin = _transpose_coffin_for_player(state.coffin, player)
     completed_cards = tuple(
         card_id for result in state.completed_rounds for card_id in result.coffin
     )
+    # One global order keeps information fingerprints and paired-destination
+    # seed choices stable across completed and current rounds.
     played = sort_card_ids((*completed_cards, *_card_ids(state.coffin)))
     own_cards = set(_card_ids(own_hand))
     visible = set(played) | own_cards
@@ -336,18 +365,6 @@ def _information_state_from_validated_engine(
     opponent = other_player(player)
     opponent_remaining = HAND_SLOT_COUNT - sum(
         move.player is opponent for move in state.current_round_moves
-    )
-    legal_destinations = {
-        action_index_for_move(move, player)
-        for move in legal_moves(state, player)
-    }
-    legal_mask = tuple(
-        tuple(
-            hand_slot * len(POLICY_GRID_INDICES) + destination
-            in legal_destinations
-            for destination in range(len(POLICY_GRID_INDICES))
-        )
-        for hand_slot in range(HAND_SLOT_COUNT)
     )
     return SearchInformationState(
         schema_version=INFORMATION_STATE_SCHEMA_VERSION,
@@ -357,35 +374,35 @@ def _information_state_from_validated_engine(
         active_player=player,
         turn_number=len(state.current_round_moves) + 1,
         total_scores=state.total_scores,
-        completed_rounds=public_history.completed_rounds,
+        completed_rounds=completed_rounds,
         own_hand=own_hand,
-        coffin=_relative_coffin(state.coffin, player),
-        current_round_moves=public_history.current_round_moves,
+        coffin=relative_coffin,
+        current_round_moves=current_round_moves,
         played_card_ids=played,
         unseen_card_ids=unseen,
         opponent_remaining_count=opponent_remaining,
         stock_count=CARD_COUNT - COFFIN_POSITION_COUNT * state.round_number,
-        legal_mask=legal_mask,  # type: ignore[arg-type]
+        legal_mask=_legal_mask_from_visible_state(own_hand, relative_coffin),
     )
 
 
-def _expected_legal_mask(state: SearchInformationState) -> LegalMask:
-    """Recompute legality using only the actor's hand and public coffin."""
+def _legal_mask_from_visible_state(
+    own_hand: tuple[str | None, str | None, str | None, str | None],
+    coffin: tuple[str | None, ...],
+) -> LegalMask:
+    """Derive action legality from only the actor's visible hand and coffin."""
 
-    occupied = {index for index, card in enumerate(state.coffin) if card is not None}
-    destinations = {
-        index
-        for index, card in enumerate(state.coffin)
-        if card is None and any(_adjacent(index, prior) for prior in occupied)
-    }
-    policy_positions = (0, 1, 2, 3, 5, 6, 7, 8)
-    return tuple(
+    destinations = set(empty_adjacent_grid_indices(coffin))
+    return cast(
+        LegalMask,
         tuple(
-            state.own_hand[hand_slot] is not None and grid_index in destinations
-            for grid_index in policy_positions
-        )
-        for hand_slot in range(HAND_SLOT_COUNT)
-    )  # type: ignore[return-value]
+            tuple(
+                own_hand[hand_slot] is not None and grid_index in destinations
+                for grid_index in POLICY_GRID_INDICES
+            )
+            for hand_slot in range(HAND_SLOT_COUNT)
+        ),
+    )
 
 
 def _validate_information_state(state: SearchInformationState) -> None:
@@ -399,20 +416,19 @@ def _validate_information_state(state: SearchInformationState) -> None:
         raise InformationContractViolation("information dealer is invalid")
     if type(state.turn_number) is not int or not 1 <= state.turn_number <= MOVES_PER_ROUND:
         raise InformationContractViolation("information turn number is invalid")
-    history = PublicGameHistory(
+    # Queen's mapping is the identity and King's transpose is self-inverse.
+    global_coffin = _transpose_coffin_for_player(state.coffin, state.player)
+    _validate_public_history_fields(
         status=EngineStatus.PLAYING,
         round_number=state.round_number,
         dealer=state.dealer,
         active_player=state.active_player,
         total_scores=state.total_scores,
         completed_rounds=state.completed_rounds,
-        current_coffin=tuple(
-            state.coffin[player_relative_grid_index(state.player, index)]
-            for index in range(COFFIN_POSITION_COUNT)
-        ),
+        current_coffin=global_coffin,
         current_round_moves=state.current_round_moves,
     )
-    if state.turn_number != len(history.current_round_moves) + 1:
+    if state.turn_number != len(state.current_round_moves) + 1:
         raise InformationContractViolation("information turn and public history disagree")
     if not isinstance(state.own_hand, tuple) or len(state.own_hand) != HAND_SLOT_COUNT:
         raise InformationContractViolation("own hand must retain four stable slots")
@@ -424,13 +440,14 @@ def _validate_information_state(state: SearchInformationState) -> None:
         raise InformationContractViolation("information coffin must contain nine positions")
     current_cards = _card_ids(state.coffin)
     _validate_card_ids(current_cards, "information coffin")
-    expected_played = tuple(
-        sort_card_ids(
-            card for record in state.completed_rounds for card in record.coffin
+    completed_cards = tuple(
+        card for record in state.completed_rounds for card in record.coffin
+    )
+    expected_played = sort_card_ids((*completed_cards, *current_cards))
+    if state.played_card_ids != expected_played:
+        raise InformationContractViolation(
+            "played cards must match public cards in canonical order"
         )
-    ) + tuple(sort_card_ids(current_cards))
-    if tuple(sort_card_ids(state.played_card_ids)) != tuple(sort_card_ids(expected_played)):
-        raise InformationContractViolation("played-card set does not match public cards")
     if state.unseen_card_ids != sort_card_ids(state.unseen_card_ids):
         raise InformationContractViolation("unseen cards must use canonical order")
     _validate_card_ids(state.unseen_card_ids, "unseen pool")
@@ -452,7 +469,7 @@ def _validate_information_state(state: SearchInformationState) -> None:
         raise InformationContractViolation("stock count is inconsistent with round")
     if len(state.unseen_card_ids) != state.opponent_remaining_count + state.stock_count:
         raise InformationContractViolation("unseen pool does not match hidden location counts")
-    if state.legal_mask != _expected_legal_mask(state):
+    if state.legal_mask != _legal_mask_from_visible_state(state.own_hand, state.coffin):
         raise InformationContractViolation("legal mask does not match visible hand and coffin")
 
 
@@ -474,9 +491,7 @@ def _relative_public_move(
 def _relative_round(record: PublicRoundRecord, root: EnginePlayer) -> dict[str, object]:
     """Encode one public round without preserving absolute actor orientation."""
 
-    coffin = [None] * COFFIN_POSITION_COUNT
-    for global_index, card_id in enumerate(record.coffin):
-        coffin[player_relative_grid_index(root, global_index)] = card_id
+    coffin = _transpose_coffin_for_player(record.coffin, root)
     opponent = other_player(root)
     return {
         "round_number": record.round_number,
@@ -491,9 +506,8 @@ def _relative_round(record: PublicRoundRecord, root: EnginePlayer) -> dict[str, 
 
 
 def canonical_information_data(state: SearchInformationState) -> dict[str, object]:
-    """Return actor-relative information in compatibility-stable field order."""
+    """Return actor-relative information in fingerprint-stable field order."""
 
-    _validate_information_state(state)
     opponent = other_player(state.player)
     return {
         "information_state_schema_version": state.schema_version,

@@ -1,15 +1,33 @@
-"""Contract tests for the exhaustive early-turn destination groups."""
+"""Verify symmetry groups, strategic actions, masks, and concrete resolution.
+
+Tests cover every authorized board pattern, unlisted fallbacks, card-specific
+grouping, representative proxies, deterministic coins, and role equivalence.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 import pytest
+import torch
 
+from dracula.action_contract import (
+    PolicyActionContractError,
+    build_representative_action_mask,
+)
+from dracula.active_policy import ActivePolicyRuntime
+from dracula.bgc_policy_model import BGCPolicyModel
 from dracula.bridge import transpose_grid_index
+from dracula.engine import apply_move, create_game, legal_moves
 from dracula.search import (
     DestinationSymmetryError,
     destination_symmetry_groups,
+)
+from dracula.search.information import information_state_from_engine
+from dracula.strategic_actions import (
+    derive_strategic_destination_choice_seed,
+    select_concrete_action_index,
+    strategic_action_groups,
 )
 
 
@@ -34,6 +52,34 @@ def _one_based_groups(
         )
         for group in destination_symmetry_groups(coffin)
     )
+
+
+def _information_for_occupied_positions(occupied_positions: set[int]):
+    """Reach one authorized pattern while varying destinations, not hand cards."""
+
+    frontier = [create_game("strategic-action-contract")]
+    for _depth in range(3):
+        for state in frontier:
+            information = information_state_from_engine(state)
+            occupied = {
+                index + 1
+                for index, card_id in enumerate(information.coffin)
+                if card_id is not None
+            }
+            if occupied == occupied_positions:
+                return information
+        next_frontier = []
+        for state in frontier:
+            assert state.active_player is not None
+            options = legal_moves(state, state.active_player)
+            selected_slot = min(move.hand_slot for move in options)
+            next_frontier.extend(
+                apply_move(state, move).state
+                for move in options
+                if move.hand_slot == selected_slot
+            )
+        frontier = next_frontier
+    raise AssertionError(f"authorized pattern is unreachable: {occupied_positions}")
 
 
 AUTHORIZED_CASES = (
@@ -93,6 +139,125 @@ def test_player_relative_transpose_preserves_groups(occupied, _expected) -> None
         for group in destination_symmetry_groups(transposed)
     }
     assert actual == _transpose_groups(coffin)
+
+
+@pytest.mark.parametrize(("occupied", "_expected"), AUTHORIZED_CASES)
+def test_strategic_groups_partition_legality_and_masks_retain_only_proxies(
+    occupied,
+    _expected,
+) -> None:
+    information = _information_for_occupied_positions(occupied)
+    destination_groups = destination_symmetry_groups(information.coffin)
+    groups = strategic_action_groups(information)
+    legal = {
+        index
+        for index, allowed in enumerate(
+            value for row in information.legal_mask for value in row
+        )
+        if allowed
+    }
+    members = tuple(
+        action_index for group in groups for action_index in group.member_action_indices
+    )
+    assert len(members) == len(set(members))
+    assert set(members) == legal
+
+    available_slots = tuple(
+        slot for slot, card_id in enumerate(information.own_hand) if card_id is not None
+    )
+    expected_destinations = tuple(
+        (group.representative_grid_index, group.member_grid_indices)
+        for group in destination_groups
+    )
+    for hand_slot in available_slots:
+        card_groups = tuple(group for group in groups if group.hand_slot == hand_slot)
+        assert tuple(
+            (group.representative_grid_index, group.member_grid_indices)
+            for group in card_groups
+        ) == expected_destinations
+    assert len(groups) == len(available_slots) * len(destination_groups)
+
+    engine_mask = torch.tensor(information.legal_mask, dtype=torch.bool)
+    representative_mask = build_representative_action_mask(engine_mask, groups)
+    assert set(torch.nonzero(representative_mask.flatten()).flatten().tolist()) == {
+        group.representative_action_index for group in groups
+    }
+    for group in groups:
+        assert representative_mask.flatten()[group.representative_action_index]
+        assert all(engine_mask.flatten()[member] for member in group.member_action_indices)
+        assert all(
+            not representative_mask.flatten()[member]
+            for member in group.member_action_indices
+            if member != group.representative_action_index
+        )
+
+
+def test_paired_destination_choice_is_reproducible_and_group_preserving() -> None:
+    information = information_state_from_engine(create_game("paired-choice-contract"))
+    groups = strategic_action_groups(information)
+    selected_group = next(
+        group for group in groups if len(group.member_action_indices) == 2
+    )
+    selected_members: set[int] = set()
+
+    for choice_index in range(32):
+        first_seed = derive_strategic_destination_choice_seed(
+            b"\x12" * 32,
+            "paired-choice-test",
+            information,
+            selected_group,
+            choice_index,
+        )
+        second_seed = derive_strategic_destination_choice_seed(
+            b"\x12" * 32,
+            "paired-choice-test",
+            information,
+            selected_group,
+            choice_index,
+        )
+        assert first_seed == second_seed
+        first_action = select_concrete_action_index(
+            selected_group,
+            first_seed,
+        )
+        second_action = select_concrete_action_index(
+            selected_group,
+            second_seed,
+        )
+        assert first_action == second_action
+        assert first_action in selected_group.member_action_indices
+        assert next(
+            group for group in groups if first_action in group.member_action_indices
+        ) == selected_group
+        selected_members.add(first_action)
+
+    assert selected_members == set(selected_group.member_action_indices)
+
+
+def test_active_policy_selects_a_legal_group_for_every_authorized_pattern() -> None:
+    runtime = ActivePolicyRuntime(
+        BGCPolicyModel(
+            run_root_seed="authorized-pattern-runtime",
+            model_id="pi1-test",
+            initialization_ordinal=0,
+        ),
+        artifact_digest="a" * 64,
+    )
+    for decision_index, (occupied, _expected) in enumerate(AUTHORIZED_CASES):
+        information = _information_for_occupied_positions(occupied)
+        groups = strategic_action_groups(information)
+        decision = runtime.decide(
+            information,
+            fixture_id="authorized-pattern-runtime",
+            decision_index=decision_index,
+        )
+        selected_group = next(
+            group
+            for group in groups
+            if group.representative_action_index
+            == decision.representative_action_index
+        )
+        assert decision.concrete_action_index in selected_group.member_action_indices
 
 
 # Any unlisted occupied pattern falls back to independent legal destinations.
@@ -161,3 +326,14 @@ def test_invalid_coffin_length_is_rejected() -> None:
         match="coffin must contain nine positions",
     ):
         destination_symmetry_groups((None,) * 8)
+
+
+def test_action_contracts_reject_malformed_values_at_their_boundaries() -> None:
+    information = information_state_from_engine(create_game("action-boundary"))
+    groups = strategic_action_groups(information)
+    legal_mask = torch.tensor(information.legal_mask, dtype=torch.bool)
+
+    with pytest.raises(PolicyActionContractError, match=r"bool\[4,8\]"):
+        build_representative_action_mask(legal_mask.float(), groups)
+    with pytest.raises(PolicyActionContractError, match="partition"):
+        build_representative_action_mask(legal_mask, groups[:-1])

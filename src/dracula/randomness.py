@@ -1,4 +1,8 @@
-"""Versioned deterministic seed derivation and random streams."""
+"""Provide deterministic random choices without shared mutable RNG state.
+
+Named seed derivations isolate unrelated decisions, while the counter stream
+implements reproducible sampling and shuffling from those derived seeds.
+"""
 
 from __future__ import annotations
 

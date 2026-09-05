@@ -1,4 +1,8 @@
-"""Versioned public API contracts for browser gameplay."""
+"""Define browser-facing values shared by Dracula API projections.
+
+These Pydantic models describe public cards, scores, phases, and local gameplay
+messages. They deliberately exclude authoritative engine and model internals.
+"""
 
 from __future__ import annotations
 
@@ -156,7 +160,7 @@ class OpponentTurnPhase(ContractModel):
 
 
 class NarrationPhase(ContractModel):
-    """Legacy local phase retained for stateful response compatibility."""
+    """Local phase exposing narration generated for the current game state."""
 
     kind: Literal["narration"] = "narration"
     status: Literal["ready", "pending", "failed"]
@@ -175,7 +179,7 @@ class ScoringPhase(ContractModel):
 
 
 class RoundAdvancePhase(ContractModel):
-    """Legacy local phase awaiting acknowledgement of a scored round."""
+    """Local phase awaiting acknowledgement of a scored round."""
 
     kind: Literal["round_advance"] = "round_advance"
     round_number: int = Field(ge=1, le=6)

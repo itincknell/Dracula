@@ -1,8 +1,11 @@
-"""Public gameplay entry point for Dracula's deterministic engine."""
+"""Provide the public gameplay operations for the deterministic engine.
+
+This facade creates games, enumerates legal moves, applies immutable state
+transitions, and advances rounds while delegating types, scoring, and checks.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import replace
 
 from dracula.engine_dealing import (
@@ -53,7 +56,7 @@ from dracula.engine_types import (
     SimulationEngineState,
     UnavailableHandSlot,
     WrongActivePlayer,
-    orthogonally_adjacent,
+    empty_adjacent_grid_indices,
     other_player,
 )
 from dracula.engine_validation import validate_state
@@ -94,15 +97,6 @@ def create_game(seed: str) -> EngineState:
     return state
 
 
-def _has_occupied_neighbor(coffin: Sequence[str | None], grid_index: int) -> bool:
-    """Return whether a destination shares an edge with any occupied position."""
-
-    return any(
-        card_id is not None and orthogonally_adjacent(grid_index, occupied_index)
-        for occupied_index, card_id in enumerate(coffin)
-    )
-
-
 def _legal_moves_for_active_player(
     state: EngineState, player: EnginePlayer
 ) -> tuple[EngineMove, ...]:
@@ -117,11 +111,7 @@ def _legal_moves_for_active_player(
     if player is not state.active_player:
         raise WrongActivePlayer(f"{player.value} is not the active player")
 
-    destinations = tuple(
-        grid_index
-        for grid_index, card_id in enumerate(state.coffin)
-        if card_id is None and _has_occupied_neighbor(state.coffin, grid_index)
-    )
+    destinations = empty_adjacent_grid_indices(state.coffin)
     # This nesting defines the stable legal-move order: hand slot first, then
     # global destination index.
     return tuple(
@@ -173,7 +163,7 @@ def _apply_move_state(
         raise InvalidGridIndex("grid index must be between 0 and 8")
     if state.coffin[move.global_grid_index] is not None:
         raise OccupiedDestination(f"coffin position {move.global_grid_index} is occupied")
-    if not _has_occupied_neighbor(state.coffin, move.global_grid_index):
+    if move.global_grid_index not in empty_adjacent_grid_indices(state.coffin):
         raise NonAdjacentDestination(
             f"coffin position {move.global_grid_index} has no orthogonally adjacent card"
         )

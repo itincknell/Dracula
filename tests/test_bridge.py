@@ -1,4 +1,8 @@
-"""Engine-to-policy action mapping tests."""
+"""Verify the boundary between engine moves and policy action indexes.
+
+Tests cover role-relative grids, legal action tables, forced placements, and
+round trips from a selected policy index back to one concrete engine move.
+"""
 
 from __future__ import annotations
 

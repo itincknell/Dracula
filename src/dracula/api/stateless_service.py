@@ -1,14 +1,14 @@
-"""Deterministic production gameplay reconstructed from a browser envelope."""
+"""Execute stateless gameplay by replaying browser-held command history.
+
+The service reconstructs authoritative engine state, validates and applies one
+command, invokes the opponent when required, and returns a public projection.
+Its bounded replay cache is optional and cannot affect correctness.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import secrets
-import threading
-from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from dracula.api.policy import (
@@ -33,12 +33,18 @@ from dracula.api.stateless_contracts import (
     StatelessGameResponse,
 )
 from dracula.api.stateless_projection import project_stateless_game
+from dracula.api.stateless_replay import (
+    DEFAULT_REPLAY_CACHE_ENTRIES,
+    ReplayCache,
+    ReplayCacheStatistics,
+    ReplayedGame,
+    canonical_envelope_digest,
+)
+from dracula.bridge import apply_policy_action, build_policy_turn_context
 from dracula.engine import (
     EngineMove,
     EnginePlayer,
-    EngineState,
     EngineStatus,
-    InvalidLifecycleTransition,
     RuleViolation,
     advance_after_round,
     apply_move,
@@ -46,8 +52,7 @@ from dracula.engine import (
     legal_moves,
     other_player,
 )
-
-DEFAULT_REPLAY_CACHE_ENTRIES = 256
+from dracula.search import information_state_from_engine
 
 
 class StatelessReplayError(Exception):
@@ -60,105 +65,27 @@ class StatelessReplayError(Exception):
         self.status_code = status_code
 
 
+def stateless_replay_error_response(error: StatelessReplayError) -> ServiceResponse:
+    """Convert a replay rejection into the shared public error contract."""
+
+    body = StatelessApiErrorResponse(
+        code=error.code,  # type: ignore[arg-type]
+        message=error.message,
+        retryable=False,
+    )
+    return ServiceResponse(error.status_code, body.model_dump(mode="json"))
+
+
 class StatelessPolicyError(Exception):
     """Opponent inference failed before a reconstructed move was accepted."""
 
 
-@dataclass(frozen=True, slots=True)
-class ReplayedGame:
-    """Trusted private state reconstructed from one complete browser envelope."""
-
-    state: EngineState
-    human_role: EnginePlayer
-    game_id: UUID
-
-
-@dataclass(frozen=True, slots=True)
-class ReplayCacheStatistics:
-    """Process-local diagnostics with no effect on gameplay correctness."""
-
-    hits: int
-    misses: int
-    evictions: int
-    entries: int
-
-
-class ReplayCache:
-    """Bounded process-local cache whose eviction cannot affect correctness."""
-
-    def __init__(self, max_entries: int = DEFAULT_REPLAY_CACHE_ENTRIES) -> None:
-        if type(max_entries) is not int or max_entries < 0:
-            raise ValueError("replay cache size must be a non-negative integer")
-        self.max_entries = max_entries
-        self._entries: OrderedDict[str, ReplayedGame] = OrderedDict()
-        self._hits = 0
-        self._misses = 0
-        self._evictions = 0
-        self._lock = threading.RLock()
-
-    def get(self, key: str) -> ReplayedGame | None:
-        """Return and refresh one cached reconstruction, recording hit or miss."""
-
-        with self._lock:
-            value = self._entries.get(key)
-            if value is None:
-                self._misses += 1
-                return None
-            self._entries.move_to_end(key)
-            self._hits += 1
-            return value
-
-    def put(self, key: str, value: ReplayedGame) -> None:
-        """Store one reconstruction and evict least-recently-used entries."""
-
-        if self.max_entries == 0:
-            return
-        with self._lock:
-            self._entries[key] = value
-            self._entries.move_to_end(key)
-            while len(self._entries) > self.max_entries:
-                self._entries.popitem(last=False)
-                self._evictions += 1
-
-    def clear(self) -> None:
-        """Discard cached reconstructions without changing accepted game data."""
-
-        with self._lock:
-            self._entries.clear()
-
-    @property
-    def statistics(self) -> ReplayCacheStatistics:
-        """Return a locked snapshot of cache counters and current size."""
-
-        with self._lock:
-            return ReplayCacheStatistics(
-                hits=self._hits,
-                misses=self._misses,
-                evictions=self._evictions,
-                entries=len(self._entries),
-            )
-
-
-def canonical_envelope_digest(envelope: RecoveryEnvelope) -> str:
-    """Hash canonical seed/history content for optional replay caching."""
-
-    encoded = json.dumps(
-        envelope.model_dump(mode="json"),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _game_id(envelope: RecoveryEnvelope) -> UUID:
+def _game_id(seed: str, human_role: EnginePlayer) -> UUID:
     """Derive a stable public game identifier from seed and selected role."""
 
-    role = envelope.history[0]
-    assert isinstance(role, SelectRoleCommand)
     return uuid5(
         NAMESPACE_URL,
-        f"dracula-stateless-game\0{envelope.seed}\0{role.human_role}",
+        f"dracula-stateless-game\0{seed}\0{human_role.value}",
     )
 
 
@@ -200,15 +127,6 @@ class StatelessGameplayService:
         return ServiceResponse(status_code, body.model_dump(mode="json"))
 
     @staticmethod
-    def _error(error: StatelessReplayError) -> ServiceResponse:
-        body = StatelessApiErrorResponse(
-            code=error.code,  # type: ignore[arg-type]
-            message=error.message,
-            retryable=False,
-        )
-        return ServiceResponse(error.status_code, body.model_dump(mode="json"))
-
-    @staticmethod
     def _dependency_error() -> ServiceResponse:
         body = StatelessApiErrorResponse(
             code="dependency_unavailable",
@@ -218,18 +136,10 @@ class StatelessGameplayService:
         return ServiceResponse(503, body.model_dump(mode="json"))
 
     def _opponent_move(self, game: ReplayedGame) -> ReplayedGame:
-        """Apply one deterministic opponent action to trusted reconstructed state."""
+        """Apply one opponent action after the settle loop establishes ownership."""
 
         state = game.state
         opponent = other_player(game.human_role)
-        if (
-            state.status is not EngineStatus.PLAYING
-            or state.active_player is not opponent
-        ):
-            return game
-        from dracula.bridge import apply_policy_action, build_policy_turn_context
-        from dracula.search import information_state_from_engine
-
         context = build_policy_turn_context(state, opponent)
         if context.forced_move is not None:
             # The unique legal move is an engine fact and requires no model call.
@@ -276,6 +186,60 @@ class StatelessGameplayService:
             game = self._opponent_move(game)
         return game
 
+    def _apply_place_command(
+        self,
+        game: ReplayedGame,
+        command: PlaceCardCommand,
+        *,
+        history_replay: bool,
+    ) -> ReplayedGame:
+        """Validate one human placement against reconstructed engine state."""
+
+        state = game.state
+        if state.status is not EngineStatus.PLAYING:
+            raise StatelessReplayError(
+                "invalid_history" if history_replay else "wrong_phase",
+                "game is not accepting a placement",
+                status_code=422 if history_replay else 409,
+            )
+        if state.active_player is not game.human_role:
+            raise StatelessReplayError(
+                "invalid_history" if history_replay else "wrong_turn",
+                "it is not the human turn",
+                status_code=422 if history_replay else 409,
+            )
+        move = EngineMove(game.human_role, command.hand_slot, command.position)
+        if move not in legal_moves(state, game.human_role):
+            raise StatelessReplayError(
+                "invalid_history" if history_replay else "invalid_command",
+                "placement is not legal in the reconstructed game",
+            )
+        placed = ReplayedGame(
+            apply_move(state, move).state,
+            game.human_role,
+            game.game_id,
+        )
+        return self._settle_opponent(placed)
+
+    def _apply_advance_command(
+        self,
+        game: ReplayedGame,
+        *,
+        history_replay: bool,
+    ) -> ReplayedGame:
+        """Advance exactly one completed round and settle any opponent opener."""
+
+        if game.state.status is not EngineStatus.ROUND_COMPLETE:
+            raise StatelessReplayError(
+                "invalid_history" if history_replay else "wrong_phase",
+                "round is not ready to advance",
+                status_code=422 if history_replay else 409,
+            )
+        advanced = advance_after_round(game.state)
+        return self._settle_opponent(
+            ReplayedGame(advanced, game.human_role, game.game_id)
+        )
+
     def _apply_history_command(
         self,
         game: ReplayedGame,
@@ -283,56 +247,13 @@ class StatelessGameplayService:
         *,
         history_replay: bool,
     ) -> ReplayedGame:
-        """Apply one validated command, distinguishing replay from live errors."""
+        """Dispatch one command while preserving replay-specific error codes."""
 
-        state = game.state
         if isinstance(command, PlaceCardCommand):
-            if state.status is not EngineStatus.PLAYING:
-                raise StatelessReplayError(
-                    "invalid_history" if history_replay else "wrong_phase",
-                    "game is not accepting a placement",
-                    status_code=422 if history_replay else 409,
-                )
-            if state.active_player is not game.human_role:
-                raise StatelessReplayError(
-                    "invalid_history" if history_replay else "wrong_turn",
-                    "it is not the human turn",
-                    status_code=422 if history_replay else 409,
-                )
-            move = EngineMove(
-                game.human_role,
-                command.hand_slot,
-                command.position,
+            return self._apply_place_command(
+                game, command, history_replay=history_replay
             )
-            if move not in legal_moves(state, game.human_role):
-                raise StatelessReplayError(
-                    "invalid_history" if history_replay else "invalid_command",
-                    "placement is not legal in the reconstructed game",
-                )
-            game = ReplayedGame(
-                apply_move(state, move).state,
-                game.human_role,
-                game.game_id,
-            )
-            return self._settle_opponent(game)
-
-        if state.status is not EngineStatus.ROUND_COMPLETE:
-            raise StatelessReplayError(
-                "invalid_history" if history_replay else "wrong_phase",
-                "round is not ready to advance",
-                status_code=422 if history_replay else 409,
-            )
-        try:
-            advanced = advance_after_round(state)
-        except InvalidLifecycleTransition as error:
-            raise StatelessReplayError(
-                "invalid_history" if history_replay else "wrong_phase",
-                "round cannot be advanced",
-                status_code=422 if history_replay else 409,
-            ) from error
-        return self._settle_opponent(
-            ReplayedGame(advanced, game.human_role, game.game_id)
-        )
+        return self._apply_advance_command(game, history_replay=history_replay)
 
     def replay(self, envelope: RecoveryEnvelope) -> ReplayedGame:
         """Reconstruct the exact private game represented by an accepted history."""
@@ -341,22 +262,20 @@ class StatelessGameplayService:
         cached = self.cache.get(key)
         if cached is not None:
             return cached
-        role_command = envelope.history[0]
-        if not isinstance(role_command, SelectRoleCommand):
-            raise StatelessReplayError(
-                "invalid_history", "history must begin with role selection"
-            )
+        # RecoveryEnvelope guarantees that the first command is the sole role
+        # selection, so replay consumes that established invariant directly.
+        role_command = cast(SelectRoleCommand, envelope.history[0])
         human_role = EnginePlayer(role_command.human_role)
         # A cache miss always starts from the seed and replays every accepted
         # command; no process-local value is required for correctness.
-        game = ReplayedGame(create_game(envelope.seed), human_role, _game_id(envelope))
+        game = ReplayedGame(
+            create_game(envelope.seed),
+            human_role,
+            _game_id(envelope.seed, human_role),
+        )
         try:
             game = self._settle_opponent(game)
             for command in envelope.history[1:]:
-                if isinstance(command, SelectRoleCommand):
-                    raise StatelessReplayError(
-                        "invalid_history", "role selection may appear only once"
-                    )
                 game = self._apply_history_command(
                     game,
                     command,
@@ -382,7 +301,7 @@ class StatelessGameplayService:
         except StatelessPolicyError:
             return self._dependency_error()
         except StatelessReplayError as error:
-            return self._error(error)
+            return stateless_replay_error_response(error)
         return self._response(envelope, game, status_code=201)
 
     def resume_game(self, request: ResumeStatelessGameRequest) -> ServiceResponse:
@@ -393,7 +312,7 @@ class StatelessGameplayService:
         except StatelessPolicyError:
             return self._dependency_error()
         except StatelessReplayError as error:
-            return self._error(error)
+            return stateless_replay_error_response(error)
         return self._response(request.envelope, game)
 
     def apply_command(
@@ -403,7 +322,7 @@ class StatelessGameplayService:
         """Replay, apply one new command, and return the extended envelope."""
 
         if len(request.envelope.history) >= MAX_ACCEPTED_COMMANDS:
-            return self._error(
+            return stateless_replay_error_response(
                 StatelessReplayError(
                     "invalid_command", "game command history is already complete"
                 )
@@ -423,7 +342,7 @@ class StatelessGameplayService:
         except StatelessPolicyError:
             return self._dependency_error()
         except StatelessReplayError as error:
-            return self._error(error)
+            return stateless_replay_error_response(error)
         return self._response(next_envelope, next_game)
 
 
@@ -436,5 +355,5 @@ __all__ = (
     "StatelessPolicyError",
     "StatelessReplayError",
     "canonical_envelope_digest",
-    "project_stateless_game",
+    "stateless_replay_error_response",
 )

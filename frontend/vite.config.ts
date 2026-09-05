@@ -1,3 +1,8 @@
+/**
+ * Configures local Vite development and the GitHub Pages production build.
+ * It owns the public base path, compile-time API origin, local API proxy, and
+ * deterministic asset handling shared by validation and release workflows.
+ */
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 

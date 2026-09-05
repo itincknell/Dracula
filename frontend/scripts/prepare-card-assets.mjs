@@ -1,3 +1,8 @@
+/**
+ * Copies canonical playing-card assets into the generated public directory.
+ * The script validates the manifest and custom Vampire images so development
+ * and production builds expose one complete, deterministic card set.
+ */
 import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

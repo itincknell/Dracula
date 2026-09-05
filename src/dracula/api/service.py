@@ -1,4 +1,8 @@
-"""Application orchestration for persisted human-versus-policy games."""
+"""Coordinate local SQLite-backed human-versus-policy gameplay.
+
+The service validates commands, advances immutable engine state, invokes the
+configured policy, and commits sessions transactionally. It is local-only.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,13 @@ from dracula.api.contracts import (
     OpponentTurnPhase,
     VersionedMutationRequest,
 )
+from dracula.api.local_session_events import (
+    initial_session,
+    move_events,
+    round_advance_event,
+)
+from dracula.api.local_policy_turn import execute_claimed_policy_turn
+from dracula.api.local_projection import project_human_game, resolve_human_move_id
 from dracula.api.repository import (
     ConcurrentSessionUpdate,
     GameRepository,
@@ -25,40 +36,28 @@ from dracula.api.repository import (
 )
 from dracula.api.policy import (
     PolicyDescriptor,
-    PolicyExecutionError,
     PolicyExecutor,
-    PolicyTurnRequest,
-    PolicyTurnResult,
     ServiceResponse,
     UnavailablePolicyExecutor,
-    zero_hidden_state,
 )
 from dracula.api.presentation import phase_for_state
 from dracula.api.session import (
     GameSession,
-    PolicySession,
     PolicyTurnClaim,
-    make_event,
-    project_human_game,
     request_fingerprint,
-    resolve_human_move_id,
     response_body,
     response_record,
-    validate_hidden_state,
 )
-from dracula.cards import CARD_SCHEMA_VERSION
 from dracula.engine import (
-    ENGINE_VERSION,
-    RULES_VERSION,
     EngineMove,
     EnginePlayer,
     EngineStatus,
+    EngineTransition,
     advance_after_round,
     apply_move,
     create_game,
     other_player,
 )
-from dracula.randomness import RANDOMNESS_SCHEMA_VERSION
 
 
 class GameplayService:
@@ -123,6 +122,8 @@ class GameplayService:
     def _replay_or_validate(
         self, session: GameSession, request: MoveRequest | VersionedMutationRequest
     ) -> tuple[str, str, ServiceResponse | None]:
+        """Replay an identical request or reject stale and conflicting mutations."""
+
         request_id = str(request.request_id)
         request_hash = request_fingerprint(self._request_data(request))
         existing = next(
@@ -186,6 +187,8 @@ class GameplayService:
         request_id: str | None = None,
         request_hash: str | None = None,
     ) -> ServiceResponse | None:
+        """Commit once or recover the response won by a concurrent identical request."""
+
         try:
             self.repository.commit(session, expected_revision=expected_revision)
             return None
@@ -212,6 +215,8 @@ class GameplayService:
     def _completed_claim_response(
         self, session: GameSession, claim: PolicyTurnClaim
     ) -> ServiceResponse | None:
+        """Recover the sealed response for an opponent-turn claim completed elsewhere."""
+
         record = next(
             (
                 item
@@ -243,71 +248,15 @@ class GameplayService:
         seed = request.seed if request.seed is not None else self.game_seed_factory()
         state = create_game(seed)
         game_id = self.game_id_factory()
-        descriptor = self.policy_descriptor
-        now = self.clock()
-        events = (
-            make_event(
-                game_id,
-                1,
-                "game_created",
-                now,
-                0,
-                0,
-                request_id,
-                {
-                    "human_role": human_role.value,
-                    "opponent_role": other_player(human_role).value,
-                    "policy_id": descriptor.policy_id,
-                    "policy_version": descriptor.policy_version,
-                    "artifact_id": descriptor.artifact_id,
-                    "engine_version": ENGINE_VERSION,
-                    "rules_version": RULES_VERSION,
-                    "card_schema_version": CARD_SCHEMA_VERSION,
-                    "randomness_schema_version": RANDOMNESS_SCHEMA_VERSION,
-                    "observation_schema_version": descriptor.observation_schema_version,
-                    "action_schema_version": descriptor.action_schema_version,
-                    "hidden_state_schema_version": descriptor.hidden_state_schema_version,
-                    "inference_profile": descriptor.inference_profile,
-                    "narration_enabled": self.narration_enabled,
-                },
-            ),
-            make_event(
-                game_id,
-                2,
-                "round_started",
-                now,
-                0,
-                0,
-                request_id,
-                {
-                    "round_number": 1,
-                    "center_card": state.coffin[4],
-                    "dealer": state.dealer.value,
-                    "first_player": state.active_player.value,
-                },
-            ),
-        )
-        session = GameSession(
+        session = initial_session(
             game_id=game_id,
-            version=0,
-            revision=0,
             human_role=human_role,
-            engine_state=state,
-            policy_session=PolicySession(
-                policy_id=descriptor.policy_id,
-                policy_version=descriptor.policy_version,
-                artifact_id=descriptor.artifact_id,
-                artifact_sha256=descriptor.artifact_sha256,
-                observation_schema_version=descriptor.observation_schema_version,
-                action_schema_version=descriptor.action_schema_version,
-                hidden_state_schema_version=descriptor.hidden_state_schema_version,
-                inference_profile=descriptor.inference_profile,
-                hidden_state=zero_hidden_state(),
-            ),
+            state=state,
+            descriptor=self.policy_descriptor,
+            narration_enabled=self.narration_enabled,
+            now=self.clock(),
+            request_id=request_id,
             move_secret=secrets.token_bytes(32),
-            phase=phase_for_state(state, human_role),
-            events=events,
-            idempotency_records=(),
         )
         view = self._view(session)
         record = response_record(
@@ -348,89 +297,21 @@ class GameplayService:
         ).model_dump(mode="json")
         return ServiceResponse(200, body)
 
-    def _move_events(
-        self,
-        session: GameSession,
-        transition: Any,
-        request_id: str,
-        resulting_version: int,
-    ) -> tuple[Any, ...]:
-        sequence = len(session.events) + 1
-        now = self.clock()
-        events = [
-            make_event(
-                session.game_id,
-                sequence,
-                "move_accepted",
-                now,
-                session.version,
-                resulting_version,
-                request_id,
-                {
-                    "player": transition.played_move.player.value,
-                    "card_id": transition.played_move.card_id,
-                    "hand_slot": transition.played_move.hand_slot,
-                    "position": transition.played_move.global_grid_index,
-                    "turn_number": transition.played_move.turn_number,
-                    "round_number": transition.state.round_number,
-                },
-            )
-        ]
-        result = transition.round_result
-        if result is not None:
-            for player in (result.dealer, other_player(result.dealer)):
-                sequence += 1
-                event_type = (
-                    "row_score_ready"
-                    if player is EnginePlayer.QUEEN
-                    else "column_score_ready"
-                )
-                events.append(
-                    make_event(
-                        session.game_id,
-                        sequence,
-                        event_type,
-                        now,
-                        session.version,
-                        resulting_version,
-                        request_id,
-                        {
-                            "round_number": result.round_number,
-                            "player": player.value,
-                            "round_score": result.round_scores[player],
-                        },
-                    )
-                )
-            sequence += 1
-            events.append(
-                make_event(
-                    session.game_id,
-                    sequence,
-                    "round_completed",
-                    now,
-                    session.version,
-                    resulting_version,
-                    request_id,
-                    {
-                        "round_number": result.round_number,
-                        "queen_score": result.round_scores.queen,
-                        "king_score": result.round_scores.king,
-                    },
-                )
-            )
-        return tuple(events)
-
     def _finish_move(
         self,
         session: GameSession,
-        transition: Any,
+        transition: EngineTransition,
         request_id: str,
         request_hash: str,
         *,
         next_hidden_state: bytes | None = None,
     ) -> ServiceResponse:
+        """Seal one accepted engine transition and its idempotent response atomically."""
+
         version = session.version + 1
-        events = self._move_events(session, transition, request_id, version)
+        events = move_events(
+            session, transition, request_id, version, self.clock()
+        )
         policy_session = session.policy_session
         if next_hidden_state is not None:
             policy_session = replace(policy_session, hidden_state=next_hidden_state)
@@ -557,46 +438,11 @@ class GameplayService:
     def _complete_policy_turn(
         self, claimed: GameSession, claim: PolicyTurnClaim
     ) -> ServiceResponse:
-        state = claimed.engine_state
-        opponent = other_player(claimed.human_role)
-        persisted_policy = claimed.policy_session
-        policy_descriptor = PolicyDescriptor(
-            policy_id=persisted_policy.policy_id,
-            policy_version=persisted_policy.policy_version,
-            artifact_id=persisted_policy.artifact_id,
-            artifact_sha256=persisted_policy.artifact_sha256,
-            observation_schema_version=persisted_policy.observation_schema_version,
-            action_schema_version=persisted_policy.action_schema_version,
-            hidden_state_schema_version=persisted_policy.hidden_state_schema_version,
-            inference_profile=persisted_policy.inference_profile,
-        )
+        """Run the claimed inference before atomically committing its move or failure."""
 
         try:
-            # The bridge is loaded only when inference is requested, preserving a
-            # lightweight FastAPI import path for health and public state reads.
-            from dracula.bridge import apply_policy_action, build_policy_turn_context
-            from dracula.search import information_state_from_engine
-
-            context = build_policy_turn_context(state, opponent)
-            information_state = information_state_from_engine(state, opponent)
-            policy_result = self.policy_executor.invoke(
-                PolicyTurnRequest(
-                    game_id=claimed.game_id,
-                    policy=policy_descriptor,
-                    turn_number=len(state.current_round_moves) + 1,
-                    player=opponent,
-                    round_number=state.round_number,
-                    turn_kind=context.kind,
-                    policy_input=None,
-                    action_table=context.action_table,
-                    information_state=information_state,
-                    hidden_state=claimed.policy_session.hidden_state,
-                )
-            )
-            if policy_result.hidden_state is not None:
-                validate_hidden_state(policy_result.hidden_state)
-            transition = apply_policy_action(
-                state, context, policy_result.action_index
+            transition, next_hidden_state = execute_claimed_policy_turn(
+                claimed, self.policy_executor
             )
         except Exception:
             failed_base = self.repository.load(claimed.game_id)
@@ -656,7 +502,7 @@ class GameplayService:
             transition,
             claim.request_id,
             claim.request_hash,
-            next_hidden_state=policy_result.hidden_state,
+            next_hidden_state=next_hidden_state,
         )
 
     def advance_round(
@@ -690,39 +536,9 @@ class GameplayService:
             )
         next_state = advance_after_round(state)
         version = session.version + 1
-        now = self.clock()
-        if next_state.status is EngineStatus.GAME_COMPLETE:
-            outcome = phase_for_state(next_state, session.human_role)
-            event = make_event(
-                game_id,
-                len(session.events) + 1,
-                "game_completed",
-                now,
-                session.version,
-                version,
-                request_id,
-                {
-                    "outcome": outcome.outcome,  # type: ignore[union-attr]
-                    "queen_total": next_state.total_scores.queen,
-                    "king_total": next_state.total_scores.king,
-                },
-            )
-        else:
-            event = make_event(
-                game_id,
-                len(session.events) + 1,
-                "round_started",
-                now,
-                session.version,
-                version,
-                request_id,
-                {
-                    "round_number": next_state.round_number,
-                    "center_card": next_state.coffin[4],
-                    "dealer": next_state.dealer.value,
-                    "first_player": next_state.active_player.value,
-                },
-            )
+        event = round_advance_event(
+            session, next_state, request_id, version, self.clock()
+        )
         next_session = replace(
             session,
             version=version,

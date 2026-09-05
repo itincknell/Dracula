@@ -1,4 +1,8 @@
-"""Exercise the production image as a read-only stateless web container."""
+"""Exercise the production Lambda image through its public HTTP boundary.
+
+The validator measures startup and request behavior while checking stateless
+replay, policy loading, fake narration, privacy, and read-only operation.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-PI1_SHA256 = "70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c"
+from build_lambda_context import PI1_SHA256
+
+
 FORBIDDEN_RESPONSE_KEYS = frozenset(
     {
         "authoritative_state",
@@ -58,6 +64,8 @@ def _request(
     method: str,
     path: str,
     body: dict[str, Any] | None = None,
+    *,
+    allow_error: bool = False,
 ) -> tuple[dict[str, Any], float, int]:
     encoded = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
@@ -72,35 +80,10 @@ def _request(
             raw = response.read()
             status = response.status
     except urllib.error.HTTPError as error:
-        raise ContainerValidationError(
-            f"{method} {path} failed ({error.code}): {error.read().decode()}"
-        ) from error
-    elapsed = time.perf_counter() - started
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ContainerValidationError(f"{method} {path} returned non-object JSON")
-    return payload, elapsed, status
-
-
-def _request_allow_error(
-    base_url: str,
-    method: str,
-    path: str,
-    body: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], float, int]:
-    encoded = None if body is None else json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(
-        base_url + path,
-        data=encoded,
-        method=method,
-        headers={"Content-Type": "application/json"},
-    )
-    started = time.perf_counter()
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            raw = response.read()
-            status = response.status
-    except urllib.error.HTTPError as error:
+        if not allow_error:
+            raise ContainerValidationError(
+                f"{method} {path} failed ({error.code}): {error.read().decode()}"
+            ) from error
         raw = error.read()
         status = error.code
     elapsed = time.perf_counter() - started
@@ -352,8 +335,12 @@ def validate(image: str, port: int, output: Path) -> dict[str, object]:
             "seed": duplicate_a["envelope"]["seed"],
             "history": duplicate_a["envelope"]["history"] + [first_command["command"]],
         }
-        invalid, _elapsed, invalid_status = _request_allow_error(
-            base_url, "POST", "/games/resume", {"envelope": malformed_history}
+        invalid, _elapsed, invalid_status = _request(
+            base_url,
+            "POST",
+            "/games/resume",
+            {"envelope": malformed_history},
+            allow_error=True,
         )
         if invalid_status != 422 or invalid.get("code") != "invalid_history":
             raise ContainerValidationError("duplicated history was not rejected")

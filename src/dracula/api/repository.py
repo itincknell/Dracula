@@ -1,4 +1,8 @@
-"""Transactional persistence adapters for local gameplay sessions."""
+"""Persist local gameplay sessions behind a transactional repository API.
+
+In-memory and SQLite implementations support atomic compare-and-swap updates for
+development and recorded games. Production stateless gameplay does not use them.
+"""
 
 from __future__ import annotations
 
@@ -49,6 +53,26 @@ class GameRepository(Protocol):
     def commit(self, session: GameSession, *, expected_revision: int) -> None: ...
 
 
+def _validate_append_only_commit(
+    current: GameSession,
+    updated: GameSession,
+    expected_revision: int,
+) -> None:
+    """Enforce the storage revision and append-only audit-log contract."""
+
+    if current.revision != expected_revision:
+        raise ConcurrentSessionUpdate("game session changed during the operation")
+    if updated.revision != expected_revision + 1:
+        raise ValueError("a committed session must advance its storage revision once")
+    if updated.events[: len(current.events)] != current.events:
+        raise ValueError("commits may only append public events")
+    if (
+        updated.idempotency_records[: len(current.idempotency_records)]
+        != current.idempotency_records
+    ):
+        raise ValueError("commits may only append idempotency records")
+
+
 class InMemoryGameRepository:
     """Thread-safe local repository used by tests and ephemeral development."""
 
@@ -93,14 +117,7 @@ class InMemoryGameRepository:
                 current = self._games[session.game_id]
             except KeyError as error:
                 raise SessionNotFound(str(session.game_id)) from error
-            if current.revision != expected_revision:
-                raise ConcurrentSessionUpdate("game session changed during the operation")
-            if session.revision != expected_revision + 1:
-                raise ValueError("a committed session must advance its storage revision once")
-            if session.events[: len(current.events)] != current.events:
-                raise ValueError("commits may only append public events")
-            if session.idempotency_records[: len(current.idempotency_records)] != current.idempotency_records:
-                raise ValueError("commits may only append idempotency records")
+            _validate_append_only_commit(current, session, expected_revision)
             self._games[session.game_id] = session
 
 
@@ -230,7 +247,10 @@ class SQLiteGameRepository:
                     )
                 core = session_core_data(session)
                 self._connection.execute(
-                    "INSERT INTO games(game_id, version, revision, session_json) VALUES (?, ?, ?, ?)",
+                    """
+                    INSERT INTO games(game_id, version, revision, session_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
                     (
                         str(session.game_id),
                         session.version,
@@ -325,20 +345,11 @@ class SQLiteGameRepository:
 
     def commit(self, session: GameSession, *, expected_revision: int) -> None:
         validate_session(session)
-        if session.revision != expected_revision + 1:
-            raise ValueError("a committed session must advance its storage revision once")
         with self._lock:
             try:
                 self._begin()
                 current = self._load_unlocked(session.game_id)
-                if current.revision != expected_revision:
-                    raise ConcurrentSessionUpdate(
-                        "game session changed during the operation"
-                    )
-                if session.events[: len(current.events)] != current.events:
-                    raise ValueError("commits may only append public events")
-                if session.idempotency_records[: len(current.idempotency_records)] != current.idempotency_records:
-                    raise ValueError("commits may only append idempotency records")
+                _validate_append_only_commit(current, session, expected_revision)
                 updated = self._connection.execute(
                     """
                     UPDATE games SET version = ?, revision = ?, session_json = ?

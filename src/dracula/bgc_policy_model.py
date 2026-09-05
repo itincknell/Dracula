@@ -1,4 +1,9 @@
-"""Permutation-invariant standalone policy for BGC visit distillation."""
+"""Define the permutation-invariant standalone BGC policy network.
+
+The model reads a player-visible 659-bit observation, derives the current cards
+without permanent hand-slot identities, and returns raw scores for 4×8 actions.
+Legality and strategic-symmetry masking remain outside the network.
+"""
 
 from __future__ import annotations
 
@@ -7,56 +12,75 @@ import math
 import torch
 from torch import Tensor, nn
 
+from dracula.bridge import (
+    ACTION_COUNT,
+    COFFIN_POSITION_COUNT,
+    HAND_SLOT_COUNT,
+    POLICY_GRID_INDICES,
+    POLICY_POSITION_COUNT,
+)
 from dracula.cards import CARD_COUNT
 from dracula.randomness import derive_seed
 
-# These versions bind tensor layout, action relabeling, and deterministic
-# initialization in datasets and deployable artifacts.
+# Observation and action versions protect tensor meanings that shape checks
+# cannot detect. The model and initialization versions protect reproducibility.
 MODEL_SCHEMA_VERSION = "dracula-bgc-card-policy-v2"
 OBSERVATION_SCHEMA_VERSION = "dracula-observation-card-set-v2"
 ACTION_SCHEMA_VERSION = "dracula-card-candidate-action-map-v2"
 INITIALIZATION_SCHEMA_VERSION = "dracula-bgc-card-policy-initialization-v2"
-INITIALIZATION_NAMESPACE = "dracula-bgc-card-policy-initialization-v2"
 
-OBSERVATION_SIZE = 659
-HAND_CANDIDATE_COUNT = 4
-POLICY_POSITION_COUNT = 8
-ACTION_COUNT = HAND_CANDIDATE_COUNT * POLICY_POSITION_COUNT
-COFFIN_POSITION_COUNT = 9
-POLICY_GRID_INDICES = (0, 1, 2, 3, 5, 6, 7, 8)
-
+HAND_CANDIDATE_COUNT = HAND_SLOT_COUNT
 COFFIN_FEATURES = COFFIN_POSITION_COUNT * CARD_COUNT
 STATUS_FEATURES = 3 * CARD_COUNT
 CONTEXT_FEATURES = 11
+OBSERVATION_SIZE = COFFIN_FEATURES + STATUS_FEATURES + CONTEXT_FEATURES
 # The compact 659-bit input is 9×54 coffin occupancy, 3×54 card status, and
-# eleven lifecycle bits. Current hand membership is already one status row.
+# eleven lifecycle bits. Current hand membership is one status row.
 COFFIN_START = 0
 STATUS_START = COFFIN_FEATURES
 CONTEXT_START = STATUS_START + STATUS_FEATURES
 IN_HAND_START = STATUS_START + CARD_COUNT
+
+CARD_EMBEDDING_WIDTH = 32
+POSITION_EMBEDDING_WIDTH = 8
+CARD_FEATURE_WIDTH = 64
+HAND_SUMMARY_WIDTH = 256
+COFFIN_INPUT_WIDTH = CARD_EMBEDDING_WIDTH + POSITION_EMBEDDING_WIDTH + 1
+COFFIN_FEATURE_WIDTH = 64
+STATUS_FEATURE_WIDTH = 96
+CONTEXT_FEATURE_WIDTH = 16
+SHARED_INPUT_WIDTH = (
+    HAND_SUMMARY_WIDTH
+    + COFFIN_POSITION_COUNT * COFFIN_FEATURE_WIDTH
+    + STATUS_FEATURE_WIDTH
+    + CONTEXT_FEATURE_WIDTH
+)
+SHARED_HIDDEN_WIDTH = 512
+SHARED_STATE_WIDTH = 256
+PAIR_INPUT_WIDTH = CARD_FEATURE_WIDTH + COFFIN_FEATURE_WIDTH + SHARED_STATE_WIDTH
+PAIR_HIDDEN_WIDTH = 256
 PARAMETER_COUNT = 754_601
 
 
 class BGCPolicyModelError(ValueError):
-    """A card-set observation or model input violates the v2 contract."""
+    """A card-set observation or model input violates the policy contract."""
 
 
 def derive_policy_initialization(
     run_root_seed: str, model_id: str, initialization_ordinal: int
 ) -> tuple[bytes, int]:
-    """Derive the model-local initialization seed without using global RNG state."""
+    """Return the recorded seed digest and integer used to initialize one model."""
 
-    if (
-        not isinstance(run_root_seed, str)
-        or not run_root_seed
-        or not isinstance(model_id, str)
-        or not model_id
-        or type(initialization_ordinal) is not int
-        or initialization_ordinal < 0
-    ):
-        raise BGCPolicyModelError("policy initialization identity is invalid")
+    if not isinstance(run_root_seed, str) or not run_root_seed:
+        raise BGCPolicyModelError("run root seed must be a non-empty string")
+    if not isinstance(model_id, str) or not model_id:
+        raise BGCPolicyModelError("model ID must be a non-empty string")
+    if type(initialization_ordinal) is not int or initialization_ordinal < 0:
+        raise BGCPolicyModelError(
+            "initialization ordinal must be a non-negative integer"
+        )
     digest = derive_seed(
-        INITIALIZATION_NAMESPACE,
+        INITIALIZATION_SCHEMA_VERSION,
         run_root_seed,
         model_id,
         str(initialization_ordinal),
@@ -64,31 +88,47 @@ def derive_policy_initialization(
     return digest, int.from_bytes(digest[:8], "big", signed=False)
 
 
-def candidate_card_indices(observation: Tensor) -> tuple[Tensor, Tensor]:
-    """Return fixed-card-order candidates and their padding mask."""
+def pack_hand_card_indices(observation: Tensor) -> tuple[Tensor, Tensor]:
+    """Extract the current hand as up to four canonical model rows.
 
-    if not isinstance(observation, Tensor) or observation.dtype is not torch.bool:
+    The observation records hand membership as 54 Boolean card-ID positions.
+    This returns those card indexes in ascending project order. Unused rows
+    contain the sentinel ``CARD_COUNT`` and are false in the returned mask.
+    """
+
+    if not isinstance(observation, Tensor):
+        raise BGCPolicyModelError("observation must be a tensor")
+    if observation.dtype is not torch.bool:
         raise BGCPolicyModelError("observation must have Boolean dtype")
     single = observation.ndim == 1
     batch = observation.unsqueeze(0) if single else observation
     if batch.ndim != 2 or batch.shape[0] < 1 or batch.shape[1] != OBSERVATION_SIZE:
         raise BGCPolicyModelError("observation must have shape [659] or [B,659]")
+
     in_hand = batch[:, IN_HAND_START : IN_HAND_START + CARD_COUNT]
-    counts = in_hand.sum(dim=1)
-    if torch.any(counts < 1) or torch.any(counts > HAND_CANDIDATE_COUNT):
+    cards_per_hand = in_hand.sum(dim=1)
+    if torch.any(cards_per_hand < 1) or torch.any(
+        cards_per_hand > HAND_CANDIDATE_COUNT
+    ):
         raise BGCPolicyModelError("active observations require one to four hand cards")
-    card_ids = torch.arange(CARD_COUNT, device=batch.device).expand(batch.shape[0], -1)
-    # Missing cards receive a sentinel larger than every card index. Stable
-    # sorting therefore yields canonical active candidates followed by padding.
-    ordered = torch.where(in_hand, card_ids, torch.full_like(card_ids, CARD_COUNT))
-    candidates = torch.sort(ordered, dim=1, stable=True).values[:, :HAND_CANDIDATE_COUNT]
-    present = candidates < CARD_COUNT
+
+    card_indexes = torch.arange(CARD_COUNT, device=batch.device)
+    padding = torch.full_like(card_indexes, CARD_COUNT)
+    # Replacing absent cards with 54 turns a hand such as cards 2 and 20 into
+    # [2, 20, 54, 54] after sorting and taking the first four entries.
+    padded_card_indexes = torch.where(in_hand, card_indexes, padding)
+    candidates = torch.sort(padded_card_indexes, dim=1, stable=True).values[
+        :, :HAND_CANDIDATE_COUNT
+    ]
+    candidate_is_present = candidates < CARD_COUNT
     if single:
-        return candidates.squeeze(0), present.squeeze(0)
-    return candidates, present
+        return candidates.squeeze(0), candidate_is_present.squeeze(0)
+    return candidates, candidate_is_present
 
 
 def _initialize(module: nn.Module, seed: int) -> None:
+    """Initialize every learned layer from one model-local CPU generator."""
+
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)
     with torch.no_grad():
@@ -113,7 +153,13 @@ class BGCPolicyModel(nn.Module):
 
     parameter_count = PARAMETER_COUNT
 
-    def __init__(self, *, run_root_seed: str, model_id: str, initialization_ordinal: int) -> None:
+    def __init__(
+        self,
+        *,
+        run_root_seed: str,
+        model_id: str,
+        initialization_ordinal: int,
+    ) -> None:
         super().__init__()
         digest, seed = derive_policy_initialization(
             run_root_seed, model_id, initialization_ordinal
@@ -122,19 +168,46 @@ class BGCPolicyModel(nn.Module):
         # initialization, so preserve it across the complete construction.
         global_state = torch.random.get_rng_state()
         try:
-            self.card_embedding = nn.Embedding(CARD_COUNT, 32)
-            self.coffin_position_embedding = nn.Embedding(COFFIN_POSITION_COUNT, 8)
-            self.card_encoder = nn.Linear(32, 64)
-            self.hand_set_encoder = nn.Linear(64, 256)
-            self.coffin_encoder = nn.Linear(41, 64)
-            self.status_encoder = nn.Linear(STATUS_FEATURES, 96)
-            self.context_encoder = nn.Linear(CONTEXT_FEATURES, 16)
-            self.shared_input = nn.Linear(944, 512)
-            self.shared_normalization = nn.LayerNorm(512, eps=1e-5)
-            self.shared_output = nn.Linear(512, 256)
-            self.pair_hidden = nn.Linear(384, 256)
-            self.pair_normalization = nn.LayerNorm(256, eps=1e-5)
-            self.pair_output = nn.Linear(256, 1)
+            self.card_embedding = nn.Embedding(CARD_COUNT, CARD_EMBEDDING_WIDTH)
+            self.coffin_position_embedding = nn.Embedding(
+                COFFIN_POSITION_COUNT,
+                POSITION_EMBEDDING_WIDTH,
+            )
+            self.card_encoder = nn.Linear(
+                CARD_EMBEDDING_WIDTH,
+                CARD_FEATURE_WIDTH,
+            )
+            self.hand_set_encoder = nn.Linear(
+                CARD_FEATURE_WIDTH,
+                HAND_SUMMARY_WIDTH,
+            )
+            self.coffin_encoder = nn.Linear(
+                COFFIN_INPUT_WIDTH,
+                COFFIN_FEATURE_WIDTH,
+            )
+            self.status_encoder = nn.Linear(
+                STATUS_FEATURES,
+                STATUS_FEATURE_WIDTH,
+            )
+            self.context_encoder = nn.Linear(
+                CONTEXT_FEATURES,
+                CONTEXT_FEATURE_WIDTH,
+            )
+            self.shared_input = nn.Linear(
+                SHARED_INPUT_WIDTH,
+                SHARED_HIDDEN_WIDTH,
+            )
+            self.shared_normalization = nn.LayerNorm(
+                SHARED_HIDDEN_WIDTH,
+                eps=1e-5,
+            )
+            self.shared_output = nn.Linear(
+                SHARED_HIDDEN_WIDTH,
+                SHARED_STATE_WIDTH,
+            )
+            self.pair_hidden = nn.Linear(PAIR_INPUT_WIDTH, PAIR_HIDDEN_WIDTH)
+            self.pair_normalization = nn.LayerNorm(PAIR_HIDDEN_WIDTH, eps=1e-5)
+            self.pair_output = nn.Linear(PAIR_HIDDEN_WIDTH, 1)
             self.activation = nn.GELU(approximate="none")
             self.register_buffer(
                 "policy_grid_indices",
@@ -149,61 +222,102 @@ class BGCPolicyModel(nn.Module):
         self.model_id = model_id
         self.initialization_ordinal = initialization_ordinal
         self.initialization_seed_digest = digest.hex()
-        if sum(parameter.numel() for parameter in self.parameters()) != PARAMETER_COUNT:
-            raise RuntimeError("BGC card policy parameter count differs")
+
+    def _encode_hand(self, batch: Tensor) -> tuple[Tensor, Tensor]:
+        """Encode each current card and an order-independent hand summary."""
+
+        candidates, present = pack_hand_card_indices(batch)
+        safe_candidates = candidates.clamp_max(CARD_COUNT - 1)
+        candidate_embeddings = self.card_embedding(safe_candidates)
+        candidate_features = self.activation(self.card_encoder(candidate_embeddings))
+        candidate_features = candidate_features * present.unsqueeze(-1).to(
+            candidate_features.dtype
+        )
+        # Sum pooling removes candidate-row order from the shared hand feature.
+        hand_summary = self.activation(
+            self.hand_set_encoder(candidate_features.sum(dim=1))
+        )
+        return candidate_features, hand_summary
+
+    def _encode_coffin(self, batch: Tensor, dtype: torch.dtype) -> Tensor:
+        """Encode the card, location, and occupancy of all nine positions."""
+
+        coffin = batch[:, COFFIN_START:STATUS_START].reshape(
+            -1, COFFIN_POSITION_COUNT, CARD_COUNT
+        )
+        # Multiplying the one-hot rows by the embedding table retrieves each
+        # position's card embedding; empty positions produce an all-zero vector.
+        coffin_cards = coffin.to(dtype) @ self.card_embedding.weight
+        positions = self.coffin_position_embedding.weight.unsqueeze(0).expand(
+            batch.shape[0], -1, -1
+        )
+        occupied = coffin.any(dim=2, keepdim=True).to(dtype)
+        return self.activation(
+            self.coffin_encoder(torch.cat((coffin_cards, positions, occupied), dim=2))
+        )
+
+    def _encode_shared_state(
+        self,
+        batch: Tensor,
+        hand_summary: Tensor,
+        coffin_features: Tensor,
+    ) -> Tensor:
+        """Combine the hand, coffin, card statuses, and lifecycle context."""
+
+        dtype = hand_summary.dtype
+        statuses = batch[:, STATUS_START:CONTEXT_START].to(dtype)
+        context = batch[:, CONTEXT_START:].to(dtype)
+        status_features = self.activation(self.status_encoder(statuses))
+        context_features = self.activation(self.context_encoder(context))
+        fused = torch.cat(
+            (
+                hand_summary,
+                coffin_features.flatten(start_dim=1),
+                status_features,
+                context_features,
+            ),
+            dim=1,
+        )
+        shared = self.activation(self.shared_input(fused))
+        shared = self.shared_normalization(shared)
+        return self.activation(self.shared_output(shared))
+
+    def _score_pairs(
+        self,
+        candidate_features: Tensor,
+        coffin_features: Tensor,
+        shared: Tensor,
+    ) -> Tensor:
+        """Score every current-card and non-center destination feature pair."""
+
+        destinations = coffin_features.index_select(1, self.policy_grid_indices)
+        pairs = torch.cat(
+            (
+                candidate_features[:, :, None, :].expand(
+                    -1, -1, POLICY_POSITION_COUNT, -1
+                ),
+                destinations[:, None, :, :].expand(
+                    -1, HAND_CANDIDATE_COUNT, -1, -1
+                ),
+                shared[:, None, None, :].expand(
+                    -1, HAND_CANDIDATE_COUNT, POLICY_POSITION_COUNT, -1
+                ),
+            ),
+            dim=3,
+        )
+        return self.pair_output(
+            self.pair_normalization(self.activation(self.pair_hidden(pairs)))
+        ).squeeze(-1)
 
     def forward(self, observation: Tensor) -> Tensor:
         """Return raw 4×8 candidate-card/destination logits."""
 
         single = observation.ndim == 1
         batch = observation.unsqueeze(0) if single else observation
-        # Candidate rows are derived from current card membership, not permanent
-        # engine hand-slot identities.
-        candidates, present = candidate_card_indices(batch)
-        safe_candidates = candidates.clamp_max(CARD_COUNT - 1)
-        candidate_embeddings = self.card_embedding(safe_candidates)
-        candidate_features = self.activation(self.card_encoder(candidate_embeddings))
-        candidate_features = candidate_features * present.unsqueeze(-1).to(candidate_features.dtype)
-        # Sum pooling makes the shared hand representation independent of the
-        # compact candidate-row order while retaining card-specific pair inputs.
-        hand_summary = self.activation(self.hand_set_encoder(candidate_features.sum(dim=1)))
-
-        coffin = batch[:, COFFIN_START:STATUS_START].reshape(-1, COFFIN_POSITION_COUNT, CARD_COUNT)
-        # One-hot coffin rows select the matching shared card embedding; empty
-        # positions contribute zeros and retain a separate occupancy bit.
-        coffin_cards = coffin.to(candidate_features.dtype) @ self.card_embedding.weight
-        positions = self.coffin_position_embedding.weight.unsqueeze(0).expand(batch.shape[0], -1, -1)
-        occupied = coffin.any(dim=2, keepdim=True).to(candidate_features.dtype)
-        coffin_features = self.activation(
-            self.coffin_encoder(torch.cat((coffin_cards, positions, occupied), dim=2))
-        )
-        statuses = batch[:, STATUS_START:CONTEXT_START].to(candidate_features.dtype)
-        context = batch[:, CONTEXT_START:].to(candidate_features.dtype)
-        status_features = self.activation(self.status_encoder(statuses))
-        context_features = self.activation(self.context_encoder(context))
-        # The shared state sees the complete hand set, all coffin positions,
-        # global card status, and lifecycle context once per decision.
-        fused = torch.cat(
-            (hand_summary, coffin_features.flatten(start_dim=1), status_features, context_features),
-            dim=1,
-        )
-        shared = self.activation(self.shared_input(fused))
-        shared = self.shared_normalization(shared)
-        shared = self.activation(self.shared_output(shared))
-        destinations = coffin_features.index_select(1, self.policy_grid_indices)
-        # A shared scorer then evaluates every current-card/destination pair
-        # against the same state representation.
-        pairs = torch.cat(
-            (
-                candidate_features[:, :, None, :].expand(-1, -1, POLICY_POSITION_COUNT, -1),
-                destinations[:, None, :, :].expand(-1, HAND_CANDIDATE_COUNT, -1, -1),
-                shared[:, None, None, :].expand(-1, HAND_CANDIDATE_COUNT, POLICY_POSITION_COUNT, -1),
-            ),
-            dim=3,
-        )
-        logits = self.pair_output(
-            self.pair_normalization(self.activation(self.pair_hidden(pairs)))
-        ).squeeze(-1)
+        candidate_features, hand_summary = self._encode_hand(batch)
+        coffin_features = self._encode_coffin(batch, candidate_features.dtype)
+        shared = self._encode_shared_state(batch, hand_summary, coffin_features)
+        logits = self._score_pairs(candidate_features, coffin_features, shared)
         return logits.squeeze(0) if single else logits
 
 
@@ -220,6 +334,6 @@ __all__ = (
     "PARAMETER_COUNT",
     "POLICY_GRID_INDICES",
     "POLICY_POSITION_COUNT",
-    "candidate_card_indices",
     "derive_policy_initialization",
+    "pack_hand_card_indices",
 )

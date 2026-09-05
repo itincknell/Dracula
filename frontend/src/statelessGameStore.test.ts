@@ -1,25 +1,28 @@
 // @vitest-environment jsdom
 
+/**
+ * Exercises stateless store sequencing through its observable public contract.
+ * Tests cover commands, recovery, opponent delay, narration races, and errors
+ * using fake transport and browser storage boundaries.
+ */
+
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GameStart } from "./App";
+import type { ResumablePhase } from "./contractPrimitives";
 import type {
   NarrationResponse,
   RecoveryEnvelope,
-  ResumablePhase,
   StatelessGameResponse,
-} from "./contracts";
+} from "./statelessContracts";
 import type { StatelessApiClient } from "./statelessApi";
 import { StatelessApiError } from "./statelessApi";
-import {
-  projectStatelessResponse,
-  RECOVERY_STORAGE_KEY,
-  StatelessGameController,
-  type BrowserStorage,
-} from "./statelessGameStore";
+import { StatelessGameController } from "./statelessGameStore";
+import { projectStatelessResponse } from "./statelessProjection";
+import { RECOVERY_STORAGE_KEY, type BrowserStorage } from "./statelessRecovery";
 
 afterEach(cleanup);
 
@@ -230,7 +233,7 @@ describe("stateless browser game controller", () => {
 
     const resumeGame = vi.fn(async () => ({ status: 200 as const, data: started }));
     const cold = new StatelessGameController(api({ resumeGame }), storage);
-    const restored = await cold.loadGame("active");
+    const restored = await cold.loadGame();
     expect(restored).toEqual(first.getSnapshot().view);
     expect(resumeGame).toHaveBeenCalledWith({ envelope: started.envelope });
   });
@@ -240,7 +243,7 @@ describe("stateless browser game controller", () => {
     storage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify({ seed: "x", history: [] }));
     const resumeGame = vi.fn();
     const controller = new StatelessGameController(api({ resumeGame }), storage);
-    expect(await controller.loadGame("active")).toBeNull();
+    expect(await controller.loadGame()).toBeNull();
     expect(storage.getItem(RECOVERY_STORAGE_KEY)).toBeNull();
     expect(resumeGame).not.toHaveBeenCalled();
     expect(controller.getSnapshot().presentation.error?.message).toContain("cleared");
@@ -259,7 +262,7 @@ describe("stateless browser game controller", () => {
     });
     const controller = new StatelessGameController(api({ resumeGame }), storage);
 
-    expect(await controller.loadGame("active")).toBeNull();
+    expect(await controller.loadGame()).toBeNull();
     expect(resumeGame).toHaveBeenCalledWith({ envelope: saved });
     expect(storage.getItem(RECOVERY_STORAGE_KEY)).toBeNull();
     expect(controller.getSnapshot().presentation.error?.message).toContain("cleared");
@@ -333,7 +336,6 @@ describe("stateless browser game controller", () => {
       current_round_moves: [{
         player: "queen",
         card_id: "2C",
-        hand_slot: -1,
         position: 1,
         turn_number: 1,
       }],
@@ -443,7 +445,7 @@ describe("stateless browser game controller", () => {
       applyCommand: vi.fn(async () => ({ status: 200 as const, data: complete })),
       narrate,
     }), storage);
-    await controller.loadGame("active");
+    await controller.loadGame();
     expect(narrate).not.toHaveBeenCalled();
     await controller.advanceRound();
     await vi.waitFor(() => expect(narrate).toHaveBeenCalledWith({

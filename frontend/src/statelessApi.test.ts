@@ -1,6 +1,11 @@
+/**
+ * Exercises the stateless HTTP client's origin selection and response handling.
+ * Mocked fetch calls verify request shapes, trusted parsing, and public errors
+ * without duplicating server-side gameplay tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 
-import type { StatelessGameResponse } from "./contracts";
+import type { StatelessGameResponse } from "./statelessContracts";
 import { createStatelessApiClient, resolveStatelessApiOrigin } from "./statelessApi";
 
 const response = (): StatelessGameResponse => ({

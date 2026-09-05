@@ -1,4 +1,8 @@
-"""Actor-visible information and authoritative destination symmetry."""
+"""Expose the stable, lightweight contracts shared by search consumers.
+
+Only actor-visible information and authoritative symmetry helpers are exported
+here. Search controllers require explicit imports from their owning modules.
+"""
 
 from dracula.search.information import (
     INFORMATION_STATE_SCHEMA_VERSION,
@@ -11,6 +15,7 @@ from dracula.search.information import (
     canonical_information_json,
     information_state_fingerprint,
     information_state_from_engine,
+    information_state_from_simulation,
     public_history_from_engine,
 )
 from dracula.search.symmetry import (
@@ -35,5 +40,6 @@ __all__ = (
     "destination_symmetry_groups",
     "information_state_fingerprint",
     "information_state_from_engine",
+    "information_state_from_simulation",
     "public_history_from_engine",
 )

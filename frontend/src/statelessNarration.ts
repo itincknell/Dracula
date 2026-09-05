@@ -1,4 +1,9 @@
-import type { HumanGameView } from "./statefulContracts";
+/**
+ * Coordinates the three optional narration cues around authoritative gameplay.
+ * It determines cue eligibility, ignores stale asynchronous responses, and
+ * keeps narration failure independent from accepted game commands.
+ */
+import type { HumanGameView } from "./gameView";
 import type { NarrationCueType, RecoveryEnvelope } from "./statelessContracts";
 import type { NarrationState } from "./gameControllerContract";
 import type { StatelessApiClient } from "./statelessApi";

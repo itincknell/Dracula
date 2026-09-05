@@ -1,4 +1,8 @@
-"""Stateless seed/history replay, transaction, cache, and privacy tests."""
+"""Exercise production stateless gameplay from request through public response.
+
+Tests cover complete games, replay after reload, malformed histories, duplicate
+commands, cache equivalence and eviction, policy determinism, and privacy.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dracula.api.app import create_app
-from dracula.api.service import PolicyTurnResult
+from dracula.api.policy import PolicyTurnResult
 from dracula.api.stateless_contracts import RecoveryEnvelope
 from dracula.api.stateless_service import canonical_envelope_digest
 from dracula.engine import EnginePlayer, EngineStatus, initial_dealer

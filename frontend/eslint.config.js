@@ -1,3 +1,8 @@
+/**
+ * Applies the maintained JavaScript and TypeScript lint rules to the frontend.
+ * Generated build output and browser-test reports are excluded, while browser
+ * and Node globals are available to their respective source and tooling files.
+ */
 import eslint from "@eslint/js";
 import globals from "globals";
 import typescriptEslint from "typescript-eslint";

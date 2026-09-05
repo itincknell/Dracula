@@ -1,4 +1,8 @@
-"""FastAPI transport wiring for the stateless gameplay services."""
+"""Expose stateless gameplay and narration services through FastAPI routes.
+
+Route handlers parse public request models, delegate to tested services, and map
+domain failures to HTTP responses without handling engine transitions directly.
+"""
 
 from __future__ import annotations
 

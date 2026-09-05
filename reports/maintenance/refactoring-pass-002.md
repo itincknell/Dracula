@@ -596,3 +596,98 @@ line counts and the final module owners. Its nine tranches cover all 194 Python,
 frontend, test, tool, deployment, infrastructure, and workflow files in scope;
 the coverage audit found no orphan. The final Markdown pass resolved 339 local
 links with no missing target.
+
+## Maintained frontend and deployment follow-up
+
+The line-review follow-up removed the unused session-backed browser client,
+controller, wire models, facade, and their tests. The maintained frontend now
+has one external-response validator (`statelessContracts`), one presentation
+view (`gameView`), one transport (`statelessApi`), and one gameplay controller
+(`statelessGameStore`). Test components use an explicit test controller rather
+than exercising an obsolete transport. The production projection now extends
+the already validated public view only with UI move IDs; tests import recovery
+and projection helpers from their owning modules rather than through the game
+controller.
+
+The scoring timeline no longer contains its unreachable session-narrator wait
+branch. Narration remains a separate request coordinated by
+`statelessNarration`; the production scoring sequence and its timings are
+unchanged. No CSS, card asset, portrait asset, responsive rule, animation, or
+approved layout value changed. The unused `VITE_API_BASE_URL` declaration and
+the old contract-fixture TypeScript include were removed.
+
+Deployment cleanup removed an unused generic tree copier, centralized the
+selected artifact digest in the context builder, and merged two identical HTTP
+request helpers in the container validator. An absolute Lambda-context output
+also exposed and received a focused fix: the build completed correctly but its
+success message had assumed the output was inside the repository. The CLI now
+reports either repository-relative or absolute destinations and has a
+regression test.
+
+Validation after these changes:
+
+- Complete Python suite: **181 passed**.
+- Frontend: **85 passed** across 10 files; TypeScript, ESLint, and the production
+  build passed.
+- Browser: **2 passed**, including a complete six-round stateless game and the
+  narration-failure responsive-layout case.
+- Package: all **42** discovered submodules imported, `pip check` passed, and a
+  416 KiB wheel built.
+- Deployment: **8** packaging tests passed; a fresh 41-file Lambda context
+  reproduced the selected artifact digest. Both CloudFormation files and both
+  18-entry parameter files parsed locally. AWS `ValidateTemplate` could not run
+  because the configured personal-account token is invalid; no resource was
+  created or changed.
+- Documentation: **180** local Markdown links resolve; tracker-ID confinement,
+  active frontend terminology, and `git diff --check` pass.
+
+The refreshed review agenda records the current commit, active module owners,
+line counts, and the unchanged approval boundary. Generated build output,
+runtime data, model binaries, caches, and local databases remain ignored and
+unstaged.
+
+## Look-ahead readability cleanup
+
+The review-driven follow-up inspected the unapproved search, training, local
+API, stateless API, narration, and frontend paths before the user reached them.
+It made the following responsibility changes without altering contracts:
+
+- BGC policy training now separates external row decoding, metric mathematics,
+  mutable optimization, atomic checkpoint persistence, immutable training
+  contracts, resolved configuration, command-line transport, and run
+  coordination into focused `bgc_policy_*` modules. The former 346-line
+  training procedure is now a 69-line coordinator over named phases; the
+  public entry point remains compatible while argument parsing lives outside
+  the training coordinator.
+- The local SQLite service now delegates session/event construction, policy
+  invocation, public projection and move tokens, and route declarations to
+  `local_session_events`, `local_policy_turn`, `local_projection`, and
+  `local_routes`. `api.service` retains transaction, idempotency, and claim
+  ownership.
+- Stateless command application now separates placement and round-advance
+  validation. Grounded narration derives opening, transition, and final cues in
+  separate helpers.
+- Frontend scoring timer/controller behavior remains in
+  `ScoringPresentation`; pure scoring workspaces moved to `ScoringWorkspaces`.
+  The public card ledger moved from page assembly to `SeenCardsExpando`.
+- BGC simulation and determinization were divided into explicit sampling,
+  selection, continuation, backup, and result-construction phases. Comments now
+  explain hidden-world ownership, shared belief samples, UCT backup, checkpoint
+  identity, interruption boundaries, optimistic placement, and minimum opponent
+  timing.
+
+No cohesive search algorithm, external validation boundary, declarative route
+table, or tensor architecture was split merely to reduce a line count. Exact
+duplicate-function inspection found only protocol stubs and the intentionally
+separate local/stateless HTTP response adapters.
+
+Validation after the look-ahead cleanup:
+
+- Complete Python suite: **222 passed**.
+- Frontend: **85 passed**; TypeScript, ESLint, and production build passed.
+- Static import pass: all **60** discovered package submodules imported.
+- `pip check` and `git diff --check` passed.
+- Selected policy, BGC, API, replay, privacy, narration, local repository, and
+  complete-game tests are included in the passing suite.
+- Browser validation: both Playwright scenarios passed, including a complete
+  six-round stateless game and narration-failure layout coverage.

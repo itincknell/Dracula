@@ -1,11 +1,16 @@
+/**
+ * Owns frontend gameplay state for the stateless production protocol.
+ * The store sequences commands, replay persistence, intermediate move display,
+ * minimum opponent delay, narration requests, and observable UI state.
+ */
 import type {
   LegalMove,
   Player,
 } from "./contractPrimitives";
 import type {
-  ApiErrorResponse,
   HumanGameView,
-} from "./statefulContracts";
+  PresentationError,
+} from "./gameView";
 import type {
   RecoveryEnvelope,
   StatelessGameResponse,
@@ -29,9 +34,6 @@ import {
   projectStatelessResponse,
 } from "./statelessProjection";
 
-export { RECOVERY_STORAGE_KEY, type BrowserStorage } from "./statelessRecovery";
-export { projectStatelessResponse } from "./statelessProjection";
-
 export const MINIMUM_DRACULA_TURN_MS = 600;
 
 const defaultDraculaTurnDelay = (): Promise<void> =>
@@ -52,39 +54,21 @@ const narrationState = (
   ...changes,
 });
 
-const networkError = (error: unknown): ApiErrorResponse => ({
-  schema_version: "dracula-error-v1",
-  code: "dependency_unavailable",
+const networkError = (error: unknown): PresentationError => ({
   message: error instanceof Error ? error.message : "The game service is unavailable.",
   retryable: true,
-  current_version: null,
-  current_game: null,
 });
 
-const recoveryError = (message: string): ApiErrorResponse => ({
-  schema_version: "dracula-error-v1",
-  code: "validation_error",
+const recoveryError = (message: string): PresentationError => ({
   message,
   retryable: false,
-  current_version: null,
-  current_game: null,
 });
 
-function statelessError(error: unknown): ApiErrorResponse {
+function statelessError(error: unknown): PresentationError {
   if (!(error instanceof StatelessApiError)) return networkError(error);
   return {
-    schema_version: "dracula-error-v1",
-    code: error.response.code === "dependency_unavailable"
-      ? "dependency_unavailable"
-      : error.response.code === "wrong_turn"
-        ? "wrong_turn"
-        : error.response.code === "wrong_phase"
-          ? "wrong_phase"
-          : "validation_error",
     message: error.response.message,
     retryable: error.response.retryable,
-    current_version: null,
-    current_game: null,
   };
 }
 
@@ -146,6 +130,9 @@ export class StatelessGameController implements GameControllerContract {
   private async holdOpponentOpening(response: StatelessGameResponse): Promise<void> {
     const preview = opponentOpeningPreview(projectStatelessResponse(response));
     if (preview === null) return;
+    // The server has already accepted both opening actions. Publishing a view
+    // with only Dracula's move withheld gives the opening the same visible pace
+    // as later turns without changing the recovery history.
     this.saveEnvelope(response.envelope);
     this.publish({
       view: preview,
@@ -206,8 +193,7 @@ export class StatelessGameController implements GameControllerContract {
     }
   }
 
-  loadGame(_gameId: string): Promise<HumanGameView | null> {
-    void _gameId;
+  loadGame(): Promise<HumanGameView | null> {
     if (this.loadPromise !== null) return this.loadPromise;
     this.updatePresentation({ pending: "load_game", error: null });
     this.loadPromise = (async () => {
@@ -294,7 +280,7 @@ export class StatelessGameController implements GameControllerContract {
     return move === null ? false : this.playMove(move.move_id);
   }
 
-  async playMove(moveId: string): Promise<boolean> {
+  private async playMove(moveId: string): Promise<boolean> {
     const { view, presentation } = this.state;
     const move = view?.legal_moves.find((candidate) => candidate.move_id === moveId);
     if (
@@ -302,6 +288,8 @@ export class StatelessGameController implements GameControllerContract {
       presentation.pending !== null || view.phase.kind !== "human_turn"
     ) return false;
     this.updatePresentation({ pending: "human_move", error: null });
+    // Show the accepted human choice immediately. The authoritative response
+    // replaces this projection, so a failed request can restore `view` exactly.
     this.publish({
       ...this.state,
       view: humanPlacementPreview(view, move),
@@ -313,6 +301,8 @@ export class StatelessGameController implements GameControllerContract {
       },
     });
     try {
+      // Network work and the minimum Dracula delay run together. Fast inference
+      // remains legible while slow inference incurs no extra artificial wait.
       const [result] = await Promise.all([
         this.api.applyCommand({
           envelope: this.envelope,
@@ -337,11 +327,6 @@ export class StatelessGameController implements GameControllerContract {
     }
   }
 
-  progressOpponent(): Promise<void> {
-    // Stateless commands settle every non-forced opponent response synchronously.
-    return Promise.resolve();
-  }
-
   async advanceRound(): Promise<boolean> {
     const { view, presentation } = this.state;
     if (
@@ -350,6 +335,8 @@ export class StatelessGameController implements GameControllerContract {
     ) return false;
     this.updatePresentation({ pending: "round_advance", error: null });
     const priorStatus = view.status;
+    // Round-transition dialogue belongs to the completed round and disappears
+    // only when the user explicitly deals the next one.
     if (priorStatus === "round_complete") this.narrationCoordinator.clear();
     try {
       const result = await this.api.applyCommand({

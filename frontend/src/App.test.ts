@@ -1,3 +1,8 @@
+/**
+ * Verifies page routing and top-level application composition.
+ * These tests keep the start, game, and rules views reachable without repeating
+ * store, transport, or gameplay component behavior covered elsewhere.
+ */
 import { describe, expect, it } from "vitest";
 
 import { resolveRoute } from "./App";

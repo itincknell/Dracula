@@ -1,4 +1,8 @@
-"""Build an isolated Lambda image context containing the exact selected pi1."""
+"""Build an isolated Lambda container context for the selected π1 release.
+
+The tool verifies the pinned local artifact, computes the production import
+closure, and copies only required source and runtime files into generated output.
+"""
 
 from __future__ import annotations
 
@@ -77,24 +81,6 @@ def _git_revision(root: Path) -> str:
         ).strip()
     except (OSError, subprocess.CalledProcessError) as error:
         raise ReleaseBuildError("release build requires a Git checkout") from error
-
-
-def _copy_tree(source: Path, destination: Path) -> None:
-    if not source.is_dir():
-        raise ReleaseBuildError(f"required source directory is absent: {source}")
-    shutil.copytree(
-        source,
-        destination,
-        ignore=shutil.ignore_patterns(
-            "__pycache__",
-            ".pytest_cache",
-            "*.egg-info",
-            "*.dist-info",
-            "*.pyc",
-            "*.pyo",
-            ".DS_Store",
-        ),
-    )
 
 
 def _copy_runtime_source(source_root: Path, destination_root: Path) -> None:
@@ -227,13 +213,17 @@ def main(argv: list[str] | None = None) -> int:
     if not output.is_absolute():
         output = root / output
     manifest = build_context(root, artifact, output)
+    try:
+        displayed_output = output.relative_to(root).as_posix()
+    except ValueError:
+        displayed_output = output.as_posix()
     print(
         json.dumps(
             {
                 "artifact_sha256": manifest["artifact_sha256"],
                 "file_count": len(manifest["files"]),
                 "git_revision": manifest["git_revision"],
-                "output": str(output.relative_to(root)),
+                "output": displayed_output,
             },
             sort_keys=True,
         )

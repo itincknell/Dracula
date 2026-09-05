@@ -1,4 +1,8 @@
-"""Shared public phase and scoring projections for both gameplay transports."""
+"""Project engine scoring and lifecycle facts into public presentation values.
+
+Both stateless production and local gameplay use these pure helpers so phase,
+line-score, and round-result representations cannot drift between transports.
+"""
 
 from __future__ import annotations
 
@@ -116,19 +120,15 @@ def _api_line(line: LineScore) -> ApiLineScore:
     )
 
 
-def _scoring_sequence(
-    result: EngineRoundResult,
-    human_role: EnginePlayer,
-    previous_totals: PlayerValues[int],
-) -> tuple[ScoringStep, ...]:
-    """Build the deterministic line, tie-break, and total-update animation script."""
+def _line_scoring_steps(result: EngineRoundResult) -> list[ScoringStep]:
+    """Build line-calculation steps in the dealer-first presentation order."""
 
     steps: list[ScoringStep] = []
-    # The dealer's three lines are presented first, matching the approved UI
-    # sequence rather than Queen/King enumeration order.
     for player in (result.dealer, other_player(result.dealer)):
         lines = result.line_scores[player]
-        ranked_indices = sorted(range(3), key=lambda index: (-lines[index].total, index))
+        ranked_indices = sorted(
+            range(3), key=lambda index: (-lines[index].total, index)
+        )
         rank_by_index = {
             line_index: rank + 1 for rank, line_index in enumerate(ranked_indices)
         }
@@ -149,6 +149,15 @@ def _scoring_sequence(
                     },
                 )
             )
+    return steps
+
+
+def _score_comparison_steps(
+    result: EngineRoundResult,
+    human_role: EnginePlayer,
+) -> tuple[list[ScoringStep], int]:
+    """Compare ranked line totals until the round's deciding rank is known."""
+
     human_totals = sorted(
         (line.total for line in result.line_scores[human_role]), reverse=True
     )
@@ -156,6 +165,7 @@ def _scoring_sequence(
     opponent_totals = sorted(
         (line.total for line in result.line_scores[opponent]), reverse=True
     )
+    steps: list[ScoringStep] = []
     selected_rank = 2
     for rank in range(3):
         tied = human_totals[rank] == opponent_totals[rank]
@@ -175,6 +185,22 @@ def _scoring_sequence(
         if rank < 2 and not tied:
             selected_rank = rank
             break
+    return steps, selected_rank
+
+
+def _scoring_sequence(
+    result: EngineRoundResult,
+    human_role: EnginePlayer,
+    previous_totals: PlayerValues[int],
+) -> tuple[ScoringStep, ...]:
+    """Build the deterministic line, tie-break, and total-update animation script."""
+
+    # Dealer-first line animation is a presentation choice, independent of
+    # Queen/King enum order or which role belongs to the human.
+    steps = _line_scoring_steps(result)
+    comparisons, selected_rank = _score_comparison_steps(result, human_role)
+    steps.extend(comparisons)
+    opponent = other_player(human_role)
     steps.append(
         ScoringStep(
             kind="select_round_score",

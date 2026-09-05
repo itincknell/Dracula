@@ -1,4 +1,8 @@
-"""Small ASGI safeguards specific to the public stateless route surface."""
+"""Apply transport-level safeguards to the stateless ASGI application.
+
+The middleware bounds request bodies and converts oversized or malformed HTTP
+input into the API's public error shape before route processing begins.
+"""
 
 from __future__ import annotations
 

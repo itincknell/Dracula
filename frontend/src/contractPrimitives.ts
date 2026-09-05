@@ -1,3 +1,8 @@
+/**
+ * Defines public gameplay values shared across frontend boundaries.
+ * These interfaces describe cards, moves, scores, phases, and their runtime
+ * validators without owning transport, persistence, or presentation state.
+ */
 export type Player = "queen" | "king";
 export type GameStatus = "playing" | "round_complete" | "game_complete";
 
@@ -9,7 +14,6 @@ export interface PlayerScore {
 export interface PlayedMove {
   player: Player;
   card_id: string;
-  hand_slot: number;
   position: number;
   turn_number: number;
 }
@@ -130,16 +134,6 @@ export function assertPlayerScore(value: unknown): void {
   assertNumber(item.opponent, "opponent score");
 }
 
-export function assertPlayedMove(value: unknown): void {
-  const item = record(value, "played move");
-  exactKeys(item, ["player", "card_id", "hand_slot", "position", "turn_number"], "played move");
-  assertOneOf(item.player, ["queen", "king"], "move player");
-  assertString(item.card_id, "move card");
-  assertNumber(item.hand_slot, "move hand slot");
-  assertNumber(item.position, "move position");
-  assertNumber(item.turn_number, "move turn");
-}
-
 export function assertLineScore(value: unknown): void {
   const item = record(value, "line score");
   exactKeys(
@@ -195,35 +189,6 @@ export function assertScoringStep(value: unknown): void {
   });
 }
 
-export function assertRoundRecord(value: unknown): void {
-  const item = record(value, "round record");
-  exactKeys(
-    item,
-    [
-      "round_number",
-      "dealer",
-      "coffin",
-      "moves",
-      "line_scores",
-      "scoring_sequence",
-      "round_scores",
-    ],
-    "round record",
-  );
-  assertNumber(item.round_number, "round number");
-  assertOneOf(item.dealer, ["queen", "king"], "round dealer");
-  assertArray(item.coffin, "round coffin");
-  if (item.coffin.length !== 9) throw new TypeError("round coffin requires nine cards");
-  item.coffin.forEach((card) => assertString(card, "round coffin card"));
-  assertArray(item.moves, "round moves");
-  item.moves.forEach(assertPlayedMove);
-  assertArray(item.line_scores, "round line scores");
-  item.line_scores.forEach(assertLineScore);
-  assertArray(item.scoring_sequence, "scoring sequence");
-  item.scoring_sequence.forEach(assertScoringStep);
-  assertPlayerScore(item.round_scores);
-}
-
 export function assertPhase(value: unknown): void {
   const item = record(value, "resumable phase");
   assertString(item.kind, "phase kind");
@@ -269,13 +234,4 @@ export function assertPhase(value: unknown): void {
     default:
       throw new TypeError("resumable phase kind is unsupported");
   }
-}
-
-export function assertLegalMove(value: unknown): void {
-  const item = record(value, "legal move");
-  exactKeys(item, ["move_id", "card_id", "hand_slot", "position"], "legal move");
-  assertString(item.move_id, "move ID");
-  assertString(item.card_id, "legal move card");
-  assertNumber(item.hand_slot, "legal move hand slot");
-  assertNumber(item.position, "legal move position");
 }

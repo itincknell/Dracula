@@ -1,3 +1,8 @@
+/*
+ * Defines the stylesheet cascade for the Dracula frontend.
+ * Imports move from shared visual foundations through gameplay, scoring, rules,
+ * and finally responsive overrides; changing this order can change behavior.
+ */
 @import "./styles/base.css";
 @import "./styles/gameplay.css";
 @import "./styles/scoring.css";

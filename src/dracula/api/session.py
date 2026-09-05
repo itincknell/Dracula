@@ -1,51 +1,36 @@
-"""Persisted application state and public projections over the pure engine."""
+"""Represent trusted local gameplay sessions around private engine state.
+
+This local-only compatibility layer defines and serializes private session,
+policy, idempotency, and turn-claim records for SQLite-backed play. Public view
+projection is owned separately by :mod:`dracula.api.local_projection`.
+"""
 
 from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import math
 import re
 import struct
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Mapping
-from uuid import UUID, uuid5, NAMESPACE_URL
+from uuid import UUID
 
 from pydantic import TypeAdapter
 
 from dracula.api.contracts import (
-    HumanGameView,
-    HumanTurnPhase,
-    LegalMove,
     PublicEvent,
     ResumablePhase,
-    RoundRecord,
 )
-from dracula.api.policy import HIDDEN_STATE_BYTES, zero_hidden_state
-from dracula.api.presentation import (
-    phase_for_state,
-    played_move,
-    player_score,
-    round_record,
-)
+from dracula.api.policy import HIDDEN_STATE_BYTES
 from dracula.engine import (
-    EnginePlayedMove,
     EnginePlayer,
-    EngineRoundResult,
     EngineState,
-    EngineStatus,
-    LineOrientation,
-    LineScore,
-    MultiplierReason,
-    PlayerValues,
     canonical_state_data,
-    legal_moves,
-    other_player,
     validate_state,
 )
+from dracula.engine_serialization import engine_state_from_data
 
 SESSION_SCHEMA_VERSION = "dracula-game-session-v1"
 _PHASE_ADAPTER = TypeAdapter(ResumablePhase)
@@ -54,7 +39,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 @dataclass(frozen=True, slots=True)
 class PolicySession:
-    """Controller identity and recurrent compatibility state pinned to a local game."""
+    """Controller identity and opaque policy state pinned to a local game."""
 
     policy_id: str
     policy_version: str
@@ -156,79 +141,9 @@ def validate_session(session: GameSession) -> None:
         raise ValueError("session contains duplicate idempotency records")
 
 
-def _played_move_from_data(value: Mapping[str, Any]) -> EnginePlayedMove:
-    return EnginePlayedMove(
-        player=EnginePlayer(value["player"]),
-        card_id=str(value["card_id"]),
-        hand_slot=int(value["hand_slot"]),
-        global_grid_index=int(value["global_grid_index"]),
-        turn_number=int(value["turn_number"]),
-    )
-
-
-def _line_from_data(value: Mapping[str, Any]) -> LineScore:
-    return LineScore(
-        orientation=LineOrientation(value["orientation"]),
-        line_index=int(value["line_index"]),
-        cards=tuple(value["cards"]),  # type: ignore[arg-type]
-        values=tuple(int(item) for item in value["values"]),  # type: ignore[arg-type]
-        base_value=int(value["base_value"]),
-        multiplier=int(value["multiplier"]),
-        multiplier_reason=MultiplierReason(value["multiplier_reason"]),
-        total=int(value["total"]),
-    )
-
-
-def _player_values_from_data(value: Mapping[str, Any], decode: Any) -> PlayerValues[Any]:
-    return PlayerValues(queen=decode(value["queen"]), king=decode(value["king"]))
-
-
-def _round_from_data(value: Mapping[str, Any]) -> EngineRoundResult:
-    return EngineRoundResult(
-        round_number=int(value["round_number"]),
-        dealer=EnginePlayer(value["dealer"]),
-        coffin=tuple(value["coffin"]),  # type: ignore[arg-type]
-        moves=tuple(_played_move_from_data(item) for item in value["moves"]),
-        line_scores=_player_values_from_data(
-            value["line_scores"], lambda lines: tuple(_line_from_data(line) for line in lines)
-        ),
-        round_scores=_player_values_from_data(value["round_scores"], int),
-    )
-
-
-def engine_state_from_data(value: Mapping[str, Any]) -> EngineState:
-    """Decode and fully validate a locally persisted private engine state."""
-
-    state = EngineState(
-        seed=str(value["seed"]),
-        status=EngineStatus(value["status"]),
-        round_number=int(value["round_number"]),
-        dealer=EnginePlayer(value["dealer"]),
-        active_player=(
-            None if value["active_player"] is None else EnginePlayer(value["active_player"])
-        ),
-        stock=tuple(value["stock"]),
-        hands=_player_values_from_data(value["hands"], lambda hand: tuple(hand)),
-        coffin=tuple(value["coffin"]),  # type: ignore[arg-type]
-        current_round_moves=tuple(
-            _played_move_from_data(item) for item in value["current_round_moves"]
-        ),
-        pending_round_result=(
-            None
-            if value["pending_round_result"] is None
-            else _round_from_data(value["pending_round_result"])
-        ),
-        completed_rounds=tuple(_round_from_data(item) for item in value["completed_rounds"]),
-        total_scores=_player_values_from_data(value["total_scores"], int),
-    )
-    validate_state(state)
-    return state
-
-
 def session_core_data(session: GameSession) -> dict[str, Any]:
     """Encode private state explicitly; repositories store events and requests separately."""
 
-    validate_session(session)
     engine_data = canonical_state_data(session.engine_state)["state"]
     policy = session.policy_session
     return {
@@ -338,114 +253,3 @@ def response_body(record: IdempotencyRecord) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("persisted idempotency response is not an object")
     return value
-
-
-def make_event(
-    game_id: UUID,
-    sequence: int,
-    event_type: str,
-    occurred_at: datetime,
-    prior_version: int,
-    resulting_version: int,
-    request_id: str | None,
-    payload: Mapping[str, int | str | bool | None],
-) -> PublicEvent:
-    """Create one deterministic append-only public event record."""
-
-    return PublicEvent(
-        game_id=game_id,
-        event_id=str(uuid5(NAMESPACE_URL, f"dracula:{game_id}:{sequence}")),
-        sequence=sequence,
-        event_type=event_type,  # type: ignore[arg-type]
-        occurred_at=occurred_at,
-        prior_version=prior_version,
-        resulting_version=resulting_version,
-        request_id=request_id,
-        payload=dict(payload),
-    )
-
-
-def move_id_for(session: GameSession, hand_slot: int, position: int, card_id: str) -> str:
-    """Create an opaque local-session token for one current legal move."""
-
-    message = (
-        f"move-v1\0{session.game_id}\0{session.version}\0{hand_slot}\0{position}\0{card_id}"
-    ).encode("utf-8")
-    digest = hmac.new(session.move_secret, message, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-
-def resolve_human_move_id(session: GameSession, move_id: str) -> tuple[int, int] | None:
-    """Resolve an opaque local token only if it still names a current legal move."""
-
-    state = session.engine_state
-    if state.status is not EngineStatus.PLAYING or state.active_player is not session.human_role:
-        return None
-    for move in legal_moves(state, session.human_role):
-        card_id = state.hands[session.human_role][move.hand_slot]
-        assert card_id is not None
-        candidate = move_id_for(session, move.hand_slot, move.global_grid_index, card_id)
-        if hmac.compare_digest(candidate, move_id):
-            return move.hand_slot, move.global_grid_index
-    return None
-
-
-def project_human_game(session: GameSession, *, narration_enabled: bool = False) -> HumanGameView:
-    """Project a private local session into its browser-safe compatibility view."""
-
-    validate_session(session)
-    state = session.engine_state
-    running = PlayerValues(queen=0, king=0)
-    completed: list[RoundRecord] = []
-    for result in state.completed_rounds:
-        completed.append(round_record(result, session.human_role, running))
-        running = PlayerValues(
-            queen=running.queen + result.round_scores.queen,
-            king=running.king + result.round_scores.king,
-        )
-    pending = (
-        None
-        if state.pending_round_result is None
-        else round_record(state.pending_round_result, session.human_role, running)
-    )
-    legal: list[LegalMove] = []
-    if (
-        state.status is EngineStatus.PLAYING
-        and state.active_player is session.human_role
-        and isinstance(session.phase, HumanTurnPhase)
-    ):
-        for move in legal_moves(state, session.human_role):
-            card_id = state.hands[session.human_role][move.hand_slot]
-            assert card_id is not None
-            legal.append(
-                LegalMove(
-                    move_id=move_id_for(
-                        session, move.hand_slot, move.global_grid_index, card_id
-                    ),
-                    card_id=card_id,
-                    hand_slot=move.hand_slot,
-                    position=move.global_grid_index,
-                )
-            )
-    return HumanGameView(
-        game_id=session.game_id,
-        version=session.version,
-        status=state.status.value,
-        round_number=state.round_number,
-        turn_number=len(state.current_round_moves),
-        dealer=state.dealer.value,
-        active_player=None if state.active_player is None else state.active_player.value,
-        human_role=session.human_role.value,
-        opponent_role=other_player(session.human_role).value,
-        coffin=state.coffin,
-        current_round_moves=tuple(played_move(move) for move in state.current_round_moves),
-        pending_round_result=pending,
-        completed_rounds=tuple(completed),
-        total_scores=player_score(state.total_scores, session.human_role),
-        phase=session.phase,
-        latest_event_sequence=len(session.events),
-        narration_enabled=narration_enabled,
-        human_hand=state.hands[session.human_role],
-        legal_moves=tuple(legal),
-        events=session.events,
-    )

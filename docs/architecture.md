@@ -44,36 +44,51 @@ The refactored Python runtime has explicit, cycle-free owners:
   `engine_dealing`, `scoring`, `engine_validation`, and
   `engine_serialization` respectively.
 - `search.information` owns actor-visible state and fingerprints;
-  `search.symmetry` owns the exhaustive early-turn destination table.
+  `search.symmetry` owns the exhaustive early-turn destination table;
+  `search.determinization` reconstructs private sampled worlds; and
+  `search.bgc` owns the retained round-local UCT. `search.belief_greedy` and
+  `search.policy_continuation` provide the original and phase-two response
+  policies. These search controllers support provenance and comparison but are
+  not invoked by production gameplay.
 - `strategic_actions` owns strategic groups and deterministic concrete-member
   choice. `action_contract` owns representative masks, proxy mapping, and
   standalone output resolution.
 - `bgc_policy_model` owns the compact policy network, `bgc_policy` owns its
-  artifact contract, and `active_policy` is the selected `pi1` runtime.
+  artifact contract, and `active_policy` is the selected `pi1` runtime. The
+  retained training path separates converted-corpus loading, metrics,
+  optimization, checkpoint persistence, contracts, immutable configuration,
+  command-line handling, and run coordination into the corresponding
+  `bgc_policy_*` modules.
 - `api.stateless_service` owns replay and command application;
   `api.stateless_projection` owns the public view; `api.stateless_contracts`
   owns production wire models; and `api.stateless_routes` plus
   `api.stateless_app` own HTTP assembly. `api.production` is the Lambda entry
   point. Repository-backed sessions remain isolated in the explicit local
-  application.
-- `api.narration` owns grounded cue construction and failure isolation while
-  `api.bedrock` owns provider transport.
+  application: `api.session` owns persisted values, `api.local_projection`
+  owns browser-safe views and move tokens, `api.local_session_events` owns
+  event construction, and `api.service` owns transactions.
+- `api.narration_cues` owns grounded cue construction, `api.narration` owns
+  provider-independent orchestration and failure isolation, and `api.bedrock`
+  owns provider transport.
 
-Maintained code imports these owner modules directly. The only retained model
+Maintained code imports these owner modules directly. The retained model
 compatibility code is the verified reader for the sealed 659-bit `pi1`
-training corpus.
+training corpus; restored BGC code uses the current information, symmetry,
+observation, and artifact contracts directly.
 
 The frontend follows the same separation:
 
-- `contractPrimitives`, `statefulContracts`, and `statelessContracts` own the
-  shared, local-stateful, and production-stateless wire contracts.
-  `contracts.ts` remains a compatibility export surface.
+- `contractPrimitives` owns shared public values and validators,
+  `statelessContracts` owns the production wire contract, and `gameView` owns
+  the smaller view consumed by presentation components.
 - `statelessApi`, `statelessRecovery`, `statelessProjection`, and
   `statelessNarration` own transport, browser persistence, pure response
   projection, and narration coordination. `statelessGameStore` owns gameplay
-  sequencing.
-- `gameplay`, `DraculaCommentary`, `scoringStateMachine`, and
-  `ScoringPresentation` own presentation. Ordered `styles/base.css`,
+  sequencing. The frontend supports only the stateless gameplay transport;
+  local session gameplay remains a Python API and operational-record surface.
+- `gameplay`, `DraculaCommentary`, `scoringStateMachine`,
+  `ScoringWorkspaces`, and `ScoringPresentation` own presentation;
+  `SeenCardsExpando` owns the public card ledger. Ordered `styles/base.css`,
   `gameplay.css`, `scoring.css`, `rules.css`, and `responsive.css` preserve the
   approved cascade through `styles.css`.
 
@@ -158,9 +173,12 @@ The word `unaccepted` is historical training nomenclature; the user has now
 selected this exact artifact for production. The release build copies and
 verifies it inside the Lambda image.
 
-Nested search, BGC controllers, `pi0`, PPO, response rankers, and hybrid search
-are historical evidence only. Their executable implementations are not part of
-the installed application.
+The repository retains the BGC-128 search lineage needed to review and reproduce
+the training process: the original eight-completion belief-greedy continuation
+and the phase-two `pi0` continuation. These controllers use the current 659-bit
+policy boundary and symmetry contract, but they are not production gameplay
+fallbacks. Sam, shallow search, PPO, response rankers, and hybrid-search
+implementations remain historical evidence only.
 
 ## Narrator scheduling
 

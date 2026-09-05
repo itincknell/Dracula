@@ -1,10 +1,15 @@
+/**
+ * Composes the active game board from controller state and presentation pieces.
+ * It renders the coffin, human hand, public status and scores, Dracula bar, and
+ * scoring overlay without owning API transport or recovery persistence.
+ */
 import { useEffect, useRef } from "react";
 
 import { CardFace } from "./CardFace";
 import { cardName } from "./cardAssets";
 import { currentDialogueIsVisible, DraculaCommentary } from "./DraculaCommentary";
 import { FinalRoundPresentation, ScoringPresentation } from "./ScoringPresentation";
-import type { HumanGameView } from "./statefulContracts";
+import type { HumanGameView } from "./gameView";
 import { type GameControllerContract, useGameStore } from "./gameControllerContract";
 
 export function TurnStatus({ view, pending }: { view: HumanGameView; pending: string | null }) {
@@ -216,16 +221,6 @@ export function GameWindow({
 }) {
   const { view, presentation, narration } = useGameStore(controller);
 
-  useEffect(() => {
-    if (
-      presentation.pending === null &&
-      view?.phase.kind === "opponent_turn" &&
-      view.phase.status !== "failed"
-    ) {
-      void controller.progressOpponent();
-    }
-  }, [controller, presentation.pending, view]);
-
   if (view === null) return null;
   const dialogueVisible = currentDialogueIsVisible(view, narration.messages.length);
   return (
@@ -233,18 +228,11 @@ export function GameWindow({
       {presentation.error !== null ? (
         <section className="error-banner" role="alert">
           <span>{presentation.error.message}</span>
-          {view.phase.kind === "opponent_turn" && view.phase.status === "failed" ? (
-            <button type="button" onClick={() => void controller.progressOpponent({ retryFailed: true })}>
-              Retry Dracula turn
-            </button>
-          ) : (
-            <button type="button" onClick={() => controller.clearError()}>Dismiss</button>
-          )}
+          <button type="button" onClick={() => controller.clearError()}>Dismiss</button>
         </section>
       ) : null}
       <section
         className="game-window"
-        data-game-id={view.game_id}
         data-dialogue-visible={dialogueVisible}
         aria-label="Dracula game"
       >

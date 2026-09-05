@@ -1,10 +1,14 @@
-"""Immutable domain types and constants for the Dracula engine."""
+"""Define the engine's immutable domain values and lifecycle vocabulary.
+
+These types describe players, moves, scores, complete private game states, and
+typed rule failures. They contain structure rather than transition logic.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Generic, TypeVar
+from typing import Generic, Sequence, TypeVar
 
 # These identifiers participate in persisted artifacts and deterministic seed
 # derivation. Changing them is a compatibility change, not a naming cleanup.
@@ -151,6 +155,23 @@ def orthogonally_adjacent(first: int, second: int) -> bool:
     row_distance = abs(first_row - second_row)
     column_distance = abs(first_column - second_column)
     return row_distance + column_distance == 1
+
+
+def empty_adjacent_grid_indices(
+    coffin: Sequence[object | None],
+) -> tuple[int, ...]:
+    """Return empty coffin positions sharing an edge with an occupied position."""
+
+    occupied = tuple(index for index, value in enumerate(coffin) if value is not None)
+    return tuple(
+        destination
+        for destination, value in enumerate(coffin)
+        if value is None
+        and any(
+            orthogonally_adjacent(destination, occupied_index)
+            for occupied_index in occupied
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)

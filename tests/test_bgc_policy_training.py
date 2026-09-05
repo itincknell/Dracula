@@ -1,4 +1,8 @@
-"""Current 659-bit corpus reader and visit-distillation trainer tests."""
+"""Exercise the current corpus reader and visit-distillation trainer.
+
+Synthetic sealed data verifies target projection, masked distributional loss,
+deterministic optimization and resume, checkpoint selection, and artifact export.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,6 @@ import pytest
 import torch
 
 import dracula.bgc_policy_training as training
-from dracula.action_contract import build_representative_action_projection
 from dracula.bgc_policy import load_bgc_policy_artifact
 from dracula.bgc_policy_migration import (
     CORPUS_SCHEMA_VERSION,
@@ -22,7 +25,10 @@ from dracula.bgc_policy_migration import (
 )
 from dracula.bgc_policy_model import ACTION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION
 from dracula.engine import create_game
-from dracula.policy_observation import candidate_action_tensor, encode_policy_observation
+from dracula.policy_observation import (
+    encode_policy_observation,
+    pack_action_rows_for_model,
+)
 from dracula.search.information import information_state_from_engine
 from dracula.strategic_actions import strategic_action_groups
 
@@ -54,8 +60,7 @@ def _fixture_row(placement: int, *, fixture: str) -> dict[str, object]:
     observation = encode_policy_observation(information)
     engine_mask = torch.tensor(information.legal_mask, dtype=torch.bool)
     groups = strategic_action_groups(information)
-    projection = build_representative_action_projection(engine_mask, groups)
-    compact_engine = candidate_action_tensor(information, engine_mask)
+    compact_engine = pack_action_rows_for_model(information, engine_mask)
     compact_groups = []
     representatives = []
     for group in groups:
@@ -220,4 +225,7 @@ def test_smoke_training_resume_and_export(card_set_corpus: Path, tmp_path: Path)
     assert direct_final["state_dict_digest"] == resumed_final["state_dict_digest"]
     artifact = load_bgc_policy_artifact(direct_result.exported_artifact)
     assert artifact.metadata.parameter_count == 754_601
+    assert artifact.artifact_digest == hashlib.sha256(
+        Path(direct_result.exported_artifact).read_bytes()
+    ).hexdigest()
     assert not list(direct.rglob("*.tmp-*"))

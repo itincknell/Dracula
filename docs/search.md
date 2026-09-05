@@ -1,8 +1,9 @@
-# Symmetry and policy move selection
+# Search, symmetry, and policy move selection
 
-Search controllers are not part of the selected product. This document owns
-the strategic destination grouping retained by standalone `pi1`. Historical
-search designs and measurements remain in [reports](../reports/README.md).
+Standalone `pi1` remains the selected production opponent. The repository also
+retains the two BGC-128 controllers that produced its training lineage: the
+original belief-greedy continuation and the phase-two policy continuation.
+They are maintained search and evaluation code, not Lambda gameplay fallbacks.
 
 ## Information boundary
 
@@ -110,6 +111,46 @@ Every other occupied-position pattern retains each legal destination as its
 own group. The two three-card cases are recognized only from their exact board
 patterns. Different hand cards always remain separate actions.
 
+## BGC-128 outer search
+
+`BGCInformationSetSearch` runs 128 round-local UCT simulations. Each simulation
+samples a complete hidden world using only the root player's information state.
+Whenever another simulated actor must decide, that actor receives a newly
+projected `SearchInformationState`; the continuation policy never receives the
+sampled opponent hand, stock order, or root tree.
+
+UCT expands, selects, records visits, and backs up values by strategic group.
+Mirrored concrete destinations never become separate tree choices. After a
+group is selected, the existing deterministic fair coin chooses its concrete
+member for the engine transition. Root visit targets therefore contain one
+count per representative action and zero counts for non-proxy members. Exact
+completed-round engine score differentials supply terminal values.
+
+The retained configuration is:
+
+- 128 outer simulations;
+- exploration constant `sqrt(2)`;
+- the exhaustive destination-symmetry table in this document;
+- maximum visit count, then mean value, then canonical representative index for
+  the final root choice.
+
+## Continuation policies
+
+The original BGC continuation evaluates every legal strategic group over eight
+shared samples of the acting player's unseen cards. For each group it places the
+candidate card at the representative destination, fills the remaining round in
+a deterministic sampled order, and uses exact engine scoring. It chooses the
+highest mean actor-relative differential, breaking an exact tie by canonical
+representative index.
+
+The phase-two continuation replaces only that response calculation with one
+policy inference. It uses the current 659-bit observation encoder, final model
+artifact loader, representative mask, canonical argmax, and paired-destination
+coin. Outer sampling, UCT, symmetry, transitions, and terminal scoring remain
+the same. The adapter is artifact-neutral: the D1 experiment supplied `pi0`;
+the same final tensor contract can load another verified policy artifact for a
+controlled comparison.
+
 ## Representative actions
 
 The external action projection keeps one proxy destination per strategic
@@ -130,3 +171,7 @@ data, derives candidate rows from in-hand card membership in fixed card-ID
 order, and maps the selected candidate back through the typed information
 state. Retrying the same game history reproduces the same representative and
 concrete actions. Diagnostics remain server-private.
+
+BGC request, determinization, tree-selection, continuation, and concrete-choice
+seeds use separate versioned namespaces. Search results and sampled principal
+continuations are private diagnostics and are not part of any public API.

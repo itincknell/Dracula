@@ -1,4 +1,8 @@
-"""Grounding, timing, failure isolation, and Bedrock response tests."""
+"""Verify grounded narration construction and Bedrock failure isolation.
+
+The suite covers all three cue classes, public-fact filtering, Nova payloads,
+timeouts, malformed responses, retry behavior, and narrator-disabled play.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dracula.api.app import create_app
+from dracula.api.bedrock import BedrockRuntimeAdapter, parse_bedrock_text
 from dracula.api.narration import (
-    BedrockRuntimeAdapter,
     FakeNarrationAdapter,
     GroundedNarrationCue,
     MAX_NARRATION_CHARACTERS,
@@ -20,10 +24,9 @@ from dracula.api.narration import (
     NarrationPrompt,
     NarrationProviderError,
     build_narration_prompt,
-    parse_bedrock_text,
-    _winning_combination,
 )
-from dracula.api.service import PolicyTurnResult
+from dracula.api.narration_cues import _winning_combination
+from dracula.api.policy import PolicyTurnResult
 from dracula.api.stateless_contracts import RecoveryEnvelope
 from dracula.engine import EnginePlayer, LineOrientation, PlayerValues, score_line
 

@@ -1,4 +1,8 @@
-"""Structural, lifecycle, deal, and card-conservation validation."""
+"""Validate complete private engine states at their ownership boundary.
+
+Checks cover lifecycle consistency, deal provenance, legal history, scoring,
+and conservation of all cards. Transition code relies on these guarantees.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ from dracula.engine_types import (
     other_player,
 )
 from dracula.randomness import derive_seed
-from dracula.scoring import resolve_round_scores, score_coffin
+from dracula.scoring import round_scores_from_lines, score_coffin
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,10 +132,7 @@ def _validate_round_result(result: object, label: str) -> EngineRoundResult:
             raise MalformedState(f"{label} must contain three line scores per player")
         for index, line in enumerate(lines):
             _validate_line_score(line, expected_lines[player][index], f"{label} line score")
-    expected_round_scores = resolve_round_scores(
-        tuple(line.total for line in expected_lines.queen),
-        tuple(line.total for line in expected_lines.king),
-    )
+    expected_round_scores = round_scores_from_lines(expected_lines)
     if result.round_scores != expected_round_scores:
         raise MalformedState(f"{label} round scores do not match its line scores")
     return result

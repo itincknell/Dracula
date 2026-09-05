@@ -1,7 +1,12 @@
+/**
+ * Defines the observable controller interface consumed by the React view.
+ * It separates gameplay commands and subscriptions from the stateless store's
+ * transport, replay persistence, and narration implementation.
+ */
 import { useSyncExternalStore } from "react";
 
 import type { LegalMove, Player } from "./contractPrimitives";
-import type { ApiErrorResponse, HumanGameView } from "./statefulContracts";
+import type { HumanGameView, PresentationError } from "./gameView";
 
 export type PendingAction =
   | "create_game"
@@ -13,7 +18,7 @@ export type PendingAction =
 export interface PresentationState {
   pending: PendingAction | null;
   selectedHandSlot: number | null;
-  error: ApiErrorResponse | null;
+  error: PresentationError | null;
 }
 
 export interface NarrationState {
@@ -32,14 +37,12 @@ export interface GameControllerContract {
   getSnapshot(): GameStoreState;
   subscribe(listener: () => void): () => void;
   createGame(humanRole: Player): Promise<HumanGameView | null>;
-  loadGame(gameId: string): Promise<HumanGameView | null>;
+  loadGame(): Promise<HumanGameView | null>;
   clearError(): void;
   clearGame(): void;
   selectCard(handSlot: number): boolean;
   legalMoveAt(position: number): LegalMove | null;
   playPosition(position: number): Promise<boolean>;
-  playMove(moveId: string): Promise<boolean>;
-  progressOpponent(options?: { retryFailed?: boolean }): Promise<void>;
   advanceRound(): Promise<boolean>;
   revealNarration(): void;
 }

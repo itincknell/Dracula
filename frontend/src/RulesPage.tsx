@@ -1,3 +1,8 @@
+/**
+ * Renders the standalone public rules and reference page.
+ * Section navigation remains client-side within the document, while site links
+ * use the same environment-aware destinations as the main application.
+ */
 import type { MouseEvent } from "react";
 
 import { siteLinks } from "./siteConfig";

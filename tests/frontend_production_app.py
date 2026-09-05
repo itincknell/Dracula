@@ -1,4 +1,8 @@
-"""Stateless production-shaped ASGI fixture for frontend browser tests."""
+"""Provide a production-shaped ASGI server for frontend browser tests.
+
+The fixture uses stateless gameplay with deterministic local dependencies so
+Playwright can exercise recovery and UI behavior without AWS or Bedrock.
+"""
 
 from __future__ import annotations
 

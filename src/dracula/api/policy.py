@@ -1,4 +1,8 @@
-"""Policy execution contracts shared by stateful and stateless gameplay."""
+"""Define the controller-neutral gameplay policy boundary.
+
+Requests contain the acting player's visible information and legal action table.
+Executors return a selected action without receiving complete engine state.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ class PolicyContractError(ValueError):
 
 
 def zero_hidden_state() -> bytes:
-    """Return the fixed empty recurrent state required by compatibility callers."""
+    """Return the empty policy state stored by local gameplay sessions."""
 
     return bytes(HIDDEN_STATE_BYTES)
 
@@ -53,7 +57,7 @@ class PolicyTurnRequest:
 
 @dataclass(frozen=True, slots=True)
 class PolicyTurnResult:
-    """Selected action and optional legacy recurrent state from a controller."""
+    """Selected action and optional opaque state returned by a controller."""
 
     action_index: int | None
     hidden_state: bytes | None

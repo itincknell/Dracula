@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 
+/**
+ * Exercises the rendered scoring sequence and its continuation controls.
+ * Tests advance deterministic timers through line calculations, score cards,
+ * narration reveal, and next-round or completed-game behavior.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FinalRoundPresentation, ScoringPresentation } from "./ScoringPresentation";
-import type { ApiClient } from "./api";
-import type { HumanGameView } from "./contracts";
-import { GameController } from "./gameStore";
+import type { HumanGameView } from "./gameView";
 import {
   createScoringModel,
   createScoringTimeline,
@@ -15,8 +19,8 @@ import {
   type ScoringTiming,
 } from "./scoringStateMachine";
 import { scoringView } from "./scoringTestFixtures";
+import { TestGameController, type TestControllerActions } from "./testGameController";
 
-const requestId = "00000000-0000-4000-8000-000000000055";
 const fastTiming: ScoringTiming = {
   entering: 10,
   revealValue: 10,
@@ -25,7 +29,6 @@ const fastTiming: ScoringTiming = {
   multiplierFactor: 10,
   lineTotal: 10,
   orientationRanked: 10,
-  narratorWait: 10,
   orientationHandoff: 10,
   compareRank: 10,
   selectRoundScore: 10,
@@ -33,30 +36,12 @@ const fastTiming: ScoringTiming = {
   reducedStep: 5,
 };
 
-function api(overrides: Partial<ApiClient> = {}): ApiClient {
-  return {
-    health: vi.fn(),
-    createGame: vi.fn(),
-    getGame: vi.fn(),
-    submitMove: vi.fn(),
-    opponentTurn: vi.fn(),
-    advanceRound: vi.fn(),
-    getEvents: vi.fn(),
-    ...overrides,
-  } as ApiClient;
-}
-
 async function setup(
   current: HumanGameView,
-  overrides: Partial<ApiClient> = {},
+  actions: TestControllerActions = {},
   reducedMotion = false,
 ) {
-  const client = api({
-    getGame: vi.fn(async () => ({ status: 200 as const, data: current })),
-    ...overrides,
-  });
-  const controller = new GameController(client, { requestId: () => requestId });
-  await controller.loadGame(current.game_id);
+  const controller = new TestGameController(current, actions);
   const rendered = render(
     <ScoringPresentation
       controller={controller}
@@ -67,9 +52,8 @@ async function setup(
   );
   const timeline = createScoringTimeline(
     createScoringModel(current.pending_round_result!, current.human_role),
-    current.narration_enabled,
   );
-  return { client, controller, rendered, timeline };
+  return { controller, rendered, timeline };
 }
 
 async function advanceFrames(count: number, reducedMotion = false): Promise<void> {
@@ -235,15 +219,14 @@ describe("round completion controls", () => {
     const current = scoringView();
     const next = {
       ...current,
-      version: 9,
       status: "playing" as const,
       turn_number: 0,
       pending_round_result: null,
       phase: { kind: "human_turn" as const },
     };
-    let resolveAdvance: ((value: { status: 200; data: HumanGameView }) => void) | undefined;
+    let resolveAdvance: ((value: HumanGameView) => void) | undefined;
     const advanceRound = vi.fn(
-      () => new Promise<{ status: 200; data: HumanGameView }>((resolve) => {
+      () => new Promise<HumanGameView>((resolve) => {
         resolveAdvance = resolve;
       }),
     );
@@ -253,13 +236,13 @@ describe("round completion controls", () => {
     fireEvent.click(button);
     fireEvent.click(button);
     expect(advanceRound).toHaveBeenCalledTimes(1);
-    resolveAdvance?.({ status: 200, data: next });
+    resolveAdvance?.(next);
   });
 
   it("finalizes round six once and leaves Play Again for the completed-game view", async () => {
     const current = scoringView({ roundNumber: 6 });
     const advanceRound = vi.fn(
-      () => new Promise<{ status: 200; data: HumanGameView }>(() => undefined),
+      () => new Promise<HumanGameView>(() => undefined),
     );
     const { timeline } = await setup(current, { advanceRound });
     await advanceFrames(timeline.length - 1);

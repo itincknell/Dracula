@@ -1,4 +1,8 @@
-"""Central configuration for the active stateless deployment runtime."""
+"""Parse environment configuration for the stateless production runtime.
+
+This module owns policy-artifact, CORS, replay-cache, and narration settings.
+It supplies no account-specific credentials and selects no silent fallback.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +12,12 @@ from dataclasses import dataclass
 POLICY_ARTIFACT_ENV = "DRACULA_POLICY_ARTIFACT"
 NARRATION_ENABLED_ENV = "DRACULA_NARRATION_ENABLED"
 REPLAY_CACHE_ENTRIES_ENV = "DRACULA_REPLAY_CACHE_ENTRIES"
+DEFAULT_REPLAY_CACHE_ENTRIES = 256
 
 
-def _boolean_environment(name: str, default: bool) -> bool:
+def boolean_environment(name: str, default: bool) -> bool:
+    """Read one conventional boolean environment value."""
+
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -22,18 +29,16 @@ def _boolean_environment(name: str, default: bool) -> bool:
     raise ValueError(f"{name} must be a boolean value")
 
 
-def _cache_entries() -> int:
-    raw = os.getenv(REPLAY_CACHE_ENTRIES_ENV, "256")
+def nonnegative_integer_environment(name: str, default: int) -> int:
+    """Read a non-negative integer environment value."""
+
+    raw = os.getenv(name, str(default))
     try:
         value = int(raw)
     except ValueError as error:
-        raise ValueError(
-            f"{REPLAY_CACHE_ENTRIES_ENV} must be a non-negative integer"
-        ) from error
+        raise ValueError(f"{name} must be a non-negative integer") from error
     if value < 0:
-        raise ValueError(
-            f"{REPLAY_CACHE_ENTRIES_ENV} must be a non-negative integer"
-        )
+        raise ValueError(f"{name} must be a non-negative integer")
     return value
 
 
@@ -55,16 +60,21 @@ class ProductionSettings:
             raise ValueError(f"{POLICY_ARTIFACT_ENV} must be a nonempty path")
         return cls(
             policy_artifact=artifact,
-            narration_enabled=_boolean_environment(
+            narration_enabled=boolean_environment(
                 NARRATION_ENABLED_ENV, False
             ),
-            replay_cache_entries=_cache_entries(),
+            replay_cache_entries=nonnegative_integer_environment(
+                REPLAY_CACHE_ENTRIES_ENV, DEFAULT_REPLAY_CACHE_ENTRIES
+            ),
         )
 
 
 __all__ = (
+    "DEFAULT_REPLAY_CACHE_ENTRIES",
     "NARRATION_ENABLED_ENV",
     "POLICY_ARTIFACT_ENV",
     "ProductionSettings",
     "REPLAY_CACHE_ENTRIES_ENV",
+    "boolean_environment",
+    "nonnegative_integer_environment",
 )

@@ -1,3 +1,8 @@
+/**
+ * Defines and validates the stateless production API wire format.
+ * Raw server data becomes trusted frontend data only after these checks verify
+ * the recovery envelope, public game projection, errors, and narration results.
+ */
 import {
   assertArray,
   assertBoolean,
@@ -12,13 +17,12 @@ import {
   exactKeys,
   record,
   type GameStatus,
-  type LineScore,
   type Player,
+  type PlayedMove,
   type PlayerScore,
   type ResumablePhase,
-  type ScoringStep,
+  type RoundRecord,
 } from "./contractPrimitives";
-import type { HumanGameView } from "./statefulContracts";
 
 export type AcceptedGameCommand =
   | { type: "select_role"; human_role: Player }
@@ -38,22 +42,8 @@ export interface StatelessLegalMove {
   position: number;
 }
 
-export interface VisiblePlayedMove {
-  player: Player;
-  card_id: string;
-  position: number;
-  turn_number: number;
-}
-
-export interface StatelessRoundRecord {
-  round_number: number;
-  dealer: Player;
-  coffin: [string, string, string, string, string, string, string, string, string];
-  moves: VisiblePlayedMove[];
-  line_scores: LineScore[];
-  scoring_sequence: ScoringStep[];
-  round_scores: PlayerScore;
-}
+export type VisiblePlayedMove = PlayedMove;
+export type StatelessRoundRecord = RoundRecord;
 
 export interface StatelessHumanGameView {
   status: GameStatus;
@@ -63,13 +53,17 @@ export interface StatelessHumanGameView {
   active_player: Player | null;
   human_role: Player;
   opponent_role: Player;
-  coffin: HumanGameView["coffin"];
+  coffin: [
+    string | null, string | null, string | null,
+    string | null, string | null, string | null,
+    string | null, string | null, string | null,
+  ];
   current_round_moves: VisiblePlayedMove[];
   pending_round_result: StatelessRoundRecord | null;
   completed_rounds: StatelessRoundRecord[];
   total_scores: PlayerScore;
   phase: ResumablePhase;
-  human_hand: HumanGameView["human_hand"];
+  human_hand: [string | null, string | null, string | null, string | null];
   legal_moves: StatelessLegalMove[];
 }
 

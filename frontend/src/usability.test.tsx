@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
 
+/**
+ * Protects high-value accessibility and responsive presentation expectations.
+ * The suite checks labels, controls, content ordering, and selected stylesheet
+ * invariants without attempting screenshot-level visual regression testing.
+ */
+
 import "@testing-library/jest-dom/vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -8,43 +14,23 @@ import { fileURLToPath } from "node:url";
 import axe from "axe-core";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import gameViewFixture from "../../contracts/v1/human-game-view.json";
 import { GameStart, SeenCardsExpando } from "./App";
-import type { ApiClient } from "./api";
-import type { HumanGameView } from "./contracts";
-import { GameController } from "./gameStore";
 import { GameWindow } from "./gameplay";
 import { RulesPage } from "./RulesPage";
+import { TestGameController, testGameView } from "./testGameController";
 
 afterEach(cleanup);
 
-const requestId = "00000000-0000-4000-8000-000000000099";
-
-function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return {
-    health: vi.fn(),
-    createGame: vi.fn(),
-    getGame: vi.fn(),
-    submitMove: vi.fn(),
-    opponentTurn: vi.fn(),
-    advanceRound: vi.fn(),
-    getEvents: vi.fn(),
-    ...overrides,
-  } as ApiClient;
-}
-
-async function humanTurnController(): Promise<GameController> {
-  const view = structuredClone(gameViewFixture) as unknown as HumanGameView;
-  view.phase = { kind: "human_turn" };
-  view.active_player = view.human_role;
-  view.legal_moves = [{ move_id: "m", card_id: "2C", hand_slot: 0, position: 8 }];
-  const controller = new GameController(client({
-    getGame: vi.fn(async () => ({ status: 200 as const, data: view })),
-  }), { requestId: () => requestId });
-  await controller.loadGame(view.game_id);
-  return controller;
+function humanTurnController(): TestGameController {
+  return new TestGameController(testGameView(
+    { kind: "human_turn" },
+    {
+      active_player: "queen",
+      legal_moves: [{ move_id: "m", card_id: "2C", hand_slot: 0, position: 8 }],
+    },
+  ));
 }
 
 async function expectNoAxeViolations(container: HTMLElement): Promise<void> {
@@ -55,11 +41,11 @@ async function expectNoAxeViolations(container: HTMLElement): Promise<void> {
 
 describe("accessible application surfaces", () => {
   it("passes automated checks on start, game, and rules views", async () => {
-    let rendered = render(<GameStart controller={new GameController(client())} onGameCreated={() => undefined} />);
+    let rendered = render(<GameStart controller={new TestGameController()} onGameCreated={() => undefined} />);
     await expectNoAxeViolations(rendered.container);
     rendered.unmount();
 
-    const controller = await humanTurnController();
+    const controller = humanTurnController();
     rendered = render(<GameWindow controller={controller} onNewGame={() => undefined} />);
     await expectNoAxeViolations(rendered.container);
     rendered.unmount();
@@ -69,7 +55,7 @@ describe("accessible application surfaces", () => {
   });
 
   it("supports the complete move path with keyboard controls", async () => {
-    const controller = await humanTurnController();
+    const controller = humanTurnController();
     render(<GameWindow controller={controller} onNewGame={() => undefined} />);
     const card = screen.getByRole("button", { name: "2 of Clubs (2C), hand slot 1" });
     card.focus();
@@ -91,7 +77,7 @@ describe("accessible application surfaces", () => {
 
   it("expands a live ledger containing only cards visible to the human", async () => {
     const user = userEvent.setup();
-    const view = structuredClone(gameViewFixture) as unknown as HumanGameView;
+    const view = testGameView();
     const rendered = render(<SeenCardsExpando view={view} />);
 
     expect(screen.queryByRole("table")).not.toBeInTheDocument();

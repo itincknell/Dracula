@@ -1,3 +1,8 @@
+/**
+ * Boots the React application and loads its ordered visual dependencies.
+ * Fonts and styles are imported here so local and production builds share the
+ * same cascade before the application mounts into the document root.
+ */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 

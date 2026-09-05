@@ -1,4 +1,9 @@
-"""Plain seed-and-command-history contracts for production gameplay."""
+"""Define the public wire format for stateless production gameplay.
+
+The browser carries a visible initial seed and ordered accepted-command history.
+Requests describe commands rather than computed state, and responses expose only
+the recovery envelope plus the public game projection.
+"""
 
 from __future__ import annotations
 

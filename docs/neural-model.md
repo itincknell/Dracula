@@ -228,7 +228,8 @@ Standalone inference performs these steps:
    `derive_strategic_destination_choice_seed` fair-coin stream with the
    deterministic opponent request seed, scope
    `sam-policy-argmax-result-v1`, information state, selected proxy action, and
-   choice index zero; pass the result to `select_concrete_action_index`.
+   choice index zero; pass the selected group and result to
+   `select_concrete_action_index`.
 7. Validate and apply the concrete action through the engine.
 
 The fair-coin result is not a model target. The selected proxy remains the

@@ -1,3 +1,8 @@
+/**
+ * Persists the minimal stateless recovery envelope in browser storage.
+ * Only the visible seed and accepted command history are retained; malformed
+ * stored data is discarded rather than passed to gameplay reconstruction.
+ */
 import { assertRecoveryEnvelope, type RecoveryEnvelope } from "./statelessContracts";
 
 export const RECOVERY_STORAGE_KEY = "dracula.recovery-envelope";

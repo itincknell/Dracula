@@ -1,4 +1,8 @@
-"""Golden tests for card identity, deterministic randomness, and dealing."""
+"""Protect the foundational identities used throughout the game.
+
+These tests freeze card ordering, seed derivation, unbiased random choices, and
+deterministic dealing before higher-level engine behavior is exercised.
+"""
 
 from __future__ import annotations
 

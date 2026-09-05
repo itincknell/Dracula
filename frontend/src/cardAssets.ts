@@ -1,3 +1,8 @@
+/**
+ * Maps canonical card identifiers to bundled image assets and readable names.
+ * The generated asset manifest is the single source for card URLs used by the
+ * board, hand, scoring animation, and accessibility labels.
+ */
 import sourceAssets from "../card-assets.json";
 
 export const CANONICAL_CARD_IDS = Object.freeze(Object.keys(sourceAssets));
