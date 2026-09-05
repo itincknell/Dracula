@@ -5,7 +5,6 @@ here. Search controllers require explicit imports from their owning modules.
 """
 
 from dracula.search.information import (
-    INFORMATION_STATE_SCHEMA_VERSION,
     InformationContractViolation,
     PublicGameHistory,
     PublicPlayedMove,
@@ -19,15 +18,12 @@ from dracula.search.information import (
     public_history_from_engine,
 )
 from dracula.search.symmetry import (
-    DESTINATION_SYMMETRY_SCHEMA_VERSION,
     DestinationSymmetryError,
     DestinationSymmetryGroup,
     destination_symmetry_groups,
 )
 
 __all__ = (
-    "DESTINATION_SYMMETRY_SCHEMA_VERSION",
-    "INFORMATION_STATE_SCHEMA_VERSION",
     "DestinationSymmetryError",
     "DestinationSymmetryGroup",
     "InformationContractViolation",

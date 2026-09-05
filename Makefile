@@ -1,4 +1,4 @@
-POLICY_ARTIFACT ?= $(CURDIR)/runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt
+POLICY_ARTIFACT ?= $(CURDIR)/runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt
 DATABASE ?= $(CURDIR)/.local/dracula.sqlite3
 API_PORT ?= 8000
 DEV_PORT ?= 5173
@@ -13,7 +13,7 @@ PAGES_BASE_PATH ?= /Dracula/
 LOCAL_GAMEPLAY_ENV = \
 	DRACULA_GAMEPLAY_MODE=stateless \
 	DRACULA_NARRATION_ENABLED=false \
-	DRACULA_OPPONENT_MODE=bgc-policy \
+	DRACULA_OPPONENT_MODE=pi1 \
 	DRACULA_POLICY_ARTIFACT="$(POLICY_ARTIFACT)"
 
 .DEFAULT_GOAL := help

@@ -123,9 +123,8 @@ On a cache miss the service:
    `SearchInformationState` and representative action mask.
 6. Applies forced Dracula placements directly through the bridge.
 
-The standalone policy may not return recurrent state. Any invalid or masked
-policy action fails the request without extending the envelope or caching a
-result.
+Any invalid or masked policy action fails the request without extending the
+envelope or caching a result.
 
 Commands with impossible order, occupied destinations, unavailable cards,
 premature advances, repeated role selection, or invalid lifecycle transitions
@@ -158,7 +157,7 @@ hand, legal human card-slot/destination choices, totals, and the derived
 presentation phase. Public move records omit former hand slots, including
 Dracula's. The projection contains no random internal game ID, stock, opponent
 hand, engine object, state fingerprint, policy identity, artifact digest,
-observation, legal mask, logits, tensors, search diagnostics, hidden state, or
+observation, legal mask, logits, tensors, search diagnostics, or
 Lambda instance identity.
 
 The plain seed/history envelope remains intentionally inspectable and is not

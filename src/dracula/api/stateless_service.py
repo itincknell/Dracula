@@ -9,16 +9,14 @@ from __future__ import annotations
 
 import secrets
 from typing import Callable, cast
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from dracula.api.policy import (
     PolicyDescriptor,
-    PolicyExecutionError,
     PolicyExecutor,
     PolicyTurnRequest,
     ServiceResponse,
     UnavailablePolicyExecutor,
-    zero_hidden_state,
 )
 from dracula.api.stateless_contracts import (
     AdvanceRoundCommand,
@@ -34,9 +32,7 @@ from dracula.api.stateless_contracts import (
 )
 from dracula.api.stateless_projection import project_stateless_game
 from dracula.api.stateless_replay import (
-    DEFAULT_REPLAY_CACHE_ENTRIES,
     ReplayCache,
-    ReplayCacheStatistics,
     ReplayedGame,
     canonical_envelope_digest,
 )
@@ -83,10 +79,10 @@ class StatelessPolicyError(Exception):
 def _game_id(seed: str, human_role: EnginePlayer) -> UUID:
     """Derive a stable public game identifier from seed and selected role."""
 
-    return uuid5(
-        NAMESPACE_URL,
-        f"dracula-stateless-game\0{seed}\0{human_role.value}",
+    digest = canonical_envelope_digest(
+        RecoveryEnvelope(seed=seed, history=(SelectRoleCommand(human_role=human_role),))
     )
+    return UUID(hex=digest[:32])
 
 
 class StatelessGameplayService:
@@ -156,17 +152,10 @@ class StatelessGameplayService:
                         turn_number=len(state.current_round_moves) + 1,
                         player=opponent,
                         round_number=state.round_number,
-                        turn_kind=context.kind,
-                        policy_input=None,
                         action_table=context.action_table,
                         information_state=information,
-                        hidden_state=zero_hidden_state(),
                     )
                 )
-                if result.hidden_state is not None:
-                    raise PolicyExecutionError(
-                        "stateless standalone policy returned recurrent state"
-                    )
                 transition = apply_policy_action(
                     state,
                     context,
@@ -347,13 +336,8 @@ class StatelessGameplayService:
 
 
 __all__ = (
-    "DEFAULT_REPLAY_CACHE_ENTRIES",
-    "ReplayCache",
-    "ReplayCacheStatistics",
-    "ReplayedGame",
     "StatelessGameplayService",
     "StatelessPolicyError",
     "StatelessReplayError",
-    "canonical_envelope_digest",
     "stateless_replay_error_response",
 )

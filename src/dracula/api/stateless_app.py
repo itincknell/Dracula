@@ -10,7 +10,6 @@ from collections.abc import Callable
 
 from fastapi import FastAPI
 
-from dracula.api.contracts import API_VERSION
 from dracula.api.narration import NarrationAdapter
 from dracula.api.policy import PolicyDescriptor, PolicyExecutor
 from dracula.api.stateless_routes import configure_stateless_routes
@@ -27,7 +26,7 @@ def create_stateless_app(
 ) -> FastAPI:
     """Create an API whose state is reconstructed solely from each request."""
 
-    application = FastAPI(title="Dracula API", version=API_VERSION)
+    application = FastAPI(title="Dracula API", version="1.0")
     application.state.narration_enabled = narration_enabled
     application.state.gameplay_mode = "stateless"
     configure_stateless_routes(

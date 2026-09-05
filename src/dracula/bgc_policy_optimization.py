@@ -36,17 +36,14 @@ from dracula.bgc_policy_training_contracts import (
     BGCPolicyTrainingError,
     BGCPolicyTrainingInterrupted,
     EARLY_STOP_PATIENCE,
-    EPOCH_SHUFFLE_NAMESPACE,
     EpochMetrics,
     GRADIENT_CLIP_NORM,
     LATEST_CHECKPOINT_INTERVAL,
     MAXIMUM_EPOCHS,
-    METRICS_FORMAT_VERSION,
     MINIMUM_EPOCHS,
     MINIMUM_IMPROVEMENT,
-    TRAINING_STATE_FORMAT_VERSION,
 )
-from dracula.randomness import derive_seed
+from dracula.randomness import stable_seed
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,21 +92,20 @@ class OptimizationResult:
 def _epoch_indexes(
     dataset: Any,
     *,
-    root_seed: str,
+    seed: int,
     snapshot_digest: str,
     epoch: int,
 ) -> Tensor:
     """Derive the complete deterministic minibatch order for one epoch."""
 
-    seed = derive_seed(
-        EPOCH_SHUFFLE_NAMESPACE,
-        root_seed,
+    epoch_seed = stable_seed(
+        seed,
         snapshot_digest,
         dataset.split_digest,
-        str(epoch),
+        epoch,
     )
     generator = torch.Generator(device="cpu")
-    generator.manual_seed(int.from_bytes(seed[:8], "big", signed=False))
+    generator.manual_seed(epoch_seed)
     return torch.randperm(dataset.example_count, generator=generator)
 
 
@@ -270,7 +266,7 @@ def _train_remaining_batches(
     bundle: Any,
     resolved: dict[str, object],
     paths: TrainingPaths,
-    root_seed: str,
+    seed: int,
     device: torch.device,
     interrupt_after_batches: int | None,
 ) -> int:
@@ -278,7 +274,7 @@ def _train_remaining_batches(
 
     order = _epoch_indexes(
         bundle.training,
-        root_seed=root_seed,
+        seed=seed,
         snapshot_digest=bundle.snapshot.snapshot_digest,
         epoch=state.epoch,
     )
@@ -345,7 +341,6 @@ def _complete_epoch(
     elapsed = time.perf_counter() - epoch_started
     state.completed_epochs = state.epoch + 1
     metrics = EpochMetrics(
-        METRICS_FORMAT_VERSION,
         state.completed_epochs,
         training_metrics,
         validation_metrics,
@@ -386,7 +381,6 @@ def _complete_epoch(
     atomic_json(
         output / "training-state.json",
         {
-            "format_version": TRAINING_STATE_FORMAT_VERSION,
             "epoch": state.epoch,
             "next_batch": 0,
             "best_epoch": state.best_epoch,
@@ -404,7 +398,7 @@ def optimize_policy(
     bundle: Any,
     model: BGCPolicyModel,
     optimizer: torch.optim.AdamW,
-    root_seed: str,
+    seed: int,
     device: torch.device,
     resume: bool,
     interrupt_after_batches: int | None,
@@ -437,7 +431,7 @@ def optimize_policy(
             bundle=bundle,
             resolved=resolved,
             paths=paths,
-            root_seed=root_seed,
+            seed=seed,
             device=device,
             interrupt_after_batches=interrupt_after_batches,
         )

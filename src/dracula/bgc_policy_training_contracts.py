@@ -2,8 +2,8 @@
 
 Keeping these records separate from optimization lets the corpus reader,
 checkpoint layer, evaluator, and CLI share one vocabulary without importing the
-training loop. The constants below are the persisted training contract used by
-resolved configurations and resumable checkpoints.
+training loop. One run format and one checkpoint format cover the persisted
+training boundary.
 """
 
 from __future__ import annotations
@@ -11,13 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-TRAINING_CONFIG_FORMAT_VERSION = "dracula-bgc-policy-training-config-v1"
-RESOLVED_CONFIG_FORMAT_VERSION = "dracula-bgc-policy-resolved-config-v1"
-CHECKPOINT_FORMAT_VERSION = "dracula-bgc-policy-checkpoint-v1"
-TRAINING_STATE_FORMAT_VERSION = "dracula-bgc-policy-training-state-v1"
-METRICS_FORMAT_VERSION = "dracula-bgc-policy-epoch-metrics-v1"
-SUMMARY_FORMAT_VERSION = "dracula-bgc-policy-summary-v1"
-EPOCH_SHUFFLE_NAMESPACE = "dracula-bgc-policy-epoch-shuffle-v1"
+TRAINING_RUN_FORMAT = "policy-training-v1"
+CHECKPOINT_FORMAT = "policy-checkpoint-v1"
 
 OUTER_SIMULATION_BUDGET = 128
 LEARNING_RATE = 3e-4
@@ -46,7 +41,7 @@ class RunSection:
     """Identity and output location of one training run."""
 
     run_id: str
-    root_seed: str
+    seed: int
     output_directory: str
 
 
@@ -55,14 +50,6 @@ class DatasetSection:
     """Immutable corpus snapshot consumed by training and validation."""
 
     snapshot_path: str
-
-
-@dataclass(frozen=True, slots=True)
-class ModelSection:
-    """Model identity used for deterministic parameter initialization."""
-
-    model_id: str
-    initialization_ordinal: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +65,6 @@ class BGCPolicyTrainingConfig:
 
     run: RunSection
     dataset: DatasetSection
-    model: ModelSection
     optimization: OptimizationSection
 
     @property
@@ -120,7 +106,6 @@ class EvaluationMetrics:
 class EpochMetrics:
     """Training and validation measurements sealed after one complete epoch."""
 
-    format_version: str
     epoch: int
     training: EvaluationMetrics
     validation: EvaluationMetrics
@@ -150,11 +135,10 @@ __all__ = (
     "BGCPolicyTrainingConfig",
     "BGCPolicyTrainingError",
     "BGCPolicyTrainingInterrupted",
-    "CHECKPOINT_FORMAT_VERSION",
+    "CHECKPOINT_FORMAT",
     "DatasetSection",
     "DistributionMetrics",
     "EARLY_STOP_PATIENCE",
-    "EPOCH_SHUFFLE_NAMESPACE",
     "EPSILON",
     "EpochMetrics",
     "EvaluationMetrics",
@@ -162,17 +146,12 @@ __all__ = (
     "LATEST_CHECKPOINT_INTERVAL",
     "LEARNING_RATE",
     "MAXIMUM_EPOCHS",
-    "METRICS_FORMAT_VERSION",
     "MINIMUM_EPOCHS",
     "MINIMUM_IMPROVEMENT",
-    "ModelSection",
     "OUTER_SIMULATION_BUDGET",
     "OptimizationSection",
-    "RESOLVED_CONFIG_FORMAT_VERSION",
     "RunSection",
-    "SUMMARY_FORMAT_VERSION",
-    "TRAINING_CONFIG_FORMAT_VERSION",
-    "TRAINING_STATE_FORMAT_VERSION",
+    "TRAINING_RUN_FORMAT",
     "TrainingResult",
     "WEIGHT_DECAY",
 )

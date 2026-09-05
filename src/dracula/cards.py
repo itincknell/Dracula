@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-CARD_SCHEMA_VERSION = "dracula-cards-v1"
-
 RANKS = ("A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K")
 
 

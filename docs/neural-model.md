@@ -10,20 +10,7 @@ The model has no value head, critic, recurrence, PPO objective, or hybrid-search
 deployment role. It does not own legality, symmetry detection, concrete paired-destination
 selection, engine transitions, determinization, or scoring.
 
-## Contract versions
-
-The initial implementation uses:
-
-```text
-model_schema_version                 = dracula-bgc-card-policy-v2
-artifact_schema_version              = dracula-bgc-card-policy-artifact-v2
-observation_schema_version           = dracula-observation-card-set-v2
-action_schema_version                = dracula-card-candidate-action-map-v2
-representative_mask_schema_version   = dracula-sam-representative-mask-v1
-initialization_schema_version        = dracula-bgc-card-policy-initialization-v2
-training_snapshot_schema_version     = dracula-bgc-policy-snapshot-v1
-optimizer_compatibility_version      = dracula-bgc-policy-optimizer-v1
-```
+## Tensor interface
 
 The single-state interface is:
 
@@ -224,12 +211,8 @@ Standalone inference performs these steps:
 4. Apply the representative mask outside the model.
 5. Select the maximum legal representative-action logit. An exact tie resolves
    to the lowest canonical action index.
-6. If the selected group is paired, call the existing
-   `derive_strategic_destination_choice_seed` fair-coin stream with the
-   deterministic opponent request seed, scope
-   `sam-policy-argmax-result-v1`, information state, selected proxy action, and
-   choice index zero; pass the selected group and result to
-   `select_concrete_action_index`.
+6. If the selected group is paired, seed a local fair coin from the game and
+   decision identity and choose one of its two concrete destinations.
 7. Validate and apply the concrete action through the engine.
 
 The fair-coin result is not a model target. The selected proxy remains the
@@ -240,20 +223,8 @@ masked representative logit.
 
 ## Initialization
 
-The model seed is the unsigned big-endian integer represented by the first
-eight bytes of:
-
-```text
-derive_seed(
-    "dracula-bgc-card-policy-initialization-v2",
-    run_root_seed,
-    model_id,
-    decimal(initialization_ordinal),
-)
-```
-
-Initialization uses an isolated PyTorch generator and does not change global
-random state:
+Training supplies one integer initialization seed. Initialization uses an
+isolated PyTorch generator and does not change global random state:
 
 - Linear weights use Xavier uniform initialization with gain `1.0`.
 - Linear biases are zero.
@@ -267,7 +238,7 @@ Implementation acceptance covers:
 
 - Exact input, output, batch, and parameter counts.
 - Float32 parameters and outputs.
-- Deterministic versioned initialization.
+- Deterministic initialization from one recorded integer seed.
 - Batch and individual forward equivalence.
 - Queen/King normalized-input equivalence.
 - Hidden-card substitution invariance.
@@ -289,12 +260,12 @@ training and user selection are summarized in
 
 ## Artifact
 
-The model artifact contains the state dictionary, exact parameter count,
-contract versions, card and action order, initialization identity, source
-identity, training configuration, corpus-snapshot digest, optimizer
-compatibility version, and state-dictionary digest. Loading rejects missing,
-extra, incorrectly shaped, or non-finite parameters.
+The deployment artifact contains one format marker and the model state
+dictionary. Its complete file SHA-256 identifies the selected release bytes.
+Loading rejects missing, extra, incorrectly shaped, incorrectly typed, or
+non-finite parameters. Training provenance remains in the training report and
+is not duplicated inside the runtime artifact.
 
 The artifact contains no value parameters, critic state, hidden state, search
 state, or fair-coin outcome. Previous policy/value, response-ranker, and hybrid
-artifacts remain historical evidence and are incompatible with this schema.
+artifacts remain historical evidence and are not accepted by this loader.

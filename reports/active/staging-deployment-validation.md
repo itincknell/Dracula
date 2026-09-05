@@ -27,6 +27,11 @@ SHA-256:
 70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c
 ```
 
+This records the artifact envelope used for the measurements below. The same
+state dictionary is now packaged as the minimal artifact with SHA-256
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`;
+the container measurement has not yet been repeated for those new bytes.
+
 The release-context manifest contains 79 digest-bound files and Git revision
 `81b2504d4cc679e40e36a1fd63160037e6dfbb0d`. The built image is
 `dracula-api:staging-local`, architecture `arm64`, image ID

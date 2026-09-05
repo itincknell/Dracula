@@ -17,37 +17,23 @@ from dataclasses import dataclass
 
 from dracula.bridge import ACTION_COUNT
 from dracula.engine import EnginePlayer, resolve_round_scores, score_coffin
-from dracula.randomness import derive_seed, seed_hex, shuffled
+from dracula.randomness import shuffled, stable_seed
 from dracula.search.contracts import (
     ContinuationDecision,
     ROUND_SCORE_NORMALIZER,
     SearchInterrupted,
     StrategicGroupStatistics,
-    search_config_digest,
 )
 from dracula.search.bgc import BGCInformationSetSearch, BGCSearchConfig
 from dracula.search.information import (
     SearchInformationState,
     information_state_fingerprint,
 )
-from dracula.search.symmetry import DESTINATION_SYMMETRY_SCHEMA_VERSION
 from dracula.strategic_actions import (
     StrategicActionGroup,
-    derive_strategic_destination_choice_seed,
     select_concrete_action_index,
     strategic_action_groups,
 )
-
-BELIEF_GREEDY_RESPONSE_SCHEMA_VERSION = "dracula-belief-greedy-response-v1"
-BELIEF_GREEDY_RESPONSE_REQUEST_NAMESPACE = (
-    "dracula-belief-greedy-response-request-v1"
-)
-BELIEF_GREEDY_HAND_SAMPLE_NAMESPACE = "dracula-belief-greedy-hand-sample-v1"
-BELIEF_GREEDY_COMPLETION_ORDER_NAMESPACE = (
-    "dracula-belief-greedy-completion-order-v1"
-)
-BELIEF_GREEDY_RESPONSE_PROFILE = "max-expected-round-differential-v1"
-BELIEF_GREEDY_DESTINATION_SCOPE = "belief-greedy-response-result"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,35 +46,20 @@ class BeliefGreedyContinuationConfig:
         if self.belief_completion_count < 1:
             raise ValueError("belief completion count must be positive")
 
-    @property
-    def digest(self) -> str:
-        return search_config_digest(
-            {
-                "belief_completion_count": self.belief_completion_count,
-                "destination_symmetry_schema_version": (
-                    DESTINATION_SYMMETRY_SCHEMA_VERSION
-                ),
-                "response_profile": BELIEF_GREEDY_RESPONSE_PROFILE,
-                "response_schema_version": BELIEF_GREEDY_RESPONSE_SCHEMA_VERSION,
-                "terminal_value": "exact-engine-round-differential-v1",
-            }
-        )
-
 
 def _response_seed(
     information: SearchInformationState,
-    config_digest: str,
-) -> bytes:
-    """Bind response samples to the visible state and response configuration."""
+    completion_count: int,
+) -> int:
+    """Return the local random seed for one visible response evaluation."""
 
-    return derive_seed(
-        BELIEF_GREEDY_RESPONSE_REQUEST_NAMESPACE,
+    return stable_seed(
         information_state_fingerprint(information),
-        config_digest,
+        completion_count,
     )
 
 
-def _completion_order(cards: tuple[str, ...], seed: bytes) -> tuple[str, ...]:
+def _completion_order(cards: tuple[str, ...], seed: int) -> tuple[str, ...]:
     """Order sampled remaining cards reproducibly, independent of tuple order.
 
     Each card receives its own derived key, so the same card receives the same
@@ -98,11 +69,7 @@ def _completion_order(cards: tuple[str, ...], seed: bytes) -> tuple[str, ...]:
     return tuple(
         sorted(
             cards,
-            key=lambda card_id: derive_seed(
-                BELIEF_GREEDY_COMPLETION_ORDER_NAMESPACE,
-                seed_hex(seed),
-                card_id,
-            ),
+            key=lambda card_id: stable_seed(seed, card_id),
         )
     )
 
@@ -111,7 +78,7 @@ def _group_value(
     information: SearchInformationState,
     group: StrategicActionGroup,
     opponent_hand: tuple[str, ...],
-    completion_seed: bytes,
+    completion_seed: int,
 ) -> float:
     """Return one group's exact score after one sampled round completion.
 
@@ -165,7 +132,7 @@ def _group_value(
 def _evaluate_group_values(
     information: SearchInformationState,
     groups: tuple[StrategicActionGroup, ...],
-    request_seed: bytes,
+    request_seed: int,
     completion_count: int,
     should_stop: Callable[[], bool] | None,
 ) -> list[float]:
@@ -175,11 +142,7 @@ def _evaluate_group_values(
     for completion_index in range(completion_count):
         if should_stop is not None and should_stop():
             raise SearchInterrupted("belief-greedy continuation interrupted")
-        completion_seed = derive_seed(
-            BELIEF_GREEDY_HAND_SAMPLE_NAMESPACE,
-            seed_hex(request_seed),
-            str(completion_index),
-        )
+        completion_seed = stable_seed(request_seed, completion_index)
         # Only the opponent cards needed to finish this round are sampled. The
         # same hand and completion order are then reused for every candidate.
         opponent_hand = tuple(
@@ -208,10 +171,6 @@ class BeliefGreedyContinuation:
     ) -> None:
         self.config = config
 
-    @property
-    def digest(self) -> str:
-        return self.config.digest
-
     def select(
         self,
         information: SearchInformationState,
@@ -220,8 +179,8 @@ class BeliefGreedyContinuation:
         """Evaluate all legal groups over shared beliefs and choose the best mean."""
 
         groups = strategic_action_groups(information)
-        request_seed = _response_seed(information, self.digest)
         completion_count = self.config.belief_completion_count
+        request_seed = _response_seed(information, completion_count)
         # Every group sees the same hidden-card samples, so differences reflect
         # the candidate action rather than independent sampling luck.
         value_sums = _evaluate_group_values(
@@ -247,20 +206,12 @@ class BeliefGreedyContinuation:
             ),
         )
         # The fair coin affects only the concrete member returned to the engine.
-        choice_seed = derive_strategic_destination_choice_seed(
-            request_seed,
-            BELIEF_GREEDY_DESTINATION_SCOPE,
-            information,
-            selected_group,
-            0,
-        )
         return ContinuationDecision(
-            information_state_fingerprint=information_state_fingerprint(information),
-            config_digest=self.digest,
             selected_group=selected_group,
             selected_action_index=select_concrete_action_index(
                 selected_group,
-                choice_seed,
+                request_seed,
+                selected_group.representative_action_index,
             ),
             group_statistics=statistics,
             terminal_evaluation_count=len(groups) * completion_count,
@@ -285,7 +236,6 @@ class BeliefGreedyInformationSetSearch(BGCInformationSetSearch):
 
 
 __all__ = (
-    "BELIEF_GREEDY_RESPONSE_SCHEMA_VERSION",
     "BeliefGreedyContinuation",
     "BeliefGreedyContinuationConfig",
     "BeliefGreedyInformationSetSearch",

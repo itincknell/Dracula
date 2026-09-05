@@ -11,7 +11,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from dracula.api.contracts import API_VERSION
 from dracula.api.bedrock import BedrockRuntimeAdapter
 from dracula.api.local_controllers import resolve_local_controller
 from dracula.api.local_routes import configure_local_routes
@@ -102,7 +101,7 @@ def create_app(
             game_seed_factory=(None if local_game_seed is None else lambda: local_game_seed),
         )
 
-    application = FastAPI(title="Dracula API", version=API_VERSION)
+    application = FastAPI(title="Dracula API", version="1.0")
     application.state.narration_enabled = resolved_narration
     application.state.gameplay_mode = resolved_gameplay_mode
     application.state.game_repository = repository or _default_repository()

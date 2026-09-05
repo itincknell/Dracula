@@ -15,15 +15,8 @@ import pytest
 import torch
 
 import dracula.bgc_policy_training as training
-from dracula.bgc_policy import load_bgc_policy_artifact
-from dracula.bgc_policy_migration import (
-    CORPUS_SCHEMA_VERSION,
-    GAME_SCHEMA_VERSION,
-    LOADER_SCHEMA_VERSION,
-    MIGRATION_SCHEMA_VERSION,
-    ROW_SCHEMA_VERSION,
-)
-from dracula.bgc_policy_model import ACTION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION
+from dracula.bgc_policy import load_policy_artifact
+from dracula.bgc_policy_dataset import DATASET_FORMAT
 from dracula.engine import create_game
 from dracula.policy_observation import (
     encode_policy_observation,
@@ -76,18 +69,14 @@ def _fixture_row(placement: int, *, fixture: str) -> dict[str, object]:
     visits = [0] * len(representatives)
     visits[0] = 128
     return {
-        "action_schema_version": ACTION_SCHEMA_VERSION,
         "dealer": information.dealer.value,
         "fixture_id": fixture,
         "information_state_fingerprint": "1" * 64,
         "legal_mask_packed": _pack(compact_engine),
         "observation_packed": _pack(observation),
-        "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "placement_number": placement,
         "player": information.player.value,
         "round_number": 1,
-        "row_schema_version": ROW_SCHEMA_VERSION,
-        "search_config_digest": "2" * 64,
         "selected_group_representative": representatives[0],
         "strategic_group_representatives": representatives,
         "strategic_group_visits": visits,
@@ -98,21 +87,15 @@ def _fixture_row(placement: int, *, fixture: str) -> dict[str, object]:
 
 @pytest.fixture()
 def card_set_corpus(tmp_path: Path) -> Path:
-    source_content = {"source_revision": "a" * 40, "source_tree_digest": "b" * 64}
-    source = {"content": source_content, "content_digest": _digest(source_content)}
-    source_path = tmp_path / "source-snapshot.json"
-    _write(source_path, source)
     entries = []
     for ordinal, overlay in enumerate(("training", "validation")):
         fixture = f"fixture-{ordinal}"
         rows = [_fixture_row(index % 7 + 1, fixture=fixture) for index in range(42)]
         content = {
             "fixture_id": fixture,
-            "game_schema_version": GAME_SCHEMA_VERSION,
             "ordinal": ordinal,
             "overlay": overlay,
             "rows": rows,
-            "source_content_digest": "3" * 64,
             "trajectory_profile": "teacher",
         }
         document = {"content": content, "content_digest": _digest(content)}
@@ -131,20 +114,14 @@ def card_set_corpus(tmp_path: Path) -> Path:
             }
         )
     manifest_content = {
-        "action_schema_version": ACTION_SCHEMA_VERSION,
-        "corpus_schema_version": CORPUS_SCHEMA_VERSION,
+        "corpus_schema_version": DATASET_FORMAT,
         "game_count": 2,
         "games": entries,
-        "loader_schema_version": LOADER_SCHEMA_VERSION,
-        "migration_schema_version": MIGRATION_SCHEMA_VERSION,
-        "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
         "placement_counts": {
             overlay: {str(index): 6 for index in range(1, 8)}
             for overlay in ("training", "validation")
         },
         "row_count": 84,
-        "source_snapshot_digest": source["content_digest"],
-        "source_snapshot_path": str(source_path),
     }
     _write(
         tmp_path / "corpus-manifest.json",
@@ -155,9 +132,8 @@ def card_set_corpus(tmp_path: Path) -> Path:
 
 def _config(dataset: Path, output: Path) -> training.BGCPolicyTrainingConfig:
     return training.BGCPolicyTrainingConfig(
-        training.RunSection("bgc-smoke", "bgc-smoke-root", str(output)),
+        training.RunSection("bgc-smoke", 606, str(output)),
         training.DatasetSection(str(dataset)),
-        training.ModelSection("pi1-smoke", 0),
         training.OptimizationSection("cpu"),
     )
 
@@ -222,9 +198,11 @@ def test_smoke_training_resume_and_export(card_set_corpus: Path, tmp_path: Path)
     )
     direct_final = torch.load(direct_result.final_checkpoint, weights_only=True)
     resumed_final = torch.load(resumed_result.final_checkpoint, weights_only=True)
-    assert direct_final["state_dict_digest"] == resumed_final["state_dict_digest"]
-    artifact = load_bgc_policy_artifact(direct_result.exported_artifact)
-    assert artifact.metadata.parameter_count == 754_601
+    assert all(
+        torch.equal(direct_final["model_state_dict"][name], tensor)
+        for name, tensor in resumed_final["model_state_dict"].items()
+    )
+    artifact = load_policy_artifact(direct_result.exported_artifact)
     assert artifact.artifact_digest == hashlib.sha256(
         Path(direct_result.exported_artifact).read_bytes()
     ).hexdigest()

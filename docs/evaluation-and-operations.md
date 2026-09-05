@@ -8,7 +8,7 @@ argmax inference for every non-forced Dracula move. It is packaged inside the
 Lambda image; there is no SageMaker call or production search.
 
 The selected local artifact has SHA-256 digest
-`70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c`.
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`.
 Release packaging verifies this digest before building the container.
 
 ## Application verification

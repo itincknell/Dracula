@@ -78,8 +78,8 @@ part of the Lambda configuration.
 
 The release context is always generated under ignored `build/` output. The
 builder requires
-`runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt`, verifies SHA-256
-`70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c`,
+`runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt`, verifies SHA-256
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`,
 and copies only that model artifact into the context. The binary is never
 tracked by Git. Python, Lambda Web Adapter 1.0.1, CPU PyTorch, and every runtime
 dependency are pinned; the Python and adapter base images are digest-pinned.

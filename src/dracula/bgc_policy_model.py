@@ -13,21 +13,12 @@ import torch
 from torch import Tensor, nn
 
 from dracula.bridge import (
-    ACTION_COUNT,
     COFFIN_POSITION_COUNT,
     HAND_SLOT_COUNT,
     POLICY_GRID_INDICES,
     POLICY_POSITION_COUNT,
 )
 from dracula.cards import CARD_COUNT
-from dracula.randomness import derive_seed
-
-# Observation and action versions protect tensor meanings that shape checks
-# cannot detect. The model and initialization versions protect reproducibility.
-MODEL_SCHEMA_VERSION = "dracula-bgc-card-policy-v2"
-OBSERVATION_SCHEMA_VERSION = "dracula-observation-card-set-v2"
-ACTION_SCHEMA_VERSION = "dracula-card-candidate-action-map-v2"
-INITIALIZATION_SCHEMA_VERSION = "dracula-bgc-card-policy-initialization-v2"
 
 HAND_CANDIDATE_COUNT = HAND_SLOT_COUNT
 COFFIN_FEATURES = COFFIN_POSITION_COUNT * CARD_COUNT
@@ -64,28 +55,6 @@ PARAMETER_COUNT = 754_601
 
 class BGCPolicyModelError(ValueError):
     """A card-set observation or model input violates the policy contract."""
-
-
-def derive_policy_initialization(
-    run_root_seed: str, model_id: str, initialization_ordinal: int
-) -> tuple[bytes, int]:
-    """Return the recorded seed digest and integer used to initialize one model."""
-
-    if not isinstance(run_root_seed, str) or not run_root_seed:
-        raise BGCPolicyModelError("run root seed must be a non-empty string")
-    if not isinstance(model_id, str) or not model_id:
-        raise BGCPolicyModelError("model ID must be a non-empty string")
-    if type(initialization_ordinal) is not int or initialization_ordinal < 0:
-        raise BGCPolicyModelError(
-            "initialization ordinal must be a non-negative integer"
-        )
-    digest = derive_seed(
-        INITIALIZATION_SCHEMA_VERSION,
-        run_root_seed,
-        model_id,
-        str(initialization_ordinal),
-    )
-    return digest, int.from_bytes(digest[:8], "big", signed=False)
 
 
 def pack_hand_card_indices(observation: Tensor) -> tuple[Tensor, Tensor]:
@@ -153,17 +122,8 @@ class BGCPolicyModel(nn.Module):
 
     parameter_count = PARAMETER_COUNT
 
-    def __init__(
-        self,
-        *,
-        run_root_seed: str,
-        model_id: str,
-        initialization_ordinal: int,
-    ) -> None:
+    def __init__(self, seed: int = 0) -> None:
         super().__init__()
-        digest, seed = derive_policy_initialization(
-            run_root_seed, model_id, initialization_ordinal
-        )
         # Module constructors consume PyTorch's global RNG before explicit
         # initialization, so preserve it across the complete construction.
         global_state = torch.random.get_rng_state()
@@ -218,10 +178,6 @@ class BGCPolicyModel(nn.Module):
             _initialize(self, seed)
         finally:
             torch.random.set_rng_state(global_state)
-        self.run_root_seed = run_root_seed
-        self.model_id = model_id
-        self.initialization_ordinal = initialization_ordinal
-        self.initialization_seed_digest = digest.hex()
 
     def _encode_hand(self, batch: Tensor) -> tuple[Tensor, Tensor]:
         """Encode each current card and an order-independent hand summary."""
@@ -322,18 +278,12 @@ class BGCPolicyModel(nn.Module):
 
 
 __all__ = (
-    "ACTION_COUNT",
-    "ACTION_SCHEMA_VERSION",
     "BGCPolicyModel",
     "BGCPolicyModelError",
     "HAND_CANDIDATE_COUNT",
-    "INITIALIZATION_SCHEMA_VERSION",
-    "MODEL_SCHEMA_VERSION",
-    "OBSERVATION_SCHEMA_VERSION",
     "OBSERVATION_SIZE",
     "PARAMETER_COUNT",
     "POLICY_GRID_INDICES",
     "POLICY_POSITION_COUNT",
-    "derive_policy_initialization",
     "pack_hand_card_indices",
 )

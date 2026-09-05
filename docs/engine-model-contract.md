@@ -12,10 +12,11 @@ clubs, diamonds, hearts, spades, then Vampires. Rank order within a suit is
 Ace through King. This 54-card order defines card indexes, hand sorting,
 serialized state, observation features, and fixtures.
 
-All deterministic streams use SHA-256 domain separation through
-`derive_seed(namespace, component...)`. The engine derives independent shuffle
-and dealer streams from the caller's game seed. Its SHA-256 counter stream and
-Fisher–Yates shuffle do not depend on a language-runtime random generator.
+The engine creates one local `random.Random` instance from the caller's game
+seed. That generator shuffles the deck and then selects the initial dealer.
+The stable seed conversion uses SHA-256 so results do not depend on Python's
+process-randomized string hash. Search and fair coins likewise use independent
+local generators constructed from the facts that identify their operation.
 
 ## Engine ownership
 
@@ -85,7 +86,7 @@ and legal-mask bits are not model features.
 Earlier training data carried a redundant `bool[4,54]` stable-slot prefix.
 The sealed selected corpus was physically converted to the exact 659-bit
 layout. The active runtime does not construct or compact that older tensor.
-The retained corpus reader accepts only the converted schema.
+The retained corpus reader accepts only the converted dataset format.
 
 ## Candidate rows and action mapping
 
@@ -118,7 +119,7 @@ destination independently.
 Inference replaces illegal and non-proxy logits with negative infinity,
 selects the greatest representative logit with canonical flattened-index
 tie-breaking, and maps that candidate action back to an engine-slot action.
-A separately derived deterministic fair coin resolves paired destinations.
+A deterministic local fair coin resolves paired destinations.
 The engine validates the concrete move before transition.
 
 Forced eighth placements bypass model inference and apply the engine's sole

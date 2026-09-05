@@ -1,5 +1,4 @@
 {
-  "schema_version": "dracula-human-game-view-v1",
   "game_id": "00000000-0000-4000-8000-000000000001",
   "version": 0,
   "status": "playing",
@@ -29,7 +28,6 @@
   "legal_moves": [],
   "events": [
     {
-      "schema_version": "dracula-public-event-v1",
       "game_id": "00000000-0000-4000-8000-000000000001",
       "event_id": "event-0001",
       "sequence": 1,
@@ -41,7 +39,6 @@
       "payload": {"human_role": "queen", "opponent_role": "king"}
     },
     {
-      "schema_version": "dracula-public-event-v1",
       "game_id": "00000000-0000-4000-8000-000000000001",
       "event_id": "event-0002",
       "sequence": 2,

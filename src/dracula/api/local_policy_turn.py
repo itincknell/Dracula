@@ -2,8 +2,8 @@
 
 The local transaction service owns claim and commit semantics. This module owns
 the intervening inference boundary: it builds only the opponent's visible input,
-invokes the selected policy, validates recurrent compatibility state when used,
-and converts the returned action through the legal action table.
+invokes the selected standalone policy, and converts its returned action through
+the legal action table.
 """
 
 from __future__ import annotations
@@ -13,14 +13,14 @@ from dracula.api.policy import (
     PolicyExecutor,
     PolicyTurnRequest,
 )
-from dracula.api.session import GameSession, validate_hidden_state
+from dracula.api.session import GameSession
 from dracula.engine import EngineTransition, other_player
 
 
 def execute_claimed_policy_turn(
     claimed: GameSession,
     policy_executor: PolicyExecutor,
-) -> tuple[EngineTransition, bytes | None]:
+) -> EngineTransition:
     """Run one policy inference against the immutable state in a claimed turn."""
 
     state = claimed.engine_state
@@ -28,13 +28,7 @@ def execute_claimed_policy_turn(
     persisted = claimed.policy_session
     descriptor = PolicyDescriptor(
         policy_id=persisted.policy_id,
-        policy_version=persisted.policy_version,
-        artifact_id=persisted.artifact_id,
-        artifact_sha256=persisted.artifact_sha256,
-        observation_schema_version=persisted.observation_schema_version,
-        action_schema_version=persisted.action_schema_version,
-        hidden_state_schema_version=persisted.hidden_state_schema_version,
-        inference_profile=persisted.inference_profile,
+        artifact_digest=persisted.artifact_digest,
     )
 
     # These heavier modules are needed only for an actual inference request;
@@ -51,19 +45,11 @@ def execute_claimed_policy_turn(
             turn_number=len(state.current_round_moves) + 1,
             player=opponent,
             round_number=state.round_number,
-            turn_kind=context.kind,
-            policy_input=None,
             action_table=context.action_table,
             information_state=information,
-            hidden_state=persisted.hidden_state,
         )
     )
-    if result.hidden_state is not None:
-        validate_hidden_state(result.hidden_state)
-    return (
-        apply_policy_action(state, context, result.action_index),
-        result.hidden_state,
-    )
+    return apply_policy_action(state, context, result.action_index)
 
 
 __all__ = ("execute_claimed_policy_turn",)

@@ -9,8 +9,11 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from dracula.bgc_policy import save_bgc_policy_artifact
-from dracula.bgc_policy_model import BGCPolicyModel, OBSERVATION_SIZE
+from dracula.bgc_policy import save_policy_artifact
+from dracula.bgc_policy_model import (
+    BGCPolicyModel,
+    OBSERVATION_SIZE,
+)
 from dracula.bridge import build_policy_turn_context, move_for_action_index
 from dracula.engine import (
     EngineStatus,
@@ -21,14 +24,13 @@ from dracula.engine import (
     other_player,
 )
 from dracula.policy_observation import encode_policy_observation
-from dracula.randomness import derive_seed, seed_hex
+from dracula.randomness import stable_seed
 from dracula.search.belief_greedy import (
     BeliefGreedyContinuation,
     BeliefGreedyContinuationConfig,
     BeliefGreedyInformationSetSearch,
 )
 from dracula.search.bgc import (
-    BGC_DETERMINIZATION_NAMESPACE,
     BGCInformationSetSearch,
     BGCSearchConfig,
     derive_bgc_request_seed,
@@ -60,21 +62,9 @@ def _advance(state, count: int):
 
 
 def _policy_artifact(tmp_path: Path) -> Path:
-    model = BGCPolicyModel(
-        run_root_seed="bgc-continuation-test",
-        model_id="policy-continuation",
-        initialization_ordinal=0,
-    )
+    model = BGCPolicyModel(505)
     path = tmp_path / "policy.pt"
-    save_bgc_policy_artifact(
-        path,
-        model,
-        source_revision="a" * 40,
-        source_tree_digest="b" * 64,
-        training_configuration={"run": {"id": "bgc-continuation-test"}},
-        corpus_snapshot_digest="c" * 64,
-        dataset_digest="d" * 64,
-    )
+    save_policy_artifact(path, model)
     return path
 
 
@@ -91,11 +81,11 @@ def test_determinizations_change_hidden_locations_but_not_actor_information() ->
     information = information_state_from_engine(create_game("bgc-hidden-boundary"))
     first = sample_determinization(
         information,
-        derive_seed("bgc-hidden-test-v1", "first"),
+        stable_seed("bgc-hidden-test", "first"),
     )
     second = sample_determinization(
         information,
-        derive_seed("bgc-hidden-test-v1", "second"),
+        stable_seed("bgc-hidden-test", "second"),
     )
 
     opponent = other_player(information.player)
@@ -136,7 +126,6 @@ def test_outer_uct_visits_only_strategic_representatives() -> None:
     request_seed = derive_bgc_request_seed(
         "bgc-root-groups",
         information,
-        search.digest,
     )
     result = search.search(information, request_seed)
     representatives = {
@@ -165,7 +154,7 @@ def test_bgc_replay_is_exact_and_interruption_returns_no_result() -> None:
         BGCSearchConfig(outer_simulation_budget=16),
         BeliefGreedyContinuationConfig(belief_completion_count=2),
     )
-    request_seed = derive_bgc_request_seed("bgc-replay", information, search.digest)
+    request_seed = derive_bgc_request_seed("bgc-replay", information)
     first = search.search(information, request_seed)
     second = search.search(information, request_seed)
 
@@ -204,18 +193,13 @@ def test_principal_continuation_uses_exact_engine_terminal_scoring() -> None:
     request_seed = derive_bgc_request_seed(
         "bgc-terminal-score",
         information,
-        search.digest,
     )
     result = search.search(information, request_seed)
     principal = result.principal_continuation
     assert principal is not None
     state = sample_determinization(
         information,
-        derive_seed(
-            BGC_DETERMINIZATION_NAMESPACE,
-            seed_hex(request_seed),
-            str(principal.simulation_index),
-        ),
+        stable_seed(request_seed, principal.simulation_index),
     ).state
     for step in principal.steps:
         assert state.active_player is not None
@@ -237,7 +221,7 @@ def test_forced_placement_bypasses_uct_and_continuation() -> None:
     search = BeliefGreedyInformationSetSearch()
     result = search.search(
         information,
-        derive_bgc_request_seed("bgc-forced", information, search.digest),
+        derive_bgc_request_seed("bgc-forced", information),
     )
 
     assert result.simulation_count == 0
@@ -258,9 +242,6 @@ def test_policy_continuation_uses_final_model_shape_and_actor_view(
 
     assert encode_policy_observation(information).shape == (OBSERVATION_SIZE,)
     assert OBSERVATION_SIZE == 659
-    assert decision.information_state_fingerprint == information_state_fingerprint(
-        information
-    )
     assert decision.selected_group in strategic_action_groups(information)
     assert decision.selected_action_index in decision.selected_group.member_action_indices
     assert decision.model_inference_count == 1
@@ -277,11 +258,11 @@ def test_phase_two_policy_continuation_changes_only_the_response_policy(
     search = PolicyContinuationInformationSetSearch(continuation, config)
     result = search.search(
         information,
-        derive_bgc_request_seed("bgc-policy-search", information, search.digest),
+        derive_bgc_request_seed("bgc-policy-search", information),
     )
     replay = search.search(
         information,
-        derive_bgc_request_seed("bgc-policy-search", information, search.digest),
+        derive_bgc_request_seed("bgc-policy-search", information),
     )
 
     assert search.config == config
@@ -305,10 +286,6 @@ def test_every_simulated_continuation_receives_only_actor_information() -> None:
             )
             self.calls = 0
 
-        @property
-        def digest(self) -> str:
-            return self.delegate.digest
-
         def select(self, information, should_stop=None):
             assert isinstance(information, SearchInformationState)
             assert set(canonical_information_data(information)).isdisjoint(
@@ -325,6 +302,6 @@ def test_every_simulated_continuation_receives_only_actor_information() -> None:
     )
     search.search(
         information,
-        derive_bgc_request_seed("bgc-actor-privacy", information, search.digest),
+        derive_bgc_request_seed("bgc-actor-privacy", information),
     )
     assert continuation.calls > 0

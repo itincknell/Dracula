@@ -1,6 +1,6 @@
-"""Read and verify the sealed 659-bit BGC training corpus.
+"""Read and verify the sealed 659-bit policy training corpus.
 
-This retained training utility validates converted deck and row manifests,
+This training utility validates sealed deck and row manifests,
 decodes player-visible observations, and exposes immutable examples to the
 current trainer without accepting earlier row formats.
 """
@@ -13,12 +13,10 @@ from pathlib import Path
 from typing import Literal
 
 import torch
+
+from dracula.bridge import ACTION_COUNT, POLICY_POSITION_COUNT
 from dracula.bgc_policy_model import (
-    ACTION_COUNT,
-    ACTION_SCHEMA_VERSION,
     HAND_CANDIDATE_COUNT,
-    OBSERVATION_SCHEMA_VERSION,
-    POLICY_POSITION_COUNT,
     OBSERVATION_SIZE,
 )
 from dracula.bgc_policy_data import (
@@ -35,11 +33,7 @@ from dracula.bgc_policy_training_contracts import (
     OUTER_SIMULATION_BUDGET,
 )
 
-MIGRATION_SCHEMA_VERSION = "dracula-bgc-card-set-migration-v1"
-ROW_SCHEMA_VERSION = "dracula-bgc-card-set-row-v1"
-GAME_SCHEMA_VERSION = "dracula-bgc-card-set-game-v1"
-CORPUS_SCHEMA_VERSION = "dracula-bgc-card-set-corpus-v1"
-LOADER_SCHEMA_VERSION = "dracula-bgc-card-set-loader-v1"
+DATASET_FORMAT = "dracula-bgc-card-set-corpus-v1"
 
 
 def _pack(values: tuple[bool, ...]) -> bytes:
@@ -53,7 +47,7 @@ def _pack(values: tuple[bool, ...]) -> bytes:
 
 
 @dataclass(frozen=True, slots=True)
-class MigratedPolicyDataset:
+class PolicyDataset:
     overlay: Literal["training", "validation"]
     observations_packed: Tensor
     engine_masks_packed: Tensor
@@ -100,25 +94,22 @@ class MigratedPolicyDataset:
 
 
 @dataclass(frozen=True, slots=True)
-class MigratedSnapshotGame:
+class SnapshotGame:
     overlay: Literal["training", "validation"]
 
 
 @dataclass(frozen=True, slots=True)
-class MigratedSnapshotIdentity:
+class SnapshotIdentity:
     snapshot_digest: str
-    source_revision: str
-    source_tree_digest: str
-    games: tuple[MigratedSnapshotGame, ...]
+    games: tuple[SnapshotGame, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class MigratedPolicyDatasetBundle:
+class PolicyDatasetBundle:
     path: Path
-    snapshot: MigratedSnapshotIdentity
-    source_snapshot_digest: str
-    training: MigratedPolicyDataset
-    validation: MigratedPolicyDataset
+    snapshot: SnapshotIdentity
+    training: PolicyDataset
+    validation: PolicyDataset
     dataset_digest: str
     split_digest: str
 
@@ -144,28 +135,27 @@ def _load_game_rows(
 
     path = (root / str(entry["path"])).resolve()
     if not path.is_relative_to(root):
-        raise BGCPolicyTrainingError("migrated game path escapes the corpus")
+        raise BGCPolicyTrainingError("game path escapes the corpus")
     if _file_digest(path) != entry["file_digest"]:
-        raise BGCPolicyTrainingError("migrated game file digest changed")
+        raise BGCPolicyTrainingError("game file digest changed")
     document = _load_json(path)
     if not isinstance(document, dict):
-        raise BGCPolicyTrainingError("migrated game document is malformed")
+        raise BGCPolicyTrainingError("game document is malformed")
     content = document.get("content")
     if (
         not isinstance(content, dict)
         or _digest(content) != document.get("content_digest")
         or document.get("content_digest") != entry.get("content_digest")
-        or content.get("game_schema_version") != GAME_SCHEMA_VERSION
         or content.get("fixture_id") != entry.get("fixture_id")
         or content.get("ordinal") != entry.get("ordinal")
         or content.get("overlay") != overlay
         or content.get("trajectory_profile") != entry.get("trajectory_profile")
     ):
-        raise BGCPolicyTrainingError("migrated game content digest changed")
+        raise BGCPolicyTrainingError("game content digest changed")
     _assert_no_forbidden_keys(content)
     rows = content.get("rows")
     if not isinstance(rows, list) or len(rows) != entry["row_count"]:
-        raise BGCPolicyTrainingError("migrated game row count differs")
+        raise BGCPolicyTrainingError("game row count differs")
     return rows
 
 
@@ -185,7 +175,7 @@ def _project_group_visits(
         or len(groups) != len(representatives)
         or len(groups) != len(group_visits)
     ):
-        raise BGCPolicyTrainingError("migrated groups are malformed")
+        raise BGCPolicyTrainingError("strategic groups are malformed")
 
     dense = [0] * ACTION_COUNT
     representative_actions: set[int] = set()
@@ -206,7 +196,7 @@ def _project_group_visits(
             or not 0 <= visit_count <= OUTER_SIMULATION_BUDGET
             or members.intersection(group)
         ):
-            raise BGCPolicyTrainingError("migrated group entry is malformed")
+            raise BGCPolicyTrainingError("strategic group entry is malformed")
         representative_actions.add(representative)
         dense[representative] = visit_count
         members.update(group)
@@ -217,13 +207,13 @@ def _project_group_visits(
         if value
     }
     if members != legal_actions or sum(dense) != OUTER_SIMULATION_BUDGET:
-        raise BGCPolicyTrainingError("migrated legality or visits differ")
+        raise BGCPolicyTrainingError("legality or visits differ")
     selected_action = raw.get("selected_group_representative")
     if (
         type(selected_action) is not int
         or selected_action not in representative_actions
     ):
-        raise BGCPolicyTrainingError("migrated selected group is invalid")
+        raise BGCPolicyTrainingError("selected group is invalid")
     representative_mask = _pack(
         tuple(index in representative_actions for index in range(ACTION_COUNT))
     )
@@ -235,9 +225,6 @@ def _decode_row(raw: object, entry: dict[str, object]) -> _DecodedRow:
 
     if (
         not isinstance(raw, dict)
-        or raw.get("row_schema_version") != ROW_SCHEMA_VERSION
-        or raw.get("observation_schema_version") != OBSERVATION_SCHEMA_VERSION
-        or raw.get("action_schema_version") != ACTION_SCHEMA_VERSION
         or raw.get("fixture_id") != entry["fixture_id"]
         or raw.get("trajectory_profile") != entry["trajectory_profile"]
         or raw.get("player") not in {"queen", "king"}
@@ -247,7 +234,7 @@ def _decode_row(raw: object, entry: dict[str, object]) -> _DecodedRow:
         or type(raw.get("placement_number")) is not int
         or not 1 <= raw["placement_number"] <= 7
     ):
-        raise BGCPolicyTrainingError("migrated row schema differs")
+        raise BGCPolicyTrainingError("dataset row is incompatible")
     observation = _decode_packed(
         raw["observation_packed"],
         byte_count=83,
@@ -275,12 +262,12 @@ def _decode_row(raw: object, entry: dict[str, object]) -> _DecodedRow:
     )
 
 
-def _load_migrated_split(
+def _load_dataset_split(
     root: Path,
     entries: list[dict[str, object]],
     overlay: str,
     manifest_digest: str,
-) -> MigratedPolicyDataset:
+) -> PolicyDataset:
     """Verify and decode one complete deck-level split from sealed game files."""
 
     selected_entries = [entry for entry in entries if entry["overlay"] == overlay]
@@ -325,7 +312,7 @@ def _load_migrated_split(
             row_index += 1
     if row_index != total_count:
         raise BGCPolicyTrainingError(
-            f"migrated {overlay} split row count differs: {row_index} != {total_count}"
+            f"{overlay} split row count differs: {row_index} != {total_count}"
         )
     split_digest = _digest(
         {
@@ -342,7 +329,7 @@ def _load_migrated_split(
             "split": split_digest,
         }
     )
-    return MigratedPolicyDataset(
+    return PolicyDataset(
         overlay,  # type: ignore[arg-type]
         observations,
         engine_masks,
@@ -366,27 +353,23 @@ def _load_corpus_manifest(
 
     document = _load_json(root / "corpus-manifest.json")
     if not isinstance(document, dict):
-        raise BGCPolicyTrainingError("migrated corpus manifest is malformed")
+        raise BGCPolicyTrainingError("corpus manifest is malformed")
     content = document.get("content")
     if (
         not isinstance(content, dict)
         or _digest(content) != document.get("content_digest")
     ):
-        raise BGCPolicyTrainingError("migrated corpus manifest digest changed")
+        raise BGCPolicyTrainingError("corpus manifest digest changed")
     if (
-        content.get("corpus_schema_version") != CORPUS_SCHEMA_VERSION
-        or content.get("migration_schema_version") != MIGRATION_SCHEMA_VERSION
-        or content.get("loader_schema_version") != LOADER_SCHEMA_VERSION
-        or content.get("observation_schema_version") != OBSERVATION_SCHEMA_VERSION
-        or content.get("action_schema_version") != ACTION_SCHEMA_VERSION
+        content.get("corpus_schema_version") != DATASET_FORMAT
         or type(content.get("game_count")) is not int
         or int(content["game_count"]) < 1
         or content.get("row_count") != int(content["game_count"]) * 42
     ):
-        raise BGCPolicyTrainingError("migrated corpus contract differs")
+        raise BGCPolicyTrainingError("corpus format differs")
     entries = content.get("games")
     if not isinstance(entries, list) or len(entries) != content["game_count"]:
-        raise BGCPolicyTrainingError("migrated corpus games differ")
+        raise BGCPolicyTrainingError("corpus game index differs")
     entry_fields = {
         "content_digest",
         "file_digest",
@@ -415,62 +398,48 @@ def _load_corpus_manifest(
                 )
             )
         ):
-            raise BGCPolicyTrainingError("migrated corpus game entry differs")
+            raise BGCPolicyTrainingError("corpus game entry differs")
     return content, entries, document["content_digest"]  # type: ignore[return-value]
 
 
 def _snapshot_identity(
-    content: dict[str, object],
     entries: list[dict[str, object]],
-    migrated_snapshot_digest: str,
-) -> MigratedSnapshotIdentity:
-    """Verify the source snapshot referenced by the converted corpus."""
+    snapshot_digest: str,
+) -> SnapshotIdentity:
+    """Expose the sealed corpus identity and its deck-level split."""
 
-    source_document = _load_json(Path(str(content["source_snapshot_path"])))
-    if not isinstance(source_document, dict):
-        raise BGCPolicyTrainingError("source snapshot identity changed")
-    source_content = source_document.get("content")
-    if (
-        not isinstance(source_content, dict)
-        or source_document.get("content_digest") != content["source_snapshot_digest"]
-        or _digest(source_content) != source_document.get("content_digest")
-    ):
-        raise BGCPolicyTrainingError("source snapshot identity changed")
-    return MigratedSnapshotIdentity(
-        migrated_snapshot_digest,
-        str(source_content["source_revision"]),
-        str(source_content["source_tree_digest"]),
+    return SnapshotIdentity(
+        snapshot_digest,
         tuple(
-            MigratedSnapshotGame(entry["overlay"])  # type: ignore[arg-type]
+            SnapshotGame(entry["overlay"])  # type: ignore[arg-type]
             for entry in entries
         ),
     )
 
 
-def load_migrated_policy_dataset(path: str | Path) -> MigratedPolicyDatasetBundle:
-    """Load the selected converted corpus after verifying its manifests and rows."""
+def load_policy_dataset(path: str | Path) -> PolicyDatasetBundle:
+    """Load the sealed policy corpus after verifying its manifests and rows."""
 
     root = Path(path).expanduser().resolve()
     if root.is_file():
         root = root.parent
     content, entries, manifest_digest = _load_corpus_manifest(root)
-    training = _load_migrated_split(
+    training = _load_dataset_split(
         root, entries, "training", manifest_digest
     )
-    validation = _load_migrated_split(
+    validation = _load_dataset_split(
         root, entries, "validation", manifest_digest
     )
-    identity = _snapshot_identity(content, entries, manifest_digest)
+    identity = _snapshot_identity(entries, manifest_digest)
     split_digest = _digest(
         {"training": training.split_digest, "validation": validation.split_digest}
     )
     dataset_digest = _digest(
         {"training": training.dataset_digest, "validation": validation.dataset_digest}
     )
-    return MigratedPolicyDatasetBundle(
+    return PolicyDatasetBundle(
         root,
         identity,
-        content["source_snapshot_digest"],
         training,
         validation,
         dataset_digest,
@@ -479,8 +448,8 @@ def load_migrated_policy_dataset(path: str | Path) -> MigratedPolicyDatasetBundl
 
 
 __all__ = (
-    "CORPUS_SCHEMA_VERSION",
-    "MigratedPolicyDataset",
-    "MigratedPolicyDatasetBundle",
-    "load_migrated_policy_dataset",
+    "DATASET_FORMAT",
+    "PolicyDataset",
+    "PolicyDatasetBundle",
+    "load_policy_dataset",
 )

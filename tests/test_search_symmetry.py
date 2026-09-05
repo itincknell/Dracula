@@ -25,7 +25,6 @@ from dracula.search import (
 )
 from dracula.search.information import information_state_from_engine
 from dracula.strategic_actions import (
-    derive_strategic_destination_choice_seed,
     select_concrete_action_index,
     strategic_action_groups,
 )
@@ -201,28 +200,15 @@ def test_paired_destination_choice_is_reproducible_and_group_preserving() -> Non
     selected_members: set[int] = set()
 
     for choice_index in range(32):
-        first_seed = derive_strategic_destination_choice_seed(
-            b"\x12" * 32,
-            "paired-choice-test",
-            information,
-            selected_group,
-            choice_index,
-        )
-        second_seed = derive_strategic_destination_choice_seed(
-            b"\x12" * 32,
-            "paired-choice-test",
-            information,
-            selected_group,
-            choice_index,
-        )
-        assert first_seed == second_seed
         first_action = select_concrete_action_index(
             selected_group,
-            first_seed,
+            "paired-choice-test",
+            choice_index,
         )
         second_action = select_concrete_action_index(
             selected_group,
-            second_seed,
+            "paired-choice-test",
+            choice_index,
         )
         assert first_action == second_action
         assert first_action in selected_group.member_action_indices
@@ -236,11 +222,7 @@ def test_paired_destination_choice_is_reproducible_and_group_preserving() -> Non
 
 def test_active_policy_selects_a_legal_group_for_every_authorized_pattern() -> None:
     runtime = ActivePolicyRuntime(
-        BGCPolicyModel(
-            run_root_seed="authorized-pattern-runtime",
-            model_id="pi1-test",
-            initialization_ordinal=0,
-        ),
+        BGCPolicyModel(),
         artifact_digest="a" * 64,
     )
     for decision_index, (occupied, _expected) in enumerate(AUTHORIZED_CASES):

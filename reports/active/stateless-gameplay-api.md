@@ -38,7 +38,7 @@ trusted client commands.
 Successful responses contain exactly `envelope` and `game`. Public move records
 omit former hand slots. The response omits the internal deterministic game ID,
 stock, opponent hand, engine state, state fingerprint, policy identity,
-artifact metadata, observations, masks, logits, tensors, hidden state, and
+artifact metadata, observations, masks, logits, tensors, and
 search diagnostics.
 
 The seed intentionally remains public and therefore remains an accepted
@@ -103,6 +103,10 @@ SHA-256
 Queen and King each completed six rounds with 31-command envelopes, 24 human
 placements, retry-identical command responses, and an identical final view
 after clearing the replay cache.
+
+The later minimal artifact contains the identical tensors under SHA-256
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`;
+the current complete Python and browser suites repeat this behavior check.
 
 The tests also cover both initial dealer identities, cold reconstruction at
 every returned lifecycle state, canonical cache keys, eviction, malformed and

@@ -23,17 +23,19 @@ from dracula.action_contract import (
     build_representative_action_mask,
     select_representative_action,
 )
-from dracula.bgc_policy_model import (
+from dracula.bridge import (
     ACTION_COUNT,
-    BGCPolicyModel,
     COFFIN_POSITION_COUNT,
+    POLICY_POSITION_COUNT,
+)
+from dracula.bgc_policy_model import (
+    BGCPolicyModel,
     COFFIN_START,
     CONTEXT_FEATURES,
     CONTEXT_START,
     HAND_CANDIDATE_COUNT,
     IN_HAND_START,
     OBSERVATION_SIZE,
-    POLICY_POSITION_COUNT,
     STATUS_START,
 )
 from dracula.cards import CARD_COUNT, CARD_INDEX_BY_ID

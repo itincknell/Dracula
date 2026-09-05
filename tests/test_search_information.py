@@ -172,7 +172,7 @@ def test_information_fingerprint_has_a_stable_golden_fixture() -> None:
         _advance(create_game("information-fingerprint-golden"), 4)
     )
     assert information_state_fingerprint(information) == (
-        "03fdf115d6e29bab718fe578ba40c96fe7a1154f1e33bd802e12b24b37931cbd"
+        "11f16230d24a1707966567d7b63016ff65389471f72979179fb8efa4d40f79b4"
     )
 
 

@@ -18,7 +18,6 @@ from typing import Iterable
 from build_lambda_context import PI1_RELATIVE_PATH, PI1_SHA256
 
 
-RELEASE_SCHEMA = "dracula-production-release-candidate-v1"
 STAGE_REPORTS = (
     "reports/active/stateless-gameplay-api.md",
     "reports/active/bedrock-narration-implementation.md",
@@ -232,7 +231,6 @@ def build_manifest(root: Path, image: str) -> dict[str, object]:
             "path": PI1_RELATIVE_PATH.as_posix(),
             "sha256": model_digest,
         },
-        "release_schema": RELEASE_SCHEMA,
         "source": {
             "file_count": len(source_files),
             "files": source_files,

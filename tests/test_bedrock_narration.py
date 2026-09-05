@@ -40,7 +40,7 @@ class FirstLegalPolicy:
         action = next(
             index for index, move in enumerate(request.action_table) if move is not None
         )
-        return PolicyTurnResult(action, None)
+        return PolicyTurnResult(action)
 
 
 class CapturingBedrockClient:

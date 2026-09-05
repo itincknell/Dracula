@@ -10,13 +10,6 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Generic, Sequence, TypeVar
 
-# These identifiers participate in persisted artifacts and deterministic seed
-# derivation. Changing them is a compatibility change, not a naming cleanup.
-ENGINE_VERSION = "dracula-engine-v1"
-RULES_VERSION = "dracula-rules-v1"
-SHUFFLE_NAMESPACE = "dracula-engine-shuffle-v1"
-INITIAL_DEALER_NAMESPACE = "dracula-engine-initial-dealer-v1"
-
 # Coffin indexes are zero-based and row-major; index 4 is the center.
 HAND_SIZE = 4
 COFFIN_SIZE = 9

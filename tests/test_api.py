@@ -26,7 +26,7 @@ from dracula.api.contracts import (
 )
 from dracula.engine import canonical_state_data, create_game
 
-FIXTURES = Path(__file__).parents[1] / "contracts" / "v1"
+FIXTURES = Path(__file__).parents[1] / "contracts" / "public"
 
 
 def _fixture(name: str) -> dict[str, object]:
@@ -42,13 +42,13 @@ def _fixture(name: str) -> dict[str, object]:
         ("api-error.json", ApiErrorResponse),
     ],
 )
-def test_versioned_contract_fixtures_validate_in_python(
+def test_public_contract_fixtures_validate_in_python(
     filename: str, model: type[HealthResponse | HumanGameView | PublicEvent | ApiErrorResponse]
 ) -> None:
     model.model_validate(_fixture(filename))
 
 
-def test_health_returns_the_versioned_contract_with_narration_disabled() -> None:
+def test_health_returns_the_public_contract_with_narration_disabled() -> None:
     async def request() -> httpx.Response:
         transport = httpx.ASGITransport(app=create_app(narration_enabled=False))
         async with httpx.AsyncClient(

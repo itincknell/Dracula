@@ -15,55 +15,36 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from dracula.bgc_policy import LoadedBGCPolicyArtifact, load_bgc_policy_artifact
+from dracula.bgc_policy import LoadedPolicyArtifact, load_policy_artifact
 from dracula.policy_observation import select_policy_group
-from dracula.randomness import derive_seed
 from dracula.search.bgc import BGCInformationSetSearch, BGCSearchConfig
 from dracula.search.contracts import (
     ContinuationDecision,
     SearchInterrupted,
-    search_config_digest,
 )
 from dracula.search.information import (
     SearchInformationState,
     information_state_fingerprint,
 )
 from dracula.strategic_actions import (
-    derive_strategic_destination_choice_seed,
     select_concrete_action_index,
 )
-
-POLICY_CONTINUATION_SCHEMA_VERSION = "dracula-bgc-policy-continuation-v2"
-# These persisted namespaces retain the phase-one policy name so deterministic
-# paired-destination choices remain compatible with recorded experiments.
-POLICY_CONTINUATION_SEED_NAMESPACE = "dracula-accepted-pi0-response-seed-v1"
-POLICY_CONTINUATION_DESTINATION_SCOPE = "dracula-accepted-pi0-destination-v1"
 
 
 class PolicyContinuation:
     """Choose one simulated response with a verified 659-bit policy artifact."""
 
-    def __init__(self, artifact: LoadedBGCPolicyArtifact) -> None:
-        # Loading has already verified metadata, tensor shapes, and all digests.
-        # Search keeps one inference-only CPU model for repeated response calls.
+    def __init__(self, artifact: LoadedPolicyArtifact) -> None:
+        # Loading has already verified the artifact and tensor contract. Search
+        # keeps one inference-only CPU model for repeated response calls.
         self.artifact = artifact
         self.model = artifact.model.cpu().eval().requires_grad_(False)
-        self._digest = search_config_digest(
-            {
-                "artifact_digest": artifact.artifact_digest,
-                "continuation_schema_version": POLICY_CONTINUATION_SCHEMA_VERSION,
-            }
-        )
 
     @classmethod
     def from_artifact(cls, path: str | Path) -> PolicyContinuation:
         """Load, verify, and freeze one policy artifact for continuation use."""
 
-        return cls(load_bgc_policy_artifact(path))
-
-    @property
-    def digest(self) -> str:
-        return self._digest
+        return cls(load_policy_artifact(path))
 
     def select(
         self,
@@ -76,28 +57,13 @@ class PolicyContinuation:
             raise SearchInterrupted("policy continuation interrupted")
         selected_group = select_policy_group(self.model, information)
         fingerprint = information_state_fingerprint(information)
-        # Concrete paired destinations remain deterministic for this visible
-        # state, artifact, and continuation configuration.
-        request_seed = derive_seed(
-            POLICY_CONTINUATION_SEED_NAMESPACE,
-            fingerprint,
-            self.artifact.artifact_digest,
-            self.digest,
-        )
-        choice_seed = derive_strategic_destination_choice_seed(
-            request_seed,
-            POLICY_CONTINUATION_DESTINATION_SCOPE,
-            information,
-            selected_group,
-            0,
-        )
         return ContinuationDecision(
-            information_state_fingerprint=fingerprint,
-            config_digest=self.digest,
             selected_group=selected_group,
             selected_action_index=select_concrete_action_index(
                 selected_group,
-                choice_seed,
+                fingerprint,
+                self.artifact.artifact_digest,
+                selected_group.representative_action_index,
             ),
             group_statistics=(),
             terminal_evaluation_count=0,
@@ -127,7 +93,6 @@ class PolicyContinuationInformationSetSearch(BGCInformationSetSearch):
 
 
 __all__ = (
-    "POLICY_CONTINUATION_SCHEMA_VERSION",
     "PolicyContinuation",
     "PolicyContinuationInformationSetSearch",
 )

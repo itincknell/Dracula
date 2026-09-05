@@ -29,7 +29,7 @@ Training code and sealed local runs remain reproducibility evidence.
 | Best epoch | 12 |
 | Best validation cross-entropy | 1.99895417 |
 | Validation top-1 / top-2 / top-3 | 0.4879 / 0.7139 / 0.8179 |
-| Artifact SHA-256 | `70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c` |
+| Deployment artifact SHA-256 | `d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203` |
 
 The target was the normalized 128-simulation strategic-group visit
 distribution mapped to representative actions. Illegal and non-proxy logits
@@ -70,12 +70,12 @@ runs/pi1-evaluation-001/
 The selected artifact path is:
 
 ```text
-runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt
+runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt
 ```
 
-The historical filename records its status before manual selection. Release
-packaging copies the exact bytes into a production artifact location and
-verifies the digest; it does not retrain or rewrite the state dictionary.
+This deployment artifact contains the exact selected state dictionary in the
+minimal runtime format. Release packaging verifies and copies those bytes; it
+does not retrain the network.
 
 ## Historical training
 

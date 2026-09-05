@@ -12,31 +12,17 @@ from uuid import UUID
 
 from dracula.engine import EnginePlayer
 
-HIDDEN_STATE_BYTES = 128 * 4
-
 
 class PolicyContractError(ValueError):
     """A configured policy request or response violates its boundary."""
 
 
-def zero_hidden_state() -> bytes:
-    """Return the empty policy state stored by local gameplay sessions."""
-
-    return bytes(HIDDEN_STATE_BYTES)
-
-
 @dataclass(frozen=True, slots=True)
 class PolicyDescriptor:
-    """Immutable identity and tensor contracts for one configured controller."""
+    """Identity pinned to a game so its opponent cannot change mid-session."""
 
     policy_id: str = "unconfigured"
-    policy_version: str = "unavailable"
-    artifact_id: str = "none"
-    artifact_sha256: str = "none"
-    observation_schema_version: str = "dracula-policy-observation-v1"
-    action_schema_version: str = "dracula-policy-action-v1"
-    hidden_state_schema_version: str = "dracula-policy-hidden-v1"
-    inference_profile: str = "local"
+    artifact_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,19 +34,15 @@ class PolicyTurnRequest:
     turn_number: int
     player: EnginePlayer
     round_number: int
-    turn_kind: Any
-    policy_input: Any
     action_table: tuple[Any, ...]
     information_state: Any
-    hidden_state: bytes
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyTurnResult:
-    """Selected action and optional opaque state returned by a controller."""
+    """Concrete flattened action selected by a standalone controller."""
 
     action_index: int | None
-    hidden_state: bytes | None
 
 
 class PolicyExecutionError(Exception):

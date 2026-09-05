@@ -172,6 +172,8 @@ order, and maps the selected candidate back through the typed information
 state. Retrying the same game history reproduces the same representative and
 concrete actions. Diagnostics remain server-private.
 
-BGC request, determinization, tree-selection, continuation, and concrete-choice
-seeds use separate versioned namespaces. Search results and sampled principal
-continuations are private diagnostics and are not part of any public API.
+Each search request derives one integer seed from its fixture and visible
+position. Simulation indexes derive reproducible local seeds from that value;
+paired destinations use the stable facts of the particular decision. Search
+results and sampled principal continuations are private diagnostics and are not
+part of any public API.

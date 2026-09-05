@@ -10,23 +10,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from dracula.api.contracts import PublicEvent
-from dracula.api.policy import PolicyDescriptor, zero_hidden_state
+from dracula.api.policy import PolicyDescriptor
 from dracula.api.presentation import phase_for_state
 from dracula.api.session import GameSession, PolicySession
-from dracula.cards import CARD_SCHEMA_VERSION
 from dracula.engine import (
-    ENGINE_VERSION,
-    RULES_VERSION,
     EnginePlayer,
     EngineState,
     EngineStatus,
     EngineTransition,
     other_player,
 )
-from dracula.randomness import RANDOMNESS_SCHEMA_VERSION
 
 
 def make_event(
@@ -43,7 +39,7 @@ def make_event(
 
     return PublicEvent(
         game_id=game_id,
-        event_id=str(uuid5(NAMESPACE_URL, f"dracula:{game_id}:{sequence}")),
+        event_id=f"{game_id}:{sequence}",
         sequence=sequence,
         event_type=event_type,  # type: ignore[arg-type]
         occurred_at=occurred_at,
@@ -80,16 +76,7 @@ def initial_session(
                 "human_role": human_role.value,
                 "opponent_role": other_player(human_role).value,
                 "policy_id": descriptor.policy_id,
-                "policy_version": descriptor.policy_version,
-                "artifact_id": descriptor.artifact_id,
-                "engine_version": ENGINE_VERSION,
-                "rules_version": RULES_VERSION,
-                "card_schema_version": CARD_SCHEMA_VERSION,
-                "randomness_schema_version": RANDOMNESS_SCHEMA_VERSION,
-                "observation_schema_version": descriptor.observation_schema_version,
-                "action_schema_version": descriptor.action_schema_version,
-                "hidden_state_schema_version": descriptor.hidden_state_schema_version,
-                "inference_profile": descriptor.inference_profile,
+                "artifact_digest": descriptor.artifact_digest,
                 "narration_enabled": narration_enabled,
             },
         ),
@@ -117,14 +104,7 @@ def initial_session(
         engine_state=state,
         policy_session=PolicySession(
             policy_id=descriptor.policy_id,
-            policy_version=descriptor.policy_version,
-            artifact_id=descriptor.artifact_id,
-            artifact_sha256=descriptor.artifact_sha256,
-            observation_schema_version=descriptor.observation_schema_version,
-            action_schema_version=descriptor.action_schema_version,
-            hidden_state_schema_version=descriptor.hidden_state_schema_version,
-            inference_profile=descriptor.inference_profile,
-            hidden_state=zero_hidden_state(),
+            artifact_digest=descriptor.artifact_digest,
         ),
         move_secret=move_secret,
         phase=phase_for_state(state, human_role),

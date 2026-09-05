@@ -11,10 +11,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from dracula.cards import CARD_SCHEMA_VERSION
 from dracula.engine_types import (
-    ENGINE_VERSION,
-    RULES_VERSION,
     EnginePlayedMove,
     EnginePlayer,
     EngineRoundResult,
@@ -26,7 +23,6 @@ from dracula.engine_types import (
     PlayerValues,
 )
 from dracula.engine_validation import validate_state
-from dracula.randomness import RANDOMNESS_SCHEMA_VERSION
 
 
 def _player_values_json(values: PlayerValues[object], encode: object) -> dict[str, object]:
@@ -87,10 +83,6 @@ def canonical_state_data(state: EngineState) -> dict[str, object]:
 
     validate_state(state)
     return {
-        "rules_version": RULES_VERSION,
-        "card_schema_version": CARD_SCHEMA_VERSION,
-        "engine_version": ENGINE_VERSION,
-        "randomness_schema_version": RANDOMNESS_SCHEMA_VERSION,
         "state": {
             "seed": state.seed,
             "status": state.status.value,

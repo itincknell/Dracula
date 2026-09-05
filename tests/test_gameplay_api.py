@@ -6,7 +6,6 @@ sessions, policy calls, and exclusion of private engine state from responses.
 
 from __future__ import annotations
 
-import struct
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -30,7 +29,7 @@ pytestmark = pytest.mark.filterwarnings(
 
 
 class FirstLegalPolicy:
-    """Test-only policy with observable recurrent-state advancement."""
+    """Test-only policy that selects the first legal action."""
 
     def __init__(self, repository: GameRepository | None = None) -> None:
         self.repository = repository
@@ -51,21 +50,17 @@ class FirstLegalPolicy:
             for index, move in enumerate(request.action_table)
             if move is not None
         )
-        values = list(struct.unpack("<128f", request.hidden_state))
-        values[0] += 1.0
-        return PolicyTurnResult(action_index, struct.pack("<128f", *values))
+        return PolicyTurnResult(action_index)
 
 
 class InvalidPolicy:
     def invoke(self, request: Any) -> PolicyTurnResult:
-        values = list(struct.unpack("<128f", request.hidden_state))
-        values[0] = 99.0
         illegal_index = next(
             index
             for index, move in enumerate(request.action_table)
             if move is None
         )
-        return PolicyTurnResult(illegal_index, struct.pack("<128f", *values))
+        return PolicyTurnResult(illegal_index)
 
 
 @pytest.fixture(params=("memory", "sqlite"))
@@ -295,7 +290,7 @@ def test_idempotency_versions_turns_and_expired_moves_are_rejected_stably(
         assert malformed.json()["code"] == "validation_error"
 
 
-def test_policy_claim_is_visible_and_failed_output_commits_neither_move_nor_hidden(
+def test_policy_claim_is_visible_and_failed_output_commits_no_move(
     repository: GameRepository,
 ) -> None:
     observer = FirstLegalPolicy(repository)
@@ -343,7 +338,6 @@ def test_policy_claim_is_visible_and_failed_output_commits_neither_move_nor_hidd
         claimed = failing_repository.load(UUID(view["game_id"]))
         assert claimed.version == before.version
         assert claimed.engine_state == before.engine_state
-        assert claimed.policy_session.hidden_state == before.policy_session.hidden_state
         response = client.post(
             f"/games/{view['game_id']}/opponent-turn", json=request_body
         )
@@ -354,7 +348,6 @@ def test_policy_claim_is_visible_and_failed_output_commits_neither_move_nor_hidd
     assert response.json()["retryable"] is True
     assert after.version == before.version
     assert after.engine_state == before.engine_state
-    assert after.policy_session.hidden_state == before.policy_session.hidden_state
     assert after.phase.kind == "opponent_turn" and after.phase.status == "failed"
 
 
@@ -384,7 +377,6 @@ def test_complete_seeded_game_is_resumable_and_scoring_matches_engine(
         8
     ] * 6
     assert len(scoring_views) == 6
-    assert struct.unpack("<f", session.policy_session.hidden_state[:4])[0] == 24.0
     assert event_response.status_code == 200
     assert event_response.json()["latest_sequence"] == len(view["events"])
     assert [event["sequence"] for event in view["events"]] == list(
@@ -504,14 +496,13 @@ def test_unconfigured_live_policy_fails_without_playing_a_substitute_move() -> N
     assert failed.status_code == 503
     assert after.version == before.version
     assert after.engine_state == before.engine_state
-    assert after.policy_session.hidden_state == before.policy_session.hidden_state
 
 
 def test_sqlite_reopen_resumes_a_claimed_policy_turn(tmp_path: Path) -> None:
     database = tmp_path / "resume.sqlite3"
     first_repository = SQLiteGameRepository(database)
     original_descriptor = PolicyDescriptor(
-        policy_id="persisted-policy", policy_version="version-7", artifact_id="archive-7"
+        policy_id="persisted-policy", artifact_digest="a" * 64
     )
     try:
         with _client(
@@ -550,7 +541,7 @@ def test_sqlite_reopen_resumes_a_claimed_policy_turn(tmp_path: Path) -> None:
             second_repository,
             resumed_policy,
             PolicyDescriptor(
-                policy_id="new-default", policy_version="version-8", artifact_id="archive-8"
+                policy_id="new-default", artifact_digest="b" * 64
             ),
         ) as client:
             reloaded = client.get(f"/games/{view['game_id']}")

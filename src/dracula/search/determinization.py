@@ -27,7 +27,7 @@ from dracula.engine import (
     other_player,
     score_coffin,
 )
-from dracula.randomness import seed_hex, shuffled
+from dracula.randomness import shuffled
 from dracula.search.information import (
     InformationContractViolation,
     PublicPlayedMove,
@@ -42,12 +42,11 @@ class SampledDeterminization:
     """One reproducible assignment of hidden cards used by a simulation.
 
     ``state`` is the complete runnable engine state. The separately retained
-    opponent hand, stock, and seed digest support private diagnostics and tests;
-    none may cross the search boundary.
+    opponent hand and stock support private diagnostics and tests; neither may
+    cross the search boundary.
     """
 
     root_player: EnginePlayer
-    sample_seed_digest: str
     opponent_remaining_hand: tuple[str, ...]
     sampled_stock: tuple[str, ...]
     state: SimulationEngineState
@@ -186,7 +185,7 @@ def _global_coffin(
 
 def _sample_hidden_cards(
     information: SearchInformationState,
-    sample_seed: bytes,
+    sample_seed: int,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Partition unseen cards into one plausible opponent hand and stock."""
 
@@ -265,7 +264,7 @@ def _build_simulation_state(
     information: SearchInformationState,
     opponent_remaining: tuple[str, ...],
     sampled_stock: tuple[str, ...],
-    sample_seed_digest: str,
+    sample_identity: str,
 ) -> SimulationEngineState:
     """Restore private engine fields around one sampled hidden-card partition."""
 
@@ -315,7 +314,7 @@ def _build_simulation_state(
     # The reconstructed deck is a conservation witness used by simulation-state
     # validation. Search decisions still receive only a projected information state.
     return SimulationEngineState(
-        seed=f"search-simulation-v1:{sample_seed_digest}",
+        seed=f"search-simulation:{sample_identity}",
         status=EngineStatus.PLAYING,
         round_number=information.round_number,
         dealer=information.dealer,
@@ -342,7 +341,7 @@ def _build_simulation_state(
 
 def sample_determinization(
     information: SearchInformationState,
-    sample_seed: bytes,
+    sample_seed: int,
 ) -> SampledDeterminization:
     """Create one runnable world compatible with an actor-visible position.
 
@@ -352,7 +351,6 @@ def sample_determinization(
     are then assembled into the exact private engine representation.
     """
 
-    sample_seed_digest = seed_hex(sample_seed)
     opponent_remaining, sampled_stock = _sample_hidden_cards(
         information,
         sample_seed,
@@ -361,7 +359,7 @@ def sample_determinization(
         information,
         opponent_remaining,
         sampled_stock,
-        sample_seed_digest,
+        str(sample_seed),
     )
     # Projection must erase the sampled opponent hand and stock partition.
     if information_state_from_simulation(state) != information:
@@ -372,7 +370,6 @@ def sample_determinization(
     # diagnostics; continuation policies receive projections derived from state.
     return SampledDeterminization(
         root_player=information.player,
-        sample_seed_digest=sample_seed_digest,
         opponent_remaining_hand=opponent_remaining,
         sampled_stock=sampled_stock,
         state=state,

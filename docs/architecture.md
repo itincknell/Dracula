@@ -166,12 +166,11 @@ The selected `pi1` controller performs exactly one standalone policy inference:
 6. Revalidate and apply the concrete move through the engine.
 
 The selected artifact is
-`runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt` in the local evidence
+`runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt` in the local evidence
 store, with SHA-256 digest
-`70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c`.
-The word `unaccepted` is historical training nomenclature; the user has now
-selected this exact artifact for production. The release build copies and
-verifies it inside the Lambda image.
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`.
+It contains the selected weights and one format marker. The release build
+copies and verifies it inside the Lambda image.
 
 The repository retains the BGC-128 search lineage needed to review and reproduce
 the training process: the original eight-completion belief-greedy continuation

@@ -9,10 +9,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from dracula.api.stateless_replay import DEFAULT_REPLAY_CACHE_ENTRIES
+
 POLICY_ARTIFACT_ENV = "DRACULA_POLICY_ARTIFACT"
 NARRATION_ENABLED_ENV = "DRACULA_NARRATION_ENABLED"
 REPLAY_CACHE_ENTRIES_ENV = "DRACULA_REPLAY_CACHE_ENTRIES"
-DEFAULT_REPLAY_CACHE_ENTRIES = 256
 
 
 def boolean_environment(name: str, default: bool) -> bool:

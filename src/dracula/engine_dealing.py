@@ -13,8 +13,6 @@ from dracula.engine_types import (
     CENTER_GRID_INDEX,
     COFFIN_SIZE,
     HAND_SIZE,
-    INITIAL_DEALER_NAMESPACE,
-    SHUFFLE_NAMESPACE,
     Coffin,
     EnginePlayer,
     Hand,
@@ -22,21 +20,29 @@ from dracula.engine_types import (
     RoundDeal,
     other_player,
 )
-from dracula.randomness import derive_seed, seed_integer, shuffled
+from dracula.randomness import deterministic_random
+
+
+def _game_randomization(game_seed: str) -> tuple[tuple[str, ...], EnginePlayer]:
+    """Produce the complete deck and dealer from one game-local generator."""
+
+    generator = deterministic_random(game_seed)
+    deck = list(CARD_IDS)
+    generator.shuffle(deck)
+    dealer = (EnginePlayer.QUEEN, EnginePlayer.KING)[generator.randrange(2)]
+    return tuple(deck), dealer
 
 
 def shuffled_deck(game_seed: str) -> tuple[str, ...]:
-    """Return the canonical deck shuffled in the game seed's shuffle namespace."""
+    """Return the reproducible deck for ``game_seed``."""
 
-    shuffle_seed = derive_seed(SHUFFLE_NAMESPACE, game_seed)
-    return shuffled(CARD_IDS, shuffle_seed)
+    return _game_randomization(game_seed)[0]
 
 
 def initial_dealer(game_seed: str) -> EnginePlayer:
-    """Select the first dealer independently of the deck shuffle."""
+    """Return the reproducible initial dealer for ``game_seed``."""
 
-    dealer_seed = derive_seed(INITIAL_DEALER_NAMESPACE, game_seed)
-    return EnginePlayer.QUEEN if seed_integer(dealer_seed) % 2 == 0 else EnginePlayer.KING
+    return _game_randomization(game_seed)[1]
 
 
 def deal_round(stock: Sequence[str], dealer: EnginePlayer) -> RoundDeal:
@@ -77,9 +83,10 @@ def deal_round(stock: Sequence[str], dealer: EnginePlayer) -> RoundDeal:
 
 
 def create_initial_deal(game_seed: str) -> RoundDeal:
-    """Create round one's deal from independently derived shuffle and dealer seeds."""
+    """Create round one's deal from one deterministic game randomization."""
 
-    return deal_round(shuffled_deck(game_seed), initial_dealer(game_seed))
+    deck, dealer = _game_randomization(game_seed)
+    return deal_round(deck, dealer)
 
 
 def as_hand(cards: tuple[str, ...]) -> Hand:

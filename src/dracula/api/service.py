@@ -303,8 +303,6 @@ class GameplayService:
         transition: EngineTransition,
         request_id: str,
         request_hash: str,
-        *,
-        next_hidden_state: bytes | None = None,
     ) -> ServiceResponse:
         """Seal one accepted engine transition and its idempotent response atomically."""
 
@@ -312,15 +310,11 @@ class GameplayService:
         events = move_events(
             session, transition, request_id, version, self.clock()
         )
-        policy_session = session.policy_session
-        if next_hidden_state is not None:
-            policy_session = replace(policy_session, hidden_state=next_hidden_state)
         next_session = replace(
             session,
             version=version,
             revision=session.revision + 1,
             engine_state=transition.state,
-            policy_session=policy_session,
             phase=phase_for_state(transition.state, session.human_role),
             events=session.events + events,
             policy_turn_claim=None,
@@ -441,7 +435,7 @@ class GameplayService:
         """Run the claimed inference before atomically committing its move or failure."""
 
         try:
-            transition, next_hidden_state = execute_claimed_policy_turn(
+            transition = execute_claimed_policy_turn(
                 claimed, self.policy_executor
             )
         except Exception:
@@ -502,7 +496,6 @@ class GameplayService:
             transition,
             claim.request_id,
             claim.request_hash,
-            next_hidden_state=next_hidden_state,
         )
 
     def advance_round(

@@ -20,9 +20,9 @@ from dracula.api.production_config import ProductionSettings
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = ROOT / "runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt"
+ARTIFACT = ROOT / "runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt"
 EXPECTED_ARTIFACT_SHA256 = (
-    "70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c"
+    "d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203"
 )
 
 
@@ -63,7 +63,7 @@ def test_release_context_contains_only_verified_selected_artifact(tmp_path: Path
     assert not tuple(output.rglob("*.sqlite3"))
     assert not tuple(output.rglob("__pycache__"))
     assert not (output / "src/dracula/bgc_policy_training.py").exists()
-    assert not (output / "src/dracula/bgc_policy_migration.py").exists()
+    assert not (output / "src/dracula/bgc_policy_dataset.py").exists()
     assert not (output / "src/dracula/api/service.py").exists()
     assert (output / "src/dracula/api/production.py").is_file()
     assert json.loads((output / "release-manifest.json").read_text()) == manifest

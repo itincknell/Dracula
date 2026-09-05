@@ -11,7 +11,7 @@ const frontendRoot = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(frontendRoot, "..");
 const policy = path.resolve(
   process.env.DRACULA_POLICY_ARTIFACT ??
-    path.join(projectRoot, "runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt"),
+    path.join(projectRoot, "runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt"),
 );
 
 function shellValue(value: string): string {
@@ -40,7 +40,7 @@ export default defineConfig({
     {
       command: [
         "DRACULA_LOCAL_GAME_SEED=dracula-stateless-frontend-v1",
-        "DRACULA_OPPONENT_MODE=bgc-policy",
+        "DRACULA_OPPONENT_MODE=pi1",
         `DRACULA_POLICY_ARTIFACT=${shellValue(policy)}`,
         ".venv/bin/uvicorn frontend_production_app:app",
         "--app-dir tests --host 127.0.0.1 --port 8012 --no-access-log",

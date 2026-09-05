@@ -66,7 +66,7 @@ from dracula.engine import (
     apply_simulation_move,
     legal_simulation_moves,
 )
-from dracula.randomness import Sha256CounterStream, derive_seed, seed_hex
+from dracula.randomness import stable_seed
 from dracula.search.contracts import (
     ContinuationDecision,
     ContinuationPolicy,
@@ -76,7 +76,6 @@ from dracula.search.contracts import (
     SearchInterrupted,
     StrategicGroupStatistics,
     normalized_round_return,
-    search_config_digest,
 )
 from dracula.search.determinization import sample_determinization
 from dracula.search.information import (
@@ -84,24 +83,11 @@ from dracula.search.information import (
     information_state_fingerprint,
     information_state_from_simulation,
 )
-from dracula.search.symmetry import DESTINATION_SYMMETRY_SCHEMA_VERSION
 from dracula.strategic_actions import (
     StrategicActionGroup,
-    derive_strategic_destination_choice_seed,
     select_concrete_action_index,
     strategic_action_groups,
 )
-
-BGC_SEARCH_SCHEMA_VERSION = "dracula-bgc-information-set-search-v2"
-# These seed namespaces predate interchangeable continuation policies. Their
-# persisted values remain fixed so recorded searches reproduce exactly.
-BGC_REQUEST_NAMESPACE = "dracula-belief-greedy-request-v1"
-BGC_DETERMINIZATION_NAMESPACE = "dracula-belief-greedy-determinization-v1"
-BGC_SELECTION_NAMESPACE = "dracula-belief-greedy-selection-v1"
-BGC_TREE_DESTINATION_SCOPE = "belief-greedy-outer-simulation"
-BGC_RESULT_DESTINATION_SCOPE = "belief-greedy-root-result"
-BGC_FORCED_DESTINATION_SCOPE = "belief-greedy-forced-result"
-BGC_SELECTION_PROFILE = "max-visits-mean-value-representative-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,25 +108,6 @@ class BGCSearchConfig:
                 "outer exploration constant must be finite and non-negative"
             )
 
-    def digest_for(self, continuation_digest: str) -> str:
-        """Bind outer-search behavior to the selected continuation policy."""
-
-        return search_config_digest(
-            {
-                "continuation_digest": continuation_digest,
-                "destination_symmetry_schema_version": (
-                    DESTINATION_SYMMETRY_SCHEMA_VERSION
-                ),
-                "outer_exploration_constant": float(
-                    self.outer_exploration_constant
-                ),
-                "outer_simulation_budget": self.outer_simulation_budget,
-                "search_schema_version": BGC_SEARCH_SCHEMA_VERSION,
-                "selection_profile": BGC_SELECTION_PROFILE,
-                "terminal_value": "exact-engine-round-differential-v1",
-            }
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class BGCSearchResult:
@@ -154,7 +121,6 @@ class BGCSearchResult:
     """
 
     information_state_fingerprint: str
-    config_digest: str
     selected_group: StrategicActionGroup
     selected_action_index: int
     representative_action_visits: tuple[int, ...]
@@ -214,7 +180,7 @@ class _SearchWork:
     """Mutable tree, cache, diagnostics, and counters for one root request."""
 
     nodes: dict[_NodeKey, _Node]
-    continuation_cache: dict[tuple[str, str], ContinuationDecision]
+    continuation_cache: dict[str, ContinuationDecision]
     observed_continuations: list[_ObservedContinuation]
     continuation_requests: int = 0
     continuation_cache_hits: int = 0
@@ -235,57 +201,33 @@ class _SimulationTrace:
 def derive_bgc_request_seed(
     fixture_id: str,
     information: SearchInformationState,
-    controller_digest: str,
-) -> bytes:
-    """Bind one search request to its fixture, actor-visible state, and controller."""
+) -> int:
+    """Return the local random seed for one visible search request."""
 
-    return derive_seed(
-        BGC_REQUEST_NAMESPACE,
+    return stable_seed(
         fixture_id,
         information_state_fingerprint(information),
         information.player.value,
-        str(information.round_number),
-        str(information.turn_number),
-        controller_digest,
+        information.round_number,
+        information.turn_number,
     )
 
 
-def _simulation_seed(request_seed: bytes, simulation_index: int) -> bytes:
+def _simulation_seed(request_seed: int, simulation_index: int) -> int:
     """Give each outer simulation an independent reproducible hidden world."""
 
-    return derive_seed(
-        BGC_DETERMINIZATION_NAMESPACE,
-        seed_hex(request_seed),
-        str(simulation_index),
-    )
-
-
-def _selection_seed(
-    request_seed: bytes,
-    simulation_index: int,
-    node: _NodeKey,
-) -> bytes:
-    """Derive tie-breaking randomness from the information set being selected."""
-
-    return derive_seed(
-        BGC_SELECTION_NAMESPACE,
-        seed_hex(request_seed),
-        str(simulation_index),
-        node.actor.value,
-        node.information_state_fingerprint,
-    )
+    return stable_seed(request_seed, simulation_index)
 
 
 def _select_group(
     node: _Node,
     exploration_constant: float,
-    selection_seed: bytes,
 ) -> StrategicActionGroup:
     """Apply UCT selection to one information-set node.
 
     Unvisited groups receive deterministic initial coverage. Later selections
     combine their actor-relative mean return with the usual exploration bonus;
-    exact score ties are dispersed reproducibly rather than favoring one index.
+    exact score ties use representative order.
     """
 
     # Canonical initial coverage gives every strategic action one observation.
@@ -306,7 +248,7 @@ def _select_group(
             tied = [group]
         elif score == best_score:
             tied.append(group)
-    return tied[Sha256CounterStream(selection_seed).randbelow(len(tied))]
+    return min(tied, key=lambda group: group.representative_action_index)
 
 
 def _move_for_action(
@@ -363,21 +305,15 @@ class BGCInformationSetSearch:
         self.continuation = continuation
         self.config = config
 
-    @property
-    def digest(self) -> str:
-        return self.config.digest_for(self.continuation.digest)
-
     def search(
         self,
         information: SearchInformationState,
-        request_seed: bytes,
+        request_seed: int,
         should_stop: Callable[[], bool] | None = None,
     ) -> BGCSearchResult:
         """Evaluate one actor-visible position and return one concrete legal action."""
 
         started = time.perf_counter()
-        # The seed is an external search input; validate its byte shape once.
-        seed_hex(request_seed)
         root_player = information.player
         root_fingerprint = information_state_fingerprint(information)
         root_groups = strategic_action_groups(information)
@@ -389,13 +325,8 @@ class BGCInformationSetSearch:
             group = root_groups[0]
             selected = select_concrete_action_index(
                 group,
-                derive_strategic_destination_choice_seed(
-                    request_seed,
-                    BGC_FORCED_DESTINATION_SCOPE,
-                    information,
-                    group,
-                    0,
-                ),
+                request_seed,
+                group.representative_action_index,
             )
             return self._forced_result(root_fingerprint, group, selected, started)
         if self.config.outer_simulation_budget < len(root_groups):
@@ -423,7 +354,7 @@ class BGCInformationSetSearch:
     def _run_simulation(
         self,
         information: SearchInformationState,
-        request_seed: bytes,
+        request_seed: int,
         simulation_index: int,
         work: _SearchWork,
         should_stop: Callable[[], bool] | None,
@@ -547,7 +478,7 @@ class BGCInformationSetSearch:
     def _select_tree_move(
         self,
         state: SimulationEngineState,
-        request_seed: bytes,
+        request_seed: int,
         simulation_index: int,
         work: _SearchWork,
     ) -> tuple[EngineMove, StrategicActionGroup, int, _Node, bool]:
@@ -571,19 +502,15 @@ class BGCInformationSetSearch:
         selected_group = _select_group(
             node,
             float(self.config.outer_exploration_constant),
-            _selection_seed(request_seed, simulation_index, key),
         )
         representative = selected_group.representative_action_index
         newly_expanded = node.action_visits[representative] == 0
         action_index = select_concrete_action_index(
             selected_group,
-            derive_strategic_destination_choice_seed(
-                request_seed,
-                BGC_TREE_DESTINATION_SCOPE,
-                actor_information,
-                selected_group,
-                simulation_index,
-            ),
+            request_seed,
+            simulation_index,
+            key.information_state_fingerprint,
+            representative,
         )
         return (
             _move_for_action(state, action_index),
@@ -605,18 +532,11 @@ class BGCInformationSetSearch:
         fingerprint = information_state_fingerprint(actor_information)
         # Cache identity is actor-visible. Hidden determinizations cannot select
         # or distinguish a continuation response.
-        cache_key = (fingerprint, self.continuation.digest)
+        cache_key = fingerprint
         work.continuation_requests += 1
         decision = work.continuation_cache.get(cache_key)
         if decision is None:
             decision = self.continuation.select(actor_information, should_stop)
-            if (
-                decision.information_state_fingerprint != fingerprint
-                or decision.config_digest != self.continuation.digest
-            ):
-                raise SearchContractViolation(
-                    "continuation crossed its actor-information boundary"
-                )
             work.continuation_cache[cache_key] = decision
             work.terminal_evaluations += decision.terminal_evaluation_count
             work.model_inferences += decision.model_inference_count
@@ -631,7 +551,7 @@ class BGCInformationSetSearch:
     def _completed_result(
         self,
         information: SearchInformationState,
-        request_seed: bytes,
+        request_seed: int,
         root_fingerprint: str,
         work: _SearchWork,
         started: float,
@@ -650,13 +570,9 @@ class BGCInformationSetSearch:
         # afterward so a paired group's coin cannot affect its search evidence.
         selected_action = select_concrete_action_index(
             selected_group,
-            derive_strategic_destination_choice_seed(
-                request_seed,
-                BGC_RESULT_DESTINATION_SCOPE,
-                information,
-                selected_group,
-                0,
-            ),
+            request_seed,
+            root_fingerprint,
+            selected_group.representative_action_index,
         )
         # The best sampled line is diagnostic context for the selected group;
         # root selection still depends on aggregate visits and mean value.
@@ -682,7 +598,6 @@ class BGCInformationSetSearch:
             means[item.group.representative_action_index] = item.mean_value
         return BGCSearchResult(
             information_state_fingerprint=root_fingerprint,
-            config_digest=self.digest,
             selected_group=selected_group,
             selected_action_index=selected_action,
             representative_action_visits=tuple(root_node.action_visits),
@@ -715,7 +630,6 @@ class BGCInformationSetSearch:
 
         return BGCSearchResult(
             information_state_fingerprint=fingerprint,
-            config_digest=self.digest,
             selected_group=group,
             selected_action_index=action_index,
             representative_action_visits=(0,) * ACTION_COUNT,
@@ -753,7 +667,6 @@ class BGCInformationSetSearch:
 
 
 __all__ = (
-    "BGC_SEARCH_SCHEMA_VERSION",
     "BGCInformationSetSearch",
     "BGCSearchConfig",
     "BGCSearchResult",

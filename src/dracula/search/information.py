@@ -36,9 +36,6 @@ from dracula.engine import (
 from dracula.engine_types import empty_adjacent_grid_indices, orthogonally_adjacent
 from dracula.scoring import round_scores_from_lines
 
-# The schema literal and serialized field order define policy request identity.
-INFORMATION_STATE_SCHEMA_VERSION = "dracula-search-information-v1"
-
 # Rows are stable hand slots; columns are the eight non-center policy positions.
 LegalMask = tuple[
     tuple[bool, bool, bool, bool, bool, bool, bool, bool],
@@ -94,7 +91,6 @@ class PublicGameHistory:
 class SearchInformationState:
     """Complete decision information available to exactly one active player."""
 
-    schema_version: str
     player: EnginePlayer
     round_number: int
     dealer: EnginePlayer
@@ -367,7 +363,6 @@ def _information_state_from_validated_engine(
         move.player is opponent for move in state.current_round_moves
     )
     return SearchInformationState(
-        schema_version=INFORMATION_STATE_SCHEMA_VERSION,
         player=player,
         round_number=state.round_number,
         dealer=state.dealer,
@@ -408,8 +403,6 @@ def _legal_mask_from_visible_state(
 def _validate_information_state(state: SearchInformationState) -> None:
     """Verify actor ownership, public history, card partition, counts, and legality."""
 
-    if state.schema_version != INFORMATION_STATE_SCHEMA_VERSION:
-        raise InformationContractViolation("information schema version is unsupported")
     if not isinstance(state.player, EnginePlayer) or state.active_player is not state.player:
         raise InformationContractViolation("information state must belong to its active player")
     if not isinstance(state.dealer, EnginePlayer):
@@ -510,7 +503,6 @@ def canonical_information_data(state: SearchInformationState) -> dict[str, objec
 
     opponent = other_player(state.player)
     return {
-        "information_state_schema_version": state.schema_version,
         "round_number": state.round_number,
         "dealer": _relative_player(state.player, state.dealer),
         "active_player": "self",

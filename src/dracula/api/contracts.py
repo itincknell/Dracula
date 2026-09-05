@@ -10,13 +10,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-API_VERSION = "dracula-api-v1"
-HEALTH_SCHEMA_VERSION = "dracula-health-v1"
-GAME_VIEW_SCHEMA_VERSION = "dracula-human-game-view-v1"
-EVENT_SCHEMA_VERSION = "dracula-public-event-v1"
-ERROR_SCHEMA_VERSION = "dracula-error-v1"
+from pydantic import BaseModel, ConfigDict, Field
 
 Player = Literal["queen", "king"]
 GameStatus = Literal["playing", "round_complete", "game_complete"]
@@ -43,8 +37,6 @@ class ContractModel(BaseModel):
 class HealthResponse(ContractModel):
     """Local API health and configured dependency status."""
 
-    schema_version: Literal["dracula-health-v1"] = HEALTH_SCHEMA_VERSION
-    api_version: Literal["dracula-api-v1"] = API_VERSION
     status: Literal["ok"] = "ok"
     narration_enabled: bool
 
@@ -124,7 +116,6 @@ class LegalMove(ContractModel):
 class PublicEvent(ContractModel):
     """Append-only local gameplay event with contiguous sequence identity."""
 
-    schema_version: Literal["dracula-public-event-v1"] = EVENT_SCHEMA_VERSION
     game_id: UUID
     event_id: str
     sequence: int = Field(ge=1)
@@ -206,7 +197,6 @@ ResumablePhase = Annotated[
 class PublicGameView(ContractModel):
     """Shared public lifecycle, board, score, and phase fields."""
 
-    schema_version: Literal["dracula-human-game-view-v1"] = GAME_VIEW_SCHEMA_VERSION
     game_id: UUID
     version: int = Field(ge=0)
     status: GameStatus
@@ -248,13 +238,6 @@ class CreateGameRequest(ContractModel):
     request_id: UUID
     seed: str | None = None
 
-    @field_validator("seed")
-    @classmethod
-    def reject_seed_separator(cls, value: str | None) -> str | None:
-        if value is not None and "\0" in value:
-            raise ValueError("seed cannot contain NUL")
-        return value
-
 
 class MoveRequest(ContractModel):
     """Idempotent local placement request using an opaque legal-move token."""
@@ -274,7 +257,6 @@ class VersionedMutationRequest(ContractModel):
 class ApiErrorResponse(ContractModel):
     """Local API error with optional authoritative recovery view."""
 
-    schema_version: Literal["dracula-error-v1"] = ERROR_SCHEMA_VERSION
     code: Literal[
         "not_found",
         "stale_version",

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from dracula.api.app import create_app
 from dracula.api.policy import PolicyTurnResult
 from dracula.api.stateless_contracts import RecoveryEnvelope
-from dracula.api.stateless_service import canonical_envelope_digest
+from dracula.api.stateless_replay import canonical_envelope_digest
 from dracula.engine import EnginePlayer, EngineStatus, initial_dealer
 from dracula.search import SearchInformationState
 
@@ -38,7 +38,7 @@ class FirstLegalStatelessPolicy:
         action = next(
             index for index, move in enumerate(request.action_table) if move is not None
         )
-        return PolicyTurnResult(action, None)
+        return PolicyTurnResult(action)
 
 
 class IllegalStatelessPolicy:
@@ -46,7 +46,7 @@ class IllegalStatelessPolicy:
         action = next(
             index for index, move in enumerate(request.action_table) if move is None
         )
-        return PolicyTurnResult(action, None)
+        return PolicyTurnResult(action)
 
 
 def _app(
@@ -102,7 +102,7 @@ def _all_keys(value: Any) -> set[str]:
     ("human_role", "seed", "expected_initial_dealer"),
     (
         ("queen", "stateless-queen-6", EnginePlayer.QUEEN),
-        ("king", "stateless-king-0", EnginePlayer.KING),
+        ("king", "stateless-king-1", EnginePlayer.KING),
     ),
 )
 def test_complete_games_reconstruct_on_cache_miss_at_every_lifecycle_state(

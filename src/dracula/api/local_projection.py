@@ -23,7 +23,7 @@ def move_id_for(
     """Create an opaque token bound to one current local-session move."""
 
     message = (
-        f"move-v1\0{session.game_id}\0{session.version}\0"
+        f"{session.game_id}\0{session.version}\0"
         f"{hand_slot}\0{position}\0{card_id}"
     ).encode("utf-8")
     digest = hmac.new(session.move_secret, message, hashlib.sha256).digest()

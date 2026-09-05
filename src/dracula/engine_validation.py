@@ -17,7 +17,6 @@ from dracula.engine_types import (
     HAND_SIZE,
     MOVES_PER_ROUND,
     ROUNDS_PER_GAME,
-    SHUFFLE_NAMESPACE,
     EnginePlayer,
     EnginePlayedMove,
     EngineRoundResult,
@@ -30,7 +29,6 @@ from dracula.engine_types import (
     orthogonally_adjacent,
     other_player,
 )
-from dracula.randomness import derive_seed
 from dracula.scoring import round_scores_from_lines, score_coffin
 
 
@@ -156,10 +154,6 @@ def _validate_state_header(state: EngineState) -> None:
         raise MalformedState("state must be an EngineState")
     if not isinstance(state.seed, str):
         raise MalformedState("seed must be a string")
-    try:
-        derive_seed(SHUFFLE_NAMESPACE, state.seed)
-    except ValueError as error:
-        raise MalformedState("seed contains an invalid separator") from error
     if not isinstance(state.status, EngineStatus):
         raise MalformedState("state has an invalid status")
     if type(state.round_number) is not int or not 1 <= state.round_number <= ROUNDS_PER_GAME:

@@ -9,18 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dracula.bridge import POLICY_GRID_INDICES, POLICY_POSITION_COUNT
-from dracula.randomness import Sha256CounterStream, derive_seed, seed_hex
-from dracula.search.information import (
-    SearchInformationState,
-    information_state_fingerprint,
-)
+from dracula.randomness import deterministic_random
+from dracula.search.information import SearchInformationState
 from dracula.search.symmetry import (
     DestinationSymmetryGroup,
     destination_symmetry_groups,
 )
-
-# This namespace preserves deterministic paired choices across retries.
-STRATEGIC_DESTINATION_CHOICE_NAMESPACE = "dracula-strategic-destination-choice-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,34 +82,15 @@ def strategic_group_for_representative(
     raise ValueError("representative action does not identify a strategic group")
 
 
-def derive_strategic_destination_choice_seed(
-    request_seed: bytes,
-    scope: str,
-    information: SearchInformationState,
-    group: StrategicActionGroup,
-    choice_index: int,
-) -> bytes:
-    """Derive a paired-member choice independently of strategic selection."""
-
-    return derive_seed(
-        STRATEGIC_DESTINATION_CHOICE_NAMESPACE,
-        seed_hex(request_seed),
-        scope,
-        information_state_fingerprint(information),
-        str(group.representative_action_index),
-        str(choice_index),
-    )
-
-
 def select_concrete_action_index(
     group: StrategicActionGroup,
-    choice_seed: bytes,
+    *decision_identity: str | int,
 ) -> int:
-    """Resolve a strategic group to one concrete destination."""
+    """Resolve a group reproducibly after its strategic choice is complete."""
 
     members = group.member_action_indices
     if len(members) == 1:
         return members[0]
     # The coin is applied only after policy selection, so it cannot change the
     # chosen card or strategic destination group.
-    return members[Sha256CounterStream(choice_seed).randbelow(2)]
+    return members[deterministic_random(*decision_identity).randrange(2)]

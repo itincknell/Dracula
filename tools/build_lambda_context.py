@@ -16,11 +16,9 @@ import tempfile
 from pathlib import Path
 
 PI1_RELATIVE_PATH = Path(
-    "runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt"
+    "runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt"
 )
-PI1_SHA256 = "70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c"
-CONTEXT_SCHEMA = "dracula-lambda-build-context-v1"
-
+PI1_SHA256 = "d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203"
 RUNTIME_MODULES = (
     "__init__.py",
     "action_contract.py",
@@ -155,7 +153,6 @@ def build_context(root: Path, artifact: Path, output: Path) -> dict[str, object]
 
         manifest: dict[str, object] = {
             "artifact_sha256": actual_digest,
-            "context_schema": CONTEXT_SCHEMA,
             "files": _manifest_files(temporary),
             "git_revision": _git_revision(root),
         }

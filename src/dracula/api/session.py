@@ -7,12 +7,9 @@ projection is owned separately by :mod:`dracula.api.local_projection`.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
-import math
 import re
-import struct
 from dataclasses import dataclass
 from typing import Any, Mapping
 from uuid import UUID
@@ -23,7 +20,6 @@ from dracula.api.contracts import (
     PublicEvent,
     ResumablePhase,
 )
-from dracula.api.policy import HIDDEN_STATE_BYTES
 from dracula.engine import (
     EnginePlayer,
     EngineState,
@@ -32,24 +28,17 @@ from dracula.engine import (
 )
 from dracula.engine_serialization import engine_state_from_data
 
-SESSION_SCHEMA_VERSION = "dracula-game-session-v1"
+SESSION_FORMAT = "local-game-session"
 _PHASE_ADAPTER = TypeAdapter(ResumablePhase)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True, slots=True)
 class PolicySession:
-    """Controller identity and opaque policy state pinned to a local game."""
+    """Standalone controller identity pinned to a local game."""
 
     policy_id: str
-    policy_version: str
-    artifact_id: str
-    artifact_sha256: str
-    observation_schema_version: str
-    action_schema_version: str
-    hidden_state_schema_version: str
-    inference_profile: str
-    hidden_state: bytes
+    artifact_digest: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,15 +78,6 @@ class GameSession:
     policy_turn_claim: PolicyTurnClaim | None = None
 
 
-def validate_hidden_state(value: bytes) -> None:
-    """Validate the retained fixed-width recurrent policy state."""
-
-    if not isinstance(value, bytes) or len(value) != HIDDEN_STATE_BYTES:
-        raise ValueError(f"policy hidden state must contain {HIDDEN_STATE_BYTES} bytes")
-    if not all(math.isfinite(item) for item in struct.unpack("<128f", value)):
-        raise ValueError("policy hidden state contains a non-finite value")
-
-
 def validate_session(session: GameSession) -> None:
     """Verify private engine, policy, event, and idempotency consistency."""
 
@@ -110,27 +90,11 @@ def validate_session(session: GameSession) -> None:
         raise ValueError("session human role is invalid")
     if len(session.move_secret) < 32:
         raise ValueError("move token secret must contain at least 32 bytes")
-    validate_hidden_state(session.policy_session.hidden_state)
     policy = session.policy_session
-    if any(
-        not isinstance(value, str) or not value
-        for value in (
-            policy.policy_id,
-            policy.policy_version,
-            policy.artifact_id,
-            policy.artifact_sha256,
-            policy.observation_schema_version,
-            policy.action_schema_version,
-            policy.hidden_state_schema_version,
-            policy.inference_profile,
-        )
-    ):
-        raise ValueError("policy session metadata must be nonempty")
-    if policy.artifact_sha256 != "none" and (
-        _SHA256.fullmatch(policy.artifact_sha256) is None
-        or policy.artifact_id != f"sha256:{policy.artifact_sha256}"
-    ):
-        raise ValueError("policy artifact digest and ID do not match")
+    if not policy.policy_id:
+        raise ValueError("policy ID must be nonempty")
+    if policy.artifact_digest is not None and _SHA256.fullmatch(policy.artifact_digest) is None:
+        raise ValueError("policy artifact digest is invalid")
     expected_sequences = tuple(range(1, len(session.events) + 1))
     if tuple(event.sequence for event in session.events) != expected_sequences:
         raise ValueError("public event sequence is not contiguous")
@@ -147,7 +111,7 @@ def session_core_data(session: GameSession) -> dict[str, Any]:
     engine_data = canonical_state_data(session.engine_state)["state"]
     policy = session.policy_session
     return {
-        "schema_version": SESSION_SCHEMA_VERSION,
+        "format": SESSION_FORMAT,
         "game_id": str(session.game_id),
         "version": session.version,
         "revision": session.revision,
@@ -155,16 +119,9 @@ def session_core_data(session: GameSession) -> dict[str, Any]:
         "engine_state": engine_data,
         "policy_session": {
             "policy_id": policy.policy_id,
-            "policy_version": policy.policy_version,
-            "artifact_id": policy.artifact_id,
-            "artifact_sha256": policy.artifact_sha256,
-            "observation_schema_version": policy.observation_schema_version,
-            "action_schema_version": policy.action_schema_version,
-            "hidden_state_schema_version": policy.hidden_state_schema_version,
-            "inference_profile": policy.inference_profile,
-            "hidden_state": base64.b64encode(policy.hidden_state).decode("ascii"),
+            "artifact_digest": policy.artifact_digest,
         },
-        "move_secret": base64.b64encode(session.move_secret).decode("ascii"),
+        "move_secret": session.move_secret.hex(),
         "phase": _PHASE_ADAPTER.dump_python(session.phase, mode="json"),
         "policy_turn_claim": (
             None
@@ -186,8 +143,8 @@ def session_from_core_data(
 ) -> GameSession:
     """Reconstruct and validate a local session from normalized storage records."""
 
-    if value.get("schema_version") != SESSION_SCHEMA_VERSION:
-        raise ValueError("unsupported game session schema")
+    if value.get("format") != SESSION_FORMAT:
+        raise ValueError("unsupported game session format")
     policy_value = value["policy_session"]
     claim_value = value["policy_turn_claim"]
     session = GameSession(
@@ -198,16 +155,13 @@ def session_from_core_data(
         engine_state=engine_state_from_data(value["engine_state"]),
         policy_session=PolicySession(
             policy_id=str(policy_value["policy_id"]),
-            policy_version=str(policy_value["policy_version"]),
-            artifact_id=str(policy_value["artifact_id"]),
-            artifact_sha256=str(policy_value.get("artifact_sha256", "none")),
-            observation_schema_version=str(policy_value["observation_schema_version"]),
-            action_schema_version=str(policy_value["action_schema_version"]),
-            hidden_state_schema_version=str(policy_value["hidden_state_schema_version"]),
-            inference_profile=str(policy_value["inference_profile"]),
-            hidden_state=base64.b64decode(policy_value["hidden_state"], validate=True),
+            artifact_digest=(
+                None
+                if policy_value.get("artifact_digest") is None
+                else str(policy_value["artifact_digest"])
+            ),
         ),
-        move_secret=base64.b64decode(value["move_secret"], validate=True),
+        move_secret=bytes.fromhex(value["move_secret"]),
         phase=_PHASE_ADAPTER.validate_python(value["phase"]),
         events=events,
         idempotency_records=idempotency_records,

@@ -25,7 +25,8 @@ from dracula.api.stateless_contracts import (
     StatelessHealthResponse,
 )
 from dracula.api.stateless_http import StatelessRequestBodyLimitMiddleware
-from dracula.api.stateless_service import ReplayCache, StatelessGameplayService
+from dracula.api.stateless_replay import ReplayCache
+from dracula.api.stateless_service import StatelessGameplayService
 
 
 def _json(response: ServiceResponse) -> JSONResponse:

@@ -12,13 +12,6 @@ from typing import Sequence
 from dracula.bridge import COFFIN_POSITION_COUNT
 from dracula.engine_types import empty_adjacent_grid_indices
 
-# The table is a versioned gameplay/search contract, not a general geometric
-# symmetry algorithm.
-DESTINATION_SYMMETRY_SCHEMA_VERSION = (
-    "dracula-early-destination-symmetry-v1"
-)
-
-
 class DestinationSymmetryError(ValueError):
     """The coffin cannot produce a valid destination grouping."""
 
@@ -113,7 +106,6 @@ def destination_symmetry_groups(
 
 
 __all__ = (
-    "DESTINATION_SYMMETRY_SCHEMA_VERSION",
     "DestinationSymmetryError",
     "DestinationSymmetryGroup",
     "destination_symmetry_groups",

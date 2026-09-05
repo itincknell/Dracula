@@ -12,32 +12,23 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from dracula.action_contract import POLICY_DESTINATION_SCOPE
 from dracula.api.policy import (
     PolicyContractError,
     PolicyDescriptor,
     PolicyTurnRequest,
     PolicyTurnResult,
 )
-from dracula.bgc_policy import load_bgc_policy_artifact
+from dracula.bgc_policy import load_policy_artifact
 from dracula.bgc_policy_model import BGCPolicyModel
 from dracula.policy_observation import select_policy_group
-from dracula.randomness import derive_seed
 from dracula.search.information import (
-    INFORMATION_STATE_SCHEMA_VERSION,
     SearchInformationState,
     information_state_fingerprint,
 )
 from dracula.strategic_actions import (
-    derive_strategic_destination_choice_seed,
     select_concrete_action_index,
 )
 
-# The selected artifact's validated paired-destination behavior depends on this
-# exact seed namespace.
-ACTIVE_POLICY_REQUEST_NAMESPACE = "dracula-pi0-standalone-request-v1"
-ACTIVE_POLICY_ACTION_SCHEMA_VERSION = "dracula-action-map-v1"
-ACTIVE_POLICY_STATE_SCHEMA_VERSION = "stateless-v1"
 LOGGER = logging.getLogger("uvicorn.error")
 
 
@@ -67,7 +58,7 @@ class ActivePolicyRuntime:
         """Load the selected artifact through the strict shared verifier."""
 
         artifact_path = Path(path).expanduser().resolve()
-        loaded = load_bgc_policy_artifact(artifact_path)
+        loaded = load_policy_artifact(artifact_path)
         return cls(
             loaded.model,
             artifact_digest=loaded.artifact_digest,
@@ -85,24 +76,14 @@ class ActivePolicyRuntime:
         started = time.perf_counter()
         selected_group = select_policy_group(self.model, information)
         representative = selected_group.representative_action_index
-        # Concrete paired placement uses a separate deterministic stream, so it
-        # cannot alter which strategic group the model selected.
-        request_seed = derive_seed(
-            ACTIVE_POLICY_REQUEST_NAMESPACE,
+        # The final coin depends only on this accepted decision's stable facts.
+        concrete = select_concrete_action_index(
+            selected_group,
             fixture_id,
             information_state_fingerprint(information),
             self.artifact_digest,
-            str(decision_index),
-        )
-        concrete = select_concrete_action_index(
-            selected_group,
-            derive_strategic_destination_choice_seed(
-                request_seed,
-                POLICY_DESTINATION_SCOPE,
-                information,
-                selected_group,
-                0,
-            ),
+            decision_index,
+            representative,
         )
         return ActivePolicyDecision(
             representative_action_index=representative,
@@ -117,14 +98,8 @@ class ActivePolicyExecutor:
     def __init__(self, artifact_path: str | Path) -> None:
         self.policy = ActivePolicyRuntime.from_artifact(artifact_path)
         self._descriptor = PolicyDescriptor(
-            policy_id="standalone-bgc-policy",
-            policy_version="dracula-standalone-bgc-policy-v1",
-            artifact_id=f"sha256:{self.policy.artifact_digest}",
-            artifact_sha256=self.policy.artifact_digest,
-            observation_schema_version=INFORMATION_STATE_SCHEMA_VERSION,
-            action_schema_version=ACTIVE_POLICY_ACTION_SCHEMA_VERSION,
-            hidden_state_schema_version=ACTIVE_POLICY_STATE_SCHEMA_VERSION,
-            inference_profile="representative-argmax-v1",
+            policy_id="pi1",
+            artifact_digest=self.policy.artifact_digest,
         )
 
     @property
@@ -172,11 +147,10 @@ class ActivePolicyExecutor:
             decision.concrete_action_index,
             decision.latency_seconds,
         )
-        return PolicyTurnResult(selected, None)
+        return PolicyTurnResult(selected)
 
 
 __all__ = (
-    "ACTIVE_POLICY_REQUEST_NAMESPACE",
     "ActivePolicyDecision",
     "ActivePolicyExecutor",
     "ActivePolicyRuntime",

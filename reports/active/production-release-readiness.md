@@ -29,7 +29,7 @@ Its deterministic identifiers are:
 | Git HEAD | `81b2504d4cc679e40e36a1fd63160037e6dfbb0d` |
 | Tracked working-tree diff | `1e4f4cde3288818b1a34ba35e3a30d16f912a51fd3512556bd20a132742436ad` |
 | Release source tree | `5a788bf3f9fe447fdf48acf276c226059a8bc45d921a3cce69010fdcdd8ddda3` |
-| Selected `pi1` | `70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c` |
+| Selected `pi1` at this measurement | `70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c` |
 | Local arm64 image | `sha256:41af66013b874447c120c04fa0cdb9ac8fd4e67868567ed23614af23966a0626` |
 | Local image size | 996,549,884 bytes (950.4 MiB) |
 | Lambda build context | `9a60772fa8e8a35167c4d283095460d40857769dfd98e65d87ee3554d4027df7` |
@@ -37,6 +37,12 @@ Its deterministic identifiers are:
 | Frontend build | `e69836fb4a4b0ab42eec4c830ca8d91f3cf7431af2c838de75460da03cd80e1f` |
 | Dependency inputs | `5b783ad8d7667e491294bb8ef74b3f968f44b9ec1cf61d7bff999ff4a05fcd05` |
 | Stages 1–5 evidence | `f911d5cdad0207831eb53beed387f09b98bbb513a195b58c7f1c76ce269d5269` |
+
+These release hashes are historical staging evidence. The selected tensors are
+now packaged in the minimal artifact whose SHA-256 is
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`;
+the image, context, and release-candidate digests require regeneration before
+production cutover.
 
 The local image ID is the exact Lambda container digest available before
 publication. The ECR/OCI registry manifest digest is deliberately `null` in

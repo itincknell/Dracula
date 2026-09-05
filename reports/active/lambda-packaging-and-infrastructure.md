@@ -7,12 +7,18 @@ resources are defined in plain CloudFormation. Local validation is complete.
 No AWS resource, DNS record, or frontend deployment was changed during this
 stage.
 
-The selected model remains local ignored evidence at
+At the time of this measurement, the selected model was loaded from
 `runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt`. The release builder
 verified and embedded only SHA-256
 `70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c`.
 The generated `build/lambda-context/` is ignored and contains no other run,
 database, test, frontend, or historical artifact.
+
+The deterministic-identity simplification later repackaged the identical state
+dictionary as `artifacts/pi1-policy.pt`, SHA-256
+`d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203`.
+The build-context check has been rerun; the container measurements below still
+describe the earlier byte envelope and must be refreshed before deployment.
 
 ## AWS basis checked
 

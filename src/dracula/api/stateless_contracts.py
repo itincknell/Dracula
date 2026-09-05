@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 
 from dracula.api.contracts import (
     CardSlot,
@@ -67,13 +67,6 @@ class RecoveryEnvelope(ContractModel):
         max_length=MAX_ACCEPTED_COMMANDS,
     )
 
-    @field_validator("seed")
-    @classmethod
-    def reject_seed_separator(cls, value: str) -> str:
-        if "\0" in value:
-            raise ValueError("seed cannot contain NUL")
-        return value
-
     @model_validator(mode="after")
     def require_one_leading_role(self) -> RecoveryEnvelope:
         if not isinstance(self.history[0], SelectRoleCommand):
@@ -92,14 +85,6 @@ class StartStatelessGameRequest(ContractModel):
         min_length=1,
         max_length=MAX_GAME_SEED_LENGTH,
     )
-
-    @field_validator("seed")
-    @classmethod
-    def reject_seed_separator(cls, value: str | None) -> str | None:
-        if value is not None and "\0" in value:
-            raise ValueError("seed cannot contain NUL")
-        return value
-
 
 class ApplyStatelessCommandRequest(ContractModel):
     """Current recovery envelope plus exactly one proposed next command."""

@@ -26,13 +26,13 @@ Date: 2026-08-30
 The selected bytes are currently stored locally at:
 
 ```text
-runs/bgc-policy-pi1-001/artifacts/unaccepted-candidate.pt
+runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt
 ```
 
 SHA-256:
 
 ```text
-70c76f2eb64600eab2297640278a6c94d4336ab8e73bf941a6d96237f69f5b5c
+d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203
 ```
 
 The D1 training snapshot contained 806,610 training rows and 89,670 validation
@@ -41,9 +41,8 @@ Validation agreement with the most-visited D1 action was `0.4879` at top one,
 `0.7139` at top two, and `0.8179` at top three. The model has 754,601 trainable
 parameters and performed no illegal action in the retained fixed matchup data.
 
-The historical `unaccepted-candidate.pt` filename predates the user's manual
-production selection. Release packaging preserves the bytes and verifies the
-digest under a production artifact name.
+The deployment artifact contains the selected state dictionary in the minimal
+runtime format. Release packaging preserves and verifies those exact bytes.
 
 ## Remaining implementation phases
 

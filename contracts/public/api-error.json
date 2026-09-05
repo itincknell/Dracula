@@ -1,5 +1,4 @@
 {
-  "schema_version": "dracula-error-v1",
   "code": "stale_version",
   "message": "The game changed after the submitted view.",
   "retryable": true,

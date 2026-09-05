@@ -9,8 +9,6 @@ continuation algorithm.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -80,14 +78,10 @@ class StrategicGroupStatistics:
 class ContinuationDecision:
     """The move selected by one actor-local continuation policy.
 
-    The information fingerprint proves which visible state was evaluated, and
-    the configuration digest identifies the policy used. Outer search checks
-    both before accepting or caching the result. Work counts describe how the
-    continuation reached its decision; they do not affect engine scoring.
+    Work counts describe how the continuation reached its decision; they do not
+    affect engine scoring.
     """
 
-    information_state_fingerprint: str
-    config_digest: str
     selected_group: StrategicActionGroup
     selected_action_index: int
     group_statistics: tuple[StrategicGroupStatistics, ...]
@@ -99,26 +93,15 @@ class ContinuationPolicy(Protocol):
     """Interface for choosing simulated responses inside outer BGC search.
 
     Implementations may use belief completions or one policy inference, but
-    receive only ``SearchInformationState`` for the actor taking the move. The
-    digest separates cached decisions made by different implementations or
-    configurations. ``should_stop`` permits cooperative interruption.
+    receive only ``SearchInformationState`` for the actor taking the move.
+    ``should_stop`` permits cooperative interruption.
     """
-
-    @property
-    def digest(self) -> str: ...
 
     def select(
         self,
         information: SearchInformationState,
         should_stop: Callable[[], bool] | None = None,
     ) -> ContinuationDecision: ...
-
-
-def search_config_digest(value: object) -> str:
-    """Hash a search configuration with stable key order and JSON formatting."""
-
-    encoded = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def normalized_round_return(
@@ -143,5 +126,4 @@ __all__ = (
     "SearchInterrupted",
     "StrategicGroupStatistics",
     "normalized_round_return",
-    "search_config_digest",
 )

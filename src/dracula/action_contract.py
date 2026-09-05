@@ -16,12 +16,6 @@ from dracula.bridge import (
 )
 from dracula.strategic_actions import StrategicActionGroup
 
-# These literal values are part of π1's artifact and deterministic move identity.
-# Renaming their Python constants is safe; changing their values is not.
-REPRESENTATIVE_MASK_SCHEMA_VERSION = "dracula-sam-representative-mask-v1"
-POLICY_DESTINATION_SCOPE = "sam-policy-argmax-result-v1"
-
-
 class PolicyActionContractError(ValueError):
     """A policy mask or output violates its action contract."""
 

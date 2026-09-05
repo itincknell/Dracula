@@ -12,7 +12,7 @@ from dracula.api.policy import PolicyDescriptor, PolicyExecutor
 from dracula.api.production_config import POLICY_ARTIFACT_ENV
 
 LOCAL_OPPONENT_MODE_ENV = "DRACULA_OPPONENT_MODE"
-ACTIVE_OPPONENT_MODE = "bgc-policy"
+ACTIVE_OPPONENT_MODE = "pi1"
 
 
 def resolve_local_controller(

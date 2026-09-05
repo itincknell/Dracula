@@ -10,7 +10,7 @@ React, and the standalone `pi1` feed-forward policy.
 | --- | --- |
 | `src/`, `tests/` | Python engine, policy, service, retained trainer, and regression suites |
 | `frontend/` | React application, selected card assets, and browser tests |
-| `docs/`, `contracts/` | Active design contracts and versioned public API fixtures |
+| `docs/`, `contracts/` | Active design contracts and public API fixtures |
 | `configs/`, `tools/` | Selected training input and release utilities |
 | `queries/` | Read-only local gameplay reports |
 | `reports/` | Active evidence, historical experiment indexes, and maintenance handoffs |

@@ -19,8 +19,8 @@ from typing import Any
 import torch
 
 from dracula.bgc_policy import (
-    load_bgc_policy_artifact,
-    save_bgc_policy_artifact,
+    load_policy_artifact,
+    save_policy_artifact,
 )
 from dracula.bgc_policy_checkpoints import (
     atomic_bytes as _atomic_bytes,
@@ -61,10 +61,8 @@ from dracula.bgc_policy_training_contracts import (
     EPSILON,
     EvaluationMetrics,
     LEARNING_RATE,
-    ModelSection,
     OptimizationSection,
     RunSection,
-    SUMMARY_FORMAT_VERSION,
     TrainingResult,
     WEIGHT_DECAY,
 )
@@ -73,9 +71,9 @@ from dracula.bgc_policy_training_contracts import (
 def load_bgc_card_policy_dataset(snapshot_path: str | Path):
     """Load the sealed 659-bit corpus used by the selected standalone policy."""
 
-    from dracula.bgc_policy_migration import load_migrated_policy_dataset
+    from dracula.bgc_policy_dataset import load_policy_dataset
 
-    return load_migrated_policy_dataset(snapshot_path)
+    return load_policy_dataset(snapshot_path)
 
 
 def _training_device(name: str) -> torch.device:
@@ -152,11 +150,8 @@ def _validate_training_request(
 def _new_model(config: BGCPolicyTrainingConfig, device: torch.device) -> BGCPolicyModel:
     """Construct the configured policy and verify its locked architecture size."""
 
-    model = BGCPolicyModel(
-        run_root_seed=config.run.root_seed,
-        model_id=config.model.model_id,
-        initialization_ordinal=config.model.initialization_ordinal,
-    ).to(device)
+    model = BGCPolicyModel(config.run.seed)
+    model = model.to(device)
     if sum(parameter.numel() for parameter in model.parameters()) != PARAMETER_COUNT:
         raise BGCPolicyTrainingError("policy model parameter count differs")
     return model
@@ -169,14 +164,10 @@ def _export_selected_candidate(
     resolved: dict[str, object],
     bundle: Any,
     best_path: Path,
-) -> tuple[Path, Any, EvaluationMetrics]:
+) -> tuple[Path, EvaluationMetrics]:
     """Restore the best checkpoint, export it, and verify exact CPU inference."""
 
-    selected_model = BGCPolicyModel(
-        run_root_seed=config.run.root_seed,
-        model_id=config.model.model_id,
-        initialization_ordinal=config.model.initialization_ordinal,
-    )
+    selected_model = BGCPolicyModel()
     selected_optimizer = _optimizer(selected_model)
     _load_checkpoint(
         best_path,
@@ -185,21 +176,9 @@ def _export_selected_candidate(
         model=selected_model,
         optimizer=selected_optimizer,
     )
-    artifact_path = output / "artifacts" / "unaccepted-candidate.pt"
-    save_bgc_policy_artifact(
-        artifact_path,
-        selected_model,
-        source_revision=(
-            resolved["source"]["training"]["revision"]  # type: ignore[index]
-        ),
-        source_tree_digest=(
-            resolved["source"]["training"]["tree_digest"]  # type: ignore[index]
-        ),
-        training_configuration=resolved,
-        corpus_snapshot_digest=bundle.snapshot.snapshot_digest,
-        dataset_digest=bundle.dataset_digest,
-    )
-    loaded = load_bgc_policy_artifact(artifact_path)
+    artifact_path = output / "artifacts" / "policy.pt"
+    save_policy_artifact(artifact_path, selected_model)
+    loaded = load_policy_artifact(artifact_path)
     probe_indexes = torch.arange(min(8, bundle.validation.example_count))
     probe, _, _, _, _ = bundle.validation.decoded_batch(
         probe_indexes, device=torch.device("cpu")
@@ -224,7 +203,7 @@ def _export_selected_candidate(
     second.pop("inference_latency_seconds")
     if first != second:
         raise BGCPolicyTrainingError("deterministic validation metrics differ")
-    return artifact_path, loaded, selected_validation
+    return artifact_path, selected_validation
 
 
 def _write_training_summary(
@@ -234,7 +213,6 @@ def _write_training_summary(
     bundle: Any,
     paths: TrainingPaths,
     artifact_path: Path,
-    loaded_artifact: Any,
     selected_validation: EvaluationMetrics,
     completed_epochs: int,
     best_epoch: int,
@@ -246,8 +224,7 @@ def _write_training_summary(
     """Seal machine-readable and concise human-readable run summaries."""
 
     summary = {
-        "format_version": SUMMARY_FORMAT_VERSION,
-        "resolved_config_digest": resolved["resolved_config_digest"],
+        "configuration": resolved,
         "snapshot_digest": bundle.snapshot.snapshot_digest,
         "dataset_digest": bundle.dataset_digest,
         "completed_epochs": completed_epochs,
@@ -278,8 +255,6 @@ def _write_training_summary(
             "unaccepted_candidate": {
                 "path": str(artifact_path),
                 "digest": _file_digest(artifact_path),
-                "state_dict_digest": loaded_artifact.metadata.state_dict_digest,
-                "candidate_status": loaded_artifact.metadata.candidate_status,
             },
         },
     }
@@ -303,7 +278,7 @@ def train_bgc_policy(
     interrupt_after_batches: int | None = None,
     smoke_epochs: int | None = None,
 ) -> TrainingResult:
-    """Coordinate one artifact-bound visit-distillation training run."""
+    """Coordinate one visit-distillation training run."""
 
     _validate_training_request(smoke_epochs, interrupt_after_batches)
     bundle = load_bgc_card_policy_dataset(config.snapshot_path)
@@ -324,14 +299,14 @@ def train_bgc_policy(
         bundle=bundle,
         model=model,
         optimizer=optimizer,
-        root_seed=config.run.root_seed,
+        seed=config.run.seed,
         device=device,
         resume=resume,
         interrupt_after_batches=interrupt_after_batches,
         smoke_epochs=smoke_epochs,
     )
     state = optimization.state
-    artifact_path, loaded_artifact, selected_validation = (
+    artifact_path, selected_validation = (
         _export_selected_candidate(
             config=config,
             output=output,
@@ -346,7 +321,6 @@ def train_bgc_policy(
         bundle=bundle,
         paths=paths,
         artifact_path=artifact_path,
-        loaded_artifact=loaded_artifact,
         selected_validation=selected_validation,
         completed_epochs=state.completed_epochs,
         best_epoch=state.best_epoch,
@@ -376,11 +350,7 @@ def validate_bgc_policy_run(output_path: str | Path) -> EvaluationMetrics:
     resolved = _resolved_configuration(config, bundle, smoke_epochs=smoke_epochs)
     if _load_json(output / "resolved-config.json") != resolved:
         raise BGCPolicyTrainingError("run source or resolved configuration differs")
-    model = BGCPolicyModel(
-        run_root_seed=config.run.root_seed,
-        model_id=config.model.model_id,
-        initialization_ordinal=config.model.initialization_ordinal,
-    )
+    model = BGCPolicyModel()
     optimizer = _optimizer(model)
     _load_checkpoint(
         output / "checkpoints" / "best-validation-candidate.pt",
@@ -398,8 +368,8 @@ def export_bgc_policy_run(
     """Verify and optionally copy an unaccepted candidate artifact atomically."""
 
     output = Path(output_path).expanduser().resolve()
-    source = output / "artifacts" / "unaccepted-candidate.pt"
-    loaded = load_bgc_policy_artifact(source)
+    source = output / "artifacts" / "policy.pt"
+    loaded = load_policy_artifact(source)
     if destination is None:
         return source
     target = Path(destination).expanduser().resolve()
@@ -410,8 +380,8 @@ def export_bgc_policy_run(
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
-    verified = load_bgc_policy_artifact(target)
-    if verified.metadata.state_dict_digest != loaded.metadata.state_dict_digest:
+    verified = load_policy_artifact(target)
+    if verified.artifact_digest != loaded.artifact_digest:
         raise BGCPolicyTrainingError("copied candidate artifact digest differs")
     return target
 

@@ -1,16 +1,12 @@
-format_version = "dracula-bgc-policy-training-config-v1"
+format = "policy-training-v1"
 
 [run]
 run_id = "bgc-policy-pi1-001"
-root_seed = "bgc-card-policy-pi1-root-v1"
+seed = 2303548242535798614
 output_directory = "runs/bgc-policy-pi1-001"
 
 [dataset]
 snapshot_path = "runs/bgc-policy-d1-card-set-001"
-
-[model]
-model_id = "bgc-card-policy-pi1"
-initialization_ordinal = 0
 
 [optimization]
 device = "cpu"
