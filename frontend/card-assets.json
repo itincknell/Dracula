@@ -50,7 +50,5 @@
   "10S": "card_spades_10.png",
   "JS": "card_spades_J.png",
   "QS": "card_spades_Q.png",
-  "KS": "card_spades_K.png",
-  "V1": "card_joker_black.png",
-  "V2": "card_joker_red.png"
+  "KS": "card_spades_K.png"
 }

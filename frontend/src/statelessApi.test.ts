@@ -5,7 +5,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import type { StatelessGameResponse } from "./statelessContracts";
+import {
+  assertStatelessGameResponse,
+  type StatelessGameResponse,
+} from "./statelessContracts";
 import { createStatelessApiClient, resolveStatelessApiOrigin } from "./statelessApi";
 
 const response = (): StatelessGameResponse => ({
@@ -41,13 +44,6 @@ describe("stateless production API client", () => {
   it("uses only the stateless gameplay and narration endpoints", async () => {
     const game = response();
     const replies: Array<[number, unknown]> = [
-      [200, {
-        status: "ok",
-        gameplay_mode: "stateless",
-        opponent_configured: true,
-        narration_enabled: true,
-        narration_configured: true,
-      }],
       [201, game],
       [200, game],
       [200, game],
@@ -64,7 +60,6 @@ describe("stateless production API client", () => {
       });
     });
     const client = createStatelessApiClient("https://api.example.test", request);
-    await client.health();
     await client.startGame({ human_role: "queen" });
     await client.applyCommand({
       envelope: game.envelope,
@@ -74,17 +69,16 @@ describe("stateless production API client", () => {
     await client.narrate({ envelope: game.envelope, cue_type: "opening" });
 
     expect(request.mock.calls.map(([url]) => url)).toEqual([
-      "https://api.example.test/health",
       "https://api.example.test/games",
       "https://api.example.test/games/command",
       "https://api.example.test/games/resume",
       "https://api.example.test/narration",
     ]);
-    expect(request.mock.calls.slice(1).every(([, init]) => init?.cache === "no-store")).toBe(true);
+    expect(request.mock.calls.every(([, init]) => init?.cache === "no-store")).toBe(true);
   });
 
-  it("rejects stateful and malformed success payloads", async () => {
-    const request = vi.fn(async () => new Response(JSON.stringify({ game_id: "stateful" }), {
+  it("rejects malformed success payloads", async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({ unexpected: true }), {
       status: 201,
       headers: { "Content-Type": "application/json" },
     }));
@@ -92,9 +86,17 @@ describe("stateless production API client", () => {
       .rejects.toBeInstanceOf(TypeError);
   });
 
+  it("rejects an unsupported phase in a server response", () => {
+    const payload = response();
+    expect(() => assertStatelessGameResponse({
+      ...payload,
+      game: { ...payload.game, phase: { kind: "waiting" } },
+    })).toThrow("game phase kind is unsupported");
+  });
+
   it("reports an empty interrupted response without exposing a JSON parser error", async () => {
     const request = vi.fn(async () => new Response(null, { status: 502 }));
-    await expect(createStatelessApiClient("/api", request).health())
+    await expect(createStatelessApiClient("/api", request).startGame({ human_role: "queen" }))
       .rejects.toThrow("The game server returned no response. Please retry.");
   });
 });

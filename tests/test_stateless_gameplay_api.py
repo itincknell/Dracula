@@ -11,13 +11,13 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from dracula.api.app import create_app
-from dracula.api.policy import PolicyTurnResult
-from dracula.api.stateless_contracts import RecoveryEnvelope
-from dracula.api.stateless_replay import canonical_envelope_digest
-from dracula.engine import EnginePlayer, EngineStatus, initial_dealer
-from dracula.search import SearchInformationState
+from dracula.api.development import create_app
+from dracula.policy.contracts import PolicyTurnResult
+from dracula.api.stateless.contracts import RecoveryEnvelope, StatelessHumanGameView
+from dracula.game.engine import EnginePlayer, EngineStatus, initial_dealer
+from dracula.decision.information import SearchInformationState
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore:Using `httpx` with `starlette.testclient` is deprecated"
@@ -55,7 +55,6 @@ def _app(
     cache_entries: int = 256,
 ) -> Any:
     return create_app(
-        gameplay_mode="stateless",
         replay_cache_entries=cache_entries,
         policy_executor=policy or FirstLegalStatelessPolicy(),
         narration_enabled=False,
@@ -117,7 +116,7 @@ def test_complete_games_reconstruct_on_cache_miss_at_every_lifecycle_state(
         response = _start(client, role=human_role, seed=seed)
         scoring_rounds: list[int] = []
         while response["game"]["phase"]["kind"] != "game_complete":
-            application.state.replay_cache.clear()
+            application.state.stateless_gameplay_service.cache.clear()
             resumed = client.post(
                 "/games/resume",
                 json={"envelope": response["envelope"]},
@@ -155,7 +154,7 @@ def test_identical_request_cache_hit_cache_miss_and_new_process_match() -> None:
         repeated = client.post("/games/command", json=body)
         assert first.status_code == repeated.status_code == 200
         assert first.json() == repeated.json()
-        first_app.state.replay_cache.clear()
+        first_app.state.stateless_gameplay_service.cache.clear()
         cold = client.post("/games/command", json=body)
         assert cold.status_code == 200
         assert cold.json() == first.json()
@@ -165,6 +164,8 @@ def test_identical_request_cache_hit_cache_miss_and_new_process_match() -> None:
         restarted = client.post("/games/command", json=body)
     assert restarted.status_code == 200
     assert restarted.json() == first.json()
+    # The visible role and seed directly identify reproducible paired choices.
+    assert first_policy.requests[0].game_key == "queen:stateless-idempotency"
 
 
 def test_cache_is_canonical_bounded_and_ordinarily_evicts() -> None:
@@ -173,15 +174,20 @@ def test_cache_is_canonical_bounded_and_ordinarily_evicts() -> None:
         first = _start(client, role="queen", seed="cache-one")
         second = _start(client, role="king", seed="cache-two")
 
-    stats = application.state.replay_cache.statistics
-    assert stats.entries == 1
-    assert stats.evictions == 1
     first_envelope = RecoveryEnvelope.model_validate(first["envelope"])
     second_envelope = RecoveryEnvelope.model_validate(second["envelope"])
-    assert canonical_envelope_digest(first_envelope) != canonical_envelope_digest(
-        second_envelope
-    )
-    assert len(canonical_envelope_digest(first_envelope)) == 64
+    # Capacity one leaves the newest envelope present and evicts the older one.
+    cache = application.state.stateless_gameplay_service.cache
+    assert cache.get(first_envelope) is None
+    assert cache.get(second_envelope) is not None
+
+
+def test_stateless_view_rejects_an_unknown_phase() -> None:
+    with TestClient(_app()) as client:
+        game = _start(client, role="queen", seed="stateless-phase")["game"]
+    game["phase"] = {"kind": "waiting"}
+    with pytest.raises(ValidationError):
+        StatelessHumanGameView.model_validate(game)
 
 
 def test_history_order_duplicates_and_illegal_divergence_are_rejected() -> None:
@@ -326,19 +332,33 @@ def test_invalid_policy_output_commits_no_command_or_cache_entry() -> None:
         )
         if response.status_code == 201:
             body = _next_request(response.json())
-            before_entries = application.state.replay_cache.statistics.entries
+            failed_envelope = RecoveryEnvelope.model_validate(
+                {
+                    "seed": body["envelope"]["seed"],
+                    "history": body["envelope"]["history"] + [body["command"]],
+                }
+            )
             failed = client.post("/games/command", json=body)
             assert failed.status_code == 503
             assert failed.json()["code"] == "dependency_unavailable"
-            assert application.state.replay_cache.statistics.entries == before_entries
+            cache = application.state.stateless_gameplay_service.cache
+            assert cache.get(failed_envelope) is None
         else:
             assert response.status_code == 503
-            assert application.state.replay_cache.statistics.entries == 0
+            failed_envelope = RecoveryEnvelope.model_validate(
+                {
+                    "seed": "policy-failure",
+                    "history": [
+                        {"type": "select_role", "human_role": "queen"},
+                    ],
+                }
+            )
+            cache = application.state.stateless_gameplay_service.cache
+            assert cache.get(failed_envelope) is None
 
 
-def test_stateless_mode_is_explicit_and_has_no_repository_or_stateful_routes() -> None:
+def test_development_app_exposes_only_stateless_routes() -> None:
     application = _app()
-    assert application.state.gameplay_mode == "stateless"
     assert not hasattr(application.state, "game_repository")
     with TestClient(application) as client:
         health = client.get("/health")
@@ -349,50 +369,23 @@ def test_stateless_mode_is_explicit_and_has_no_repository_or_stateful_routes() -
         )
     assert health.json() == {
         "status": "ok",
-        "gameplay_mode": "stateless",
         "opponent_configured": True,
         "narration_enabled": False,
-        "narration_configured": False,
     }
     assert missing_local_route.status_code == 404
     assert malformed.status_code == 422
     assert malformed.json()["code"] == "validation_error"
 
 
-def test_stateless_request_body_is_bounded_before_json_validation() -> None:
-    with TestClient(_app()) as client:
-        response = client.post(
-            "/games",
-            content=json.dumps(
-                {"human_role": "queen", "seed": "x", "padding": "x" * 70_000}
-            ),
-            headers={"content-type": "application/json"},
-        )
-    assert response.status_code == 413
-    assert response.json() == {
-        "code": "request_too_large",
-        "message": "request body exceeds the stateless API limit",
-        "retryable": False,
-    }
-
-
-def test_stateless_configuration_rejects_repository_and_bad_cache_bounds() -> None:
-    from dracula.api.repository import InMemoryGameRepository
-
-    with pytest.raises(ValueError, match="cannot be configured with a repository"):
-        create_app(
-            gameplay_mode="stateless",
-            repository=InMemoryGameRepository(),
-        )
+def test_stateless_configuration_rejects_bad_cache_bounds() -> None:
     with pytest.raises(ValueError, match="non-negative"):
-        create_app(gameplay_mode="stateless", replay_cache_entries=-1)
-    with pytest.raises(ValueError, match="local or stateless"):
-        create_app(gameplay_mode="persistent-maybe")
+        create_app(replay_cache_entries=-1)
 
 
 def test_production_entrypoint_cannot_fall_back_to_local_persistence() -> None:
     from dracula.api.production import app
 
-    assert app.state.gameplay_mode == "stateless"
-    assert hasattr(app.state, "stateless_gameplay_service")
-    assert not hasattr(app.state, "game_repository")
+    client = TestClient(app)
+    assert client.get("/Dracula/api/health").json()["status"] == "ok"
+    # The old session/event routes are not revived by mounting the web app.
+    assert client.get("/Dracula/api/sessions").status_code == 404

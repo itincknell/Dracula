@@ -1,7 +1,7 @@
-# Standalone BGC-128 policy model
+# Standalone policy model
 
 The selected release model is a standalone policy classifier trained from
-BGC-128 lineage normalized root-search visit distributions. It receives one player-visible
+normalized 128-simulation information-set UCT visit distributions. It receives one player-visible
 card-set observation and returns one raw score for each current-card candidate
 and non-center destination pair. It does not predict action values, returns, scores, or any
 other search diagnostic.
@@ -263,9 +263,9 @@ training and user selection are summarized in
 The deployment artifact contains one format marker and the model state
 dictionary. Its complete file SHA-256 identifies the selected release bytes.
 Loading rejects missing, extra, incorrectly shaped, incorrectly typed, or
-non-finite parameters. Training provenance remains in the training report and
-is not duplicated inside the runtime artifact.
+non-finite parameters. Training metadata is not duplicated inside the runtime
+artifact.
 
 The artifact contains no value parameters, critic state, hidden state, search
-state, or fair-coin outcome. Previous policy/value, response-ranker, and hybrid
-artifacts remain historical evidence and are not accepted by this loader.
+state, or fair-coin outcome. The loader accepts only this model's compact
+runtime format.

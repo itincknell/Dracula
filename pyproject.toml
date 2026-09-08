@@ -15,9 +15,13 @@ dependencies = [
 ]
 
 [project.scripts]
-dracula-bgc-policy-training = "dracula.bgc_policy_training:main"
+dracula-policy-training = "dracula.policy.training.cli:main"
 
 [project.optional-dependencies]
+bedrock = [
+    "boto3==1.43.83",
+    "botocore[crt]>=1.43.83,<1.44",
+]
 test = [
     "httpx>=0.28,<1",
     "pytest>=8.3,<10",

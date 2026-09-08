@@ -1,9 +1,8 @@
 # Dracula design
 
-These documents are the active first-pass contracts. The
-[design tracker](design-tracker.md) records current work and priority;
-[reports](../reports/README.md) retain operational evidence and historical
-experiments.
+These documents describe the game's rules, implementation contracts, and
+operating commands. Internal review notes and release reports are local files,
+not part of the published repository.
 
 | Document | Purpose |
 | --- | --- |
@@ -11,7 +10,7 @@ experiments.
 | [Rules](rules.md) | Authoritative game rules and examples |
 | [Architecture](architecture.md) | Stateless web application, `pi1`, replay, API, and narration boundaries |
 | [Stateless gameplay API](stateless-api.md) | Production envelope, replay, cache, routes, errors, and privacy |
-| [Deployment](deployment.md) | GitHub Pages, Cloudflare, API Gateway, Lambda, Bedrock, and release phases |
+| [Deployment](deployment.md) | Combined FastAPI frontend/API, Cloudflare, Lambda, Bedrock, and release phases |
 | [Engine–opponent contract](engine-model-contract.md) | Deterministic engine, information-state projection, and action mapping |
 | [Symmetry and move selection](search.md) | Authoritative symmetry table and deterministic standalone action selection |
 | [Neural model](neural-model.md) | Selected standalone 754,601-parameter `pi1` architecture and action semantics |
@@ -23,5 +22,4 @@ experiments.
 
 [`NORTHSTARS`](../NORTHSTARS) governs scope and style. The deterministic game
 rules, engine contract, symmetry contract, model contract, and resolved runtime
-configuration are authoritative within their stated boundaries. Historical
-reports are evidence, not active alternatives.
+configuration are authoritative within their stated boundaries.

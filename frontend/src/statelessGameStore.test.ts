@@ -12,7 +12,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GameStart } from "./App";
-import type { ResumablePhase } from "./contractPrimitives";
+import type { ServerGamePhase } from "./contractPrimitives";
 import type {
   NarrationResponse,
   RecoveryEnvelope,
@@ -21,7 +21,6 @@ import type {
 import type { StatelessApiClient } from "./statelessApi";
 import { StatelessApiError } from "./statelessApi";
 import { StatelessGameController } from "./statelessGameStore";
-import { projectStatelessResponse } from "./statelessProjection";
 import { RECOVERY_STORAGE_KEY, type BrowserStorage } from "./statelessRecovery";
 
 afterEach(cleanup);
@@ -40,7 +39,7 @@ function envelope(history: RecoveryEnvelope["history"] = [
 }
 
 function game(
-  phase: ResumablePhase = { kind: "human_turn" },
+  phase: ServerGamePhase = { kind: "human_turn" },
   changes: Partial<StatelessGameResponse["game"]> = {},
   recovery = envelope(),
 ): StatelessGameResponse {
@@ -69,14 +68,12 @@ function game(
 
 function api(overrides: Partial<StatelessApiClient> = {}): StatelessApiClient {
   return {
-    health: vi.fn(),
     startGame: vi.fn(),
     applyCommand: vi.fn(),
     resumeGame: vi.fn(),
-    narrate: vi.fn(async ({ cue_type }) => ({
-      status: 200 as const,
-      data: { cue_type, status: "unavailable", text: null } as NarrationResponse,
-    })),
+    narrate: vi.fn(async ({ cue_type }) => (
+      { cue_type, status: "unavailable", text: null } as NarrationResponse
+    )),
     ...overrides,
   } as StatelessApiClient;
 }
@@ -102,7 +99,7 @@ describe("stateless browser game controller", () => {
       releaseDelay = resolve;
     }));
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: opened })),
+      startGame: vi.fn(async () => opened),
     }), new MemoryStorage(), delay);
     const onGameCreated = vi.fn();
     render(createElement(GameStart, { controller, onGameCreated }));
@@ -112,7 +109,7 @@ describe("stateless browser game controller", () => {
     expect(onGameCreated).toHaveBeenCalledTimes(1);
     expect(controller.getSnapshot().view).toMatchObject({
       turn_number: 0,
-      phase: { kind: "opponent_turn", status: "pending" },
+      phase: { kind: "opponent_turn" },
     });
 
     releaseDelay?.();
@@ -139,7 +136,7 @@ describe("stateless browser game controller", () => {
       releaseDelay = resolve;
     }));
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: opened })),
+      startGame: vi.fn(async () => opened),
     }), new MemoryStorage(), delay);
 
     const creating = controller.createGame("queen");
@@ -150,7 +147,7 @@ describe("stateless browser game controller", () => {
         active_player: "king",
         coffin: [null, null, null, null, "4C", null, null, null, null],
         current_round_moves: [],
-        phase: { kind: "opponent_turn", status: "pending" },
+        phase: { kind: "opponent_turn" },
       },
       presentation: { pending: "opponent_turn" },
     });
@@ -164,7 +161,7 @@ describe("stateless browser game controller", () => {
 
   it("applies the same Dracula pause to later-round opening placements", async () => {
     const scoring = game(
-      { kind: "scoring", round_number: 1, next_step_index: 0, pending_narration_id: null },
+      { kind: "scoring", round_number: 1 },
       { status: "round_complete", active_player: null, legal_moves: [] },
     );
     const nextEnvelope = envelope([
@@ -192,8 +189,8 @@ describe("stateless browser game controller", () => {
       releaseDelay = resolve;
     }));
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: scoring })),
-      applyCommand: vi.fn(async () => ({ status: 200 as const, data: opened })),
+      startGame: vi.fn(async () => scoring),
+      applyCommand: vi.fn(async () => opened),
     }), new MemoryStorage(), delay);
     await controller.createGame("queen");
 
@@ -206,7 +203,7 @@ describe("stateless browser game controller", () => {
         active_player: "king",
         coffin: [null, null, null, null, "6H", null, null, null, null],
         current_round_moves: [],
-        phase: { kind: "opponent_turn", status: "pending" },
+        phase: { kind: "opponent_turn" },
       },
       presentation: { pending: "opponent_turn" },
     });
@@ -222,7 +219,7 @@ describe("stateless browser game controller", () => {
   it("stores only the accepted recovery envelope and replays it after a cold reload", async () => {
     const storage = new MemoryStorage();
     const started = game();
-    const startGame = vi.fn(async () => ({ status: 201 as const, data: started }));
+    const startGame = vi.fn(async () => started);
     const first = new StatelessGameController(api({ startGame }), storage);
     expect(await first.createGame("queen")).not.toBeNull();
 
@@ -231,7 +228,7 @@ describe("stateless browser game controller", () => {
     expect(Object.keys(stored).sort()).toEqual(["history", "seed"]);
     expect(JSON.stringify(stored)).not.toMatch(/logit|tensor|engine|search|stock|hand/i);
 
-    const resumeGame = vi.fn(async () => ({ status: 200 as const, data: started }));
+    const resumeGame = vi.fn(async () => started);
     const cold = new StatelessGameController(api({ resumeGame }), storage);
     const restored = await cold.loadGame();
     expect(restored).toEqual(first.getSnapshot().view);
@@ -254,7 +251,7 @@ describe("stateless browser game controller", () => {
     const saved = envelope();
     storage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(saved));
     const resumeGame = vi.fn(async () => {
-      throw new StatelessApiError(422, {
+      throw new StatelessApiError({
         code: "invalid_history",
         message: "history contains an invalid engine transition",
         retryable: false,
@@ -284,10 +281,10 @@ describe("stateless browser game controller", () => {
       },
       acceptedEnvelope,
     );
-    const applyCommand = vi.fn(async () => ({ status: 200 as const, data: accepted }));
+    const applyCommand = vi.fn(async () => accepted);
     const delay = vi.fn(async () => undefined);
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: started })),
+      startGame: vi.fn(async () => started),
       applyCommand,
     }), storage, delay);
     await controller.createGame("queen");
@@ -317,8 +314,8 @@ describe("stateless browser game controller", () => {
       releaseDelay = resolve;
     }));
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: started })),
-      applyCommand: vi.fn(async () => ({ status: 200 as const, data: accepted })),
+      startGame: vi.fn(async () => started),
+      applyCommand: vi.fn(async () => accepted),
     }), storage, delay);
     await controller.createGame("queen");
     controller.selectCard(0);
@@ -331,7 +328,7 @@ describe("stateless browser game controller", () => {
       active_player: "king",
       coffin: [null, "2C", null, null, "4C", null, null, null, null],
       human_hand: [null, "10D", "QH", "KS"],
-      phase: { kind: "opponent_turn", status: "pending" },
+      phase: { kind: "opponent_turn" },
       legal_moves: [],
       current_round_moves: [{
         player: "queen",
@@ -354,7 +351,7 @@ describe("stateless browser game controller", () => {
       rejectCommand = reject;
     });
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: started })),
+      startGame: vi.fn(async () => started),
       applyCommand: vi.fn(() => command),
     }), new MemoryStorage(), vi.fn(async () => undefined));
     await controller.createGame("queen");
@@ -366,7 +363,7 @@ describe("stateless browser game controller", () => {
 
     rejectCommand?.(new Error("placement failed"));
     await expect(play).resolves.toBe(false);
-    expect(controller.getSnapshot().view).toEqual(projectStatelessResponse(started));
+    expect(controller.getSnapshot().view).toEqual(started.game);
     expect(controller.getSnapshot().presentation.error?.message).toBe("placement failed");
   });
 
@@ -378,7 +375,7 @@ describe("stateless browser game controller", () => {
       { type: "place", hand_slot: 0, position: 1 },
     ]);
     const round = game(
-      { kind: "scoring", round_number: 1, next_step_index: 0, pending_narration_id: null },
+      { kind: "scoring", round_number: 1 },
       { status: "round_complete", active_player: null, legal_moves: [] },
       roundEnvelope,
     );
@@ -391,15 +388,18 @@ describe("stateless browser game controller", () => {
       { round_number: 2 },
       nextEnvelope,
     );
-    const narrate = vi.fn(async ({ cue_type }) => ({
-      status: 200 as const,
-      data: { cue_type, status: "ready", text: cue_type === "opening" ? "Opening" : "Round one" } as NarrationResponse,
-    }));
+    const narrate = vi.fn(async ({ cue_type }) => (
+      {
+        cue_type,
+        status: "ready",
+        text: cue_type === "opening" ? "Opening" : "Round one",
+      } as NarrationResponse
+    ));
     const applyCommand = vi.fn()
-      .mockResolvedValueOnce({ status: 200 as const, data: round })
-      .mockResolvedValueOnce({ status: 200 as const, data: nextRound });
+      .mockResolvedValueOnce(round)
+      .mockResolvedValueOnce(nextRound);
     const controller = new StatelessGameController(api({
-      startGame: vi.fn(async () => ({ status: 201 as const, data: started })),
+      startGame: vi.fn(async () => started),
       applyCommand,
       narrate,
     }), storage, async () => undefined);
@@ -425,7 +425,7 @@ describe("stateless browser game controller", () => {
       { type: "place", hand_slot: 0, position: 1 },
     ]);
     const scoring = game(
-      { kind: "scoring", round_number: 6, next_step_index: 0, pending_narration_id: null },
+      { kind: "scoring", round_number: 6 },
       { status: "round_complete", round_number: 6, active_player: null, legal_moves: [] },
       scoringEnvelope,
     );
@@ -436,13 +436,12 @@ describe("stateless browser game controller", () => {
       completeEnvelope,
     );
     storage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(scoringEnvelope));
-    const narrate = vi.fn(async ({ cue_type }) => ({
-      status: 200 as const,
-      data: { cue_type, status: "unavailable", text: null } as NarrationResponse,
-    }));
+    const narrate = vi.fn(async ({ cue_type }) => (
+      { cue_type, status: "unavailable", text: null } as NarrationResponse
+    ));
     const controller = new StatelessGameController(api({
-      resumeGame: vi.fn(async () => ({ status: 200 as const, data: scoring })),
-      applyCommand: vi.fn(async () => ({ status: 200 as const, data: complete })),
+      resumeGame: vi.fn(async () => scoring),
+      applyCommand: vi.fn(async () => complete),
       narrate,
     }), storage);
     await controller.loadGame();

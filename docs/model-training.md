@@ -1,84 +1,56 @@
 # Model training
 
-## Completed lineage
+Training is an offline process and is not part of the deployed application.
+The maintained trainer consumes sealed information-set UCT rows and produces a
+standalone policy artifact for explicit review and selection.
 
-Model training is complete for the release controller:
+## Target and loss
 
-```text
-balanced BGC-128 visit corpus D0
-    -> compact card-set migration
-    -> standalone policy pi0
-    -> pi0 continuation corpus D1
-    -> standalone policy pi1
-    -> user selection for production
-```
+Each row contains the acting player's 659-bit observation, concrete legal
+actions, strategic destination groups, and the root visit counts from 128 UCT
+simulations. Group visits map to their designated representative actions and
+are normalized into a probability distribution.
 
-The deployment build does not train, fine-tune, search, or promote models.
-Training code and sealed local runs remain reproducibility evidence.
+Training uses distributional cross-entropy over representative legal actions.
+Illegal actions and non-representative members of symmetric groups are masked
+before log-softmax. There is no illegal-action penalty, selected-action one-hot
+loss, value output, return target, recurrence, critic, or PPO objective.
 
-## Selected pi1 run
+Complete trajectory roots remain together when data is divided into training
+and validation sets. The trainer verifies external rows and manifests before
+constructing batches, preserves natural placement frequencies, and supports
+deterministic CPU checkpoint/resume.
 
-`pi1` was trained from the immutable D1 compact-card snapshot:
+## Model and optimizer
 
-| Item | Value |
-| --- | --- |
-| Training rows | 806,610 |
-| Validation rows | 89,670 |
-| Parameters | 754,601 |
-| Objective | Representative-masked distributional cross-entropy |
-| Best epoch | 12 |
-| Best validation cross-entropy | 1.99895417 |
-| Validation top-1 / top-2 / top-3 | 0.4879 / 0.7139 / 0.8179 |
-| Deployment artifact SHA-256 | `d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203` |
+The trainer uses the 754,601-parameter architecture described in
+[neural model](neural-model.md). The active defaults are:
 
-The target was the normalized 128-simulation strategic-group visit
-distribution mapped to representative actions. Illegal and non-proxy logits
-were masked before log-softmax. There was no illegal-action penalty, one-hot
-selected-action loss, value output, return target, PPO term, recurrence, or
-critic.
+- AdamW with learning rate `3e-4`, betas `0.9/0.999`, epsilon `1e-8`, and
+  weight decay `1e-4`.
+- Batch size 256.
+- Global gradient clipping at 1.0.
+- 8–50 epochs, validation patience 5, and minimum improvement `1e-4`.
+- Lowest validation cross-entropy for checkpoint selection.
 
-The exact architecture and serving semantics are in
-[neural model](neural-model.md).
+Checkpoints and exported artifacts are written atomically. Training reports
+include cross-entropy, KL divergence, entropy, top-action agreement, placement
+and role splits, gradient norms, throughput, memory, and inference latency.
 
-## Evaluation evidence
+## Selected artifact
 
-Local fixed evidence includes:
-
-- `pi1` versus standalone `pi0`: 18 wins in 24 games and mean score
-  differential `+19.75`.
-- `pi1` versus BGC-128 with `pi0` continuations: 13 wins in 24 games and mean
-  score differential `-1.125`.
-- `pi1` versus BGC-128 with `pi1` continuations: 9 wins in 24 games and mean
-  score differential `-19.25`.
-- `pi1` self-play over 54 games: Queen 28 wins, King 26 wins, with Queen mean
-  score differential `+1.96` and an interval spanning zero.
-- No illegal action in the fixed matchup evidence.
-
-These measurements are retained as evidence, not an automatic deployment gate.
-The user subsequently selected standalone `pi1` after manual play.
-
-## Reproduction paths
-
-The ignored local evidence is rooted at:
-
-```text
-runs/bgc-policy-d1-card-set-001/
-runs/bgc-policy-pi1-001/
-runs/pi1-evaluation-001/
-```
-
-The selected artifact path is:
+The selected standalone artifact is stored locally at:
 
 ```text
 runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt
 ```
 
-This deployment artifact contains the exact selected state dictionary in the
-minimal runtime format. Release packaging verifies and copies those bytes; it
-does not retrain the network.
+Its SHA-256 digest is:
 
-## Historical training
+```text
+d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203
+```
 
-Earlier PPO, policy/value, Teacher v2, response-ranking, expert-iteration,
-Sam-selected-action, and `pi0` acceptance protocols remain indexed in
-[reports](../reports/README.md). They are inactive.
+Release packaging verifies those exact bytes and copies only the runtime
+artifact. It does not include training data, checkpoints, optimizer state, or
+reports.

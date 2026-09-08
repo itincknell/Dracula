@@ -4,12 +4,13 @@
  * the stable retro visual foundation used by every page and viewport.
  */
 :root {
-  --narrow-breakpoint: 900px;
+  /* Shared geometry keeps cards and the portrait consistent across viewports. */
   --minimum-card-size: 64px;
   --minimum-hand-card-size: 72px;
   --dracula-portrait-aspect: 4 / 3;
   --dracula-avatar-size: 64px;
   --mobile-commentary-height: 72px;
+  /* Named colors keep the arcade palette consistent across component files. */
   --void: #07060a;
   --night: #0d0b12;
   --panel: #141019;
@@ -29,14 +30,17 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Border and padding dimensions never enlarge a declared component. */
 * { box-sizing: border-box; }
 
+/* The narrowest supported game viewport is 320 pixels. */
 html {
   min-width: 320px;
   min-height: 100%;
   background: var(--void);
 }
 
+/* Layered grids, glow, and darkness form the fixed page background. */
 body {
   margin: 0;
   min-width: 320px;
@@ -50,6 +54,7 @@ body {
   background-size: 4px 4px, 4px 4px, auto, auto;
 }
 
+/* A pointer-transparent scanline overlay sits above every page element. */
 body::after {
   position: fixed;
   z-index: 999;
@@ -61,6 +66,7 @@ body::after {
   mix-blend-mode: multiply;
 }
 
+/* Controls inherit application fonts instead of browser-specific defaults. */
 button, a { font: inherit; }
 button { border-radius: 0; }
 a { color: var(--gold); text-decoration-thickness: 1px; text-underline-offset: 4px; }
@@ -76,12 +82,14 @@ a:focus-visible,
 
 ::selection { color: var(--void); background: var(--cyan); }
 
+/* All pages share this centered maximum width and outer gutter. */
 .page-shell {
   width: min(1240px, calc(100% - 32px));
   margin: 0 auto;
   padding: 24px 0 28px;
 }
 
+/* Start and missing-page views center one card in the viewport. */
 .start-page {
   position: relative;
   min-height: 100vh;
@@ -90,6 +98,7 @@ a:focus-visible,
   gap: 26px;
 }
 
+/* The rotated background frame adds depth without another DOM element. */
 .start-page::before {
   position: absolute;
   z-index: -1;
@@ -103,6 +112,7 @@ a:focus-visible,
   box-shadow: 0 0 0 36px rgb(193 39 70 / 3%), 0 0 120px rgb(135 22 47 / 16%);
 }
 
+/* Start and loading screens share the same clipped arcade panel. */
 .start-card,
 .loading-panel {
   position: relative;
@@ -116,6 +126,7 @@ a:focus-visible,
   clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 18px, 100% calc(100% - 18px), calc(100% - 18px) 100%, 18px 100%, 0 calc(100% - 18px), 0 18px);
 }
 
+/* The inset rule is decorative and cannot intercept clicks. */
 .start-card::after,
 .loading-panel::after {
   position: absolute;
@@ -128,10 +139,10 @@ a:focus-visible,
 .loading-panel { margin: 10vh auto; }
 
 .eyebrow,
-.commentary-status,
 .series-label,
 .rules-contents { font-family: "Silkscreen", "IBM Plex Mono", monospace; }
 
+/* Display labels use the pixel face; headings use the Gothic face. */
 .eyebrow {
   margin: 0 0 13px;
   color: var(--gold);
@@ -155,6 +166,7 @@ h1 {
 h2, h3 { color: var(--bone); }
 p, a, button, li, td, th { font-size: 16px; line-height: 1.55; }
 
+/* Role buttons wrap instead of shrinking below their readable minimum. */
 .role-actions {
   display: flex;
   justify-content: center;
@@ -163,6 +175,7 @@ p, a, button, li, td, th { font-size: 16px; line-height: 1.55; }
   flex-wrap: wrap;
 }
 
+/* Primary controls use stepped movement to match the low-resolution style. */
 .primary-action {
   min-width: 190px;
   min-height: 50px;
@@ -192,6 +205,47 @@ p, a, button, li, td, th { font-size: 16px; line-height: 1.55; }
 .rules-link { color: var(--cyan); font-weight: 600; }
 .start-error { color: #ff7891; }
 
+/* Cover the existing role card without adding a row or moving its controls. */
+.start-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  background: rgb(5 5 8 / 25%);
+}
+
+.start-card .primary-action:disabled { filter: grayscale(1); }
+
+.start-progress {
+  margin: 0;
+  /* Center the full three-dot layout without moving the text during cycling. */
+  width: calc(16ch + 2rem + 4px);
+  padding: 0.75rem 1rem;
+  border: 2px solid currentColor;
+  color: var(--bone);
+  background: #08080b;
+  box-shadow: 5px 5px 0 var(--void);
+  font-family: "Silkscreen", monospace;
+  font-size: clamp(12px, 3.5vw, 16px);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Measure the actual three dots, not three digit-width ch units. Both copies
+ * share one grid cell, keeping the full phrase centered and its left edge fixed. */
+.start-progress-dots { display: inline-grid; text-align: left; }
+.start-progress-dots::before { content: "..."; visibility: hidden; grid-area: 1 / 1; }
+.start-progress-dots::after { content: ""; grid-area: 1 / 1; animation: start-progress-dots 2.4s steps(1, end) infinite; }
+
+@keyframes start-progress-dots {
+  0%, 100% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+
+/* Footer navigation remains centered below every page type. */
 .footer-links {
   display: flex;
   align-items: center;

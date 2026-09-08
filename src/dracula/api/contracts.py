@@ -1,19 +1,24 @@
-"""Define browser-facing values shared by Dracula API projections.
+"""Define browser-facing score and lifecycle values for stateless gameplay.
 
-These Pydantic models describe public cards, scores, phases, and local gameplay
-messages. They deliberately exclude authoritative engine and model internals.
+These models are shared by projection and transport code. They contain only
+public game facts; request envelopes and complete game views live in the
+stateless API package.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Annotated, Literal
-from uuid import UUID
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# ``Literal`` restricts a string field to the listed wire values. These aliases
+# describe JSON shapes; they do not create new runtime classes.
 Player = Literal["queen", "king"]
 GameStatus = Literal["playing", "round_complete", "game_complete"]
+
+# Fixed-length tuples let Pydantic reject a board or hand with the wrong number
+# of positions while preserving ``null`` for each currently empty position.
 CardSlot = tuple[str | None, str | None, str | None, str | None]
 CoffinSlots = tuple[
     str | None,
@@ -28,17 +33,27 @@ CoffinSlots = tuple[
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class ServiceResponse:
+    """Carry a service result without importing FastAPI into service code.
+
+    Route modules convert this small value into a framework ``JSONResponse``.
+    Keeping that conversion at the edge lets gameplay services be tested
+    without constructing an HTTP request.
+    """
+
+    status_code: int
+    body: dict[str, Any]
+
+
 class ContractModel(BaseModel):
-    """Reject fields that are not part of the public wire contract."""
+    """Common Pydantic behavior for JSON accepted from or sent to a browser.
+
+    ``extra="forbid"`` rejects unexpected JSON keys instead of ignoring them.
+    ``frozen=True`` prevents code from changing a validated model afterward.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class HealthResponse(ContractModel):
-    """Local API health and configured dependency status."""
-
-    status: Literal["ok"] = "ok"
-    narration_enabled: bool
 
 
 class PlayerScore(ContractModel):
@@ -46,16 +61,6 @@ class PlayerScore(ContractModel):
 
     human: int = Field(ge=0)
     opponent: int = Field(ge=0)
-
-
-class PlayedMove(ContractModel):
-    """Public accepted placement including its original hand slot."""
-
-    player: Player
-    card_id: str
-    hand_slot: int = Field(ge=0, le=3)
-    position: int = Field(ge=0, le=8)
-    turn_number: int = Field(ge=1, le=8)
 
 
 class LineScore(ContractModel):
@@ -79,7 +84,11 @@ class LineScore(ContractModel):
 
 
 class ScoringStep(ContractModel):
-    """One deterministic instruction in the round-scoring animation."""
+    """One deterministic instruction in the round-scoring animation.
+
+    ``kind`` tells the frontend how to interpret ``line`` and ``details``.
+    The details mapping contains only JSON primitive values, never engine data.
+    """
 
     kind: Literal[
         "score_line",
@@ -92,87 +101,16 @@ class ScoringStep(ContractModel):
     details: dict[str, int | str | bool]
 
 
-class RoundRecord(ContractModel):
-    """Public cards, moves, calculations, and result for one finished round."""
-
-    round_number: int = Field(ge=1, le=6)
-    dealer: Player
-    coffin: tuple[str, str, str, str, str, str, str, str, str]
-    moves: tuple[PlayedMove, ...]
-    line_scores: tuple[LineScore, ...]
-    scoring_sequence: tuple[ScoringStep, ...]
-    round_scores: PlayerScore
-
-
-class LegalMove(ContractModel):
-    """Opaque local-session move token and its visible placement details."""
-
-    move_id: str
-    card_id: str
-    hand_slot: int = Field(ge=0, le=3)
-    position: int = Field(ge=0, le=8)
-
-
-class PublicEvent(ContractModel):
-    """Append-only local gameplay event with contiguous sequence identity."""
-
-    game_id: UUID
-    event_id: str
-    sequence: int = Field(ge=1)
-    event_type: Literal[
-        "game_created",
-        "round_started",
-        "move_accepted",
-        "row_score_ready",
-        "column_score_ready",
-        "round_completed",
-        "game_completed",
-    ]
-    occurred_at: datetime
-    prior_version: int = Field(ge=0)
-    resulting_version: int = Field(ge=0)
-    request_id: str | None
-    payload: dict[str, int | str | bool | None]
-
-
 class HumanTurnPhase(ContractModel):
     """Phase in which the browser may submit one human placement."""
 
     kind: Literal["human_turn"] = "human_turn"
 
 
-class OpponentTurnPhase(ContractModel):
-    """Ready, pending, or failed local opponent-turn phase."""
-
-    kind: Literal["opponent_turn"] = "opponent_turn"
-    status: Literal["ready", "pending", "failed"]
-    job_id: str | None = None
-    retryable: bool = True
-
-
-class NarrationPhase(ContractModel):
-    """Local phase exposing narration generated for the current game state."""
-
-    kind: Literal["narration"] = "narration"
-    status: Literal["ready", "pending", "failed"]
-    event_id: str
-    narration_id: str | None = None
-    required: bool
-
-
 class ScoringPhase(ContractModel):
     """Phase identifying the completed round awaiting score presentation."""
 
     kind: Literal["scoring"] = "scoring"
-    round_number: int = Field(ge=1, le=6)
-    next_step_index: int = Field(ge=0)
-    pending_narration_id: str | None = None
-
-
-class RoundAdvancePhase(ContractModel):
-    """Local phase awaiting acknowledgement of a scored round."""
-
-    kind: Literal["round_advance"] = "round_advance"
     round_number: int = Field(ge=1, le=6)
 
 
@@ -181,95 +119,3 @@ class GameCompletePhase(ContractModel):
 
     kind: Literal["game_complete"] = "game_complete"
     outcome: Literal["human", "opponent", "tie"]
-
-
-ResumablePhase = Annotated[
-    HumanTurnPhase
-    | OpponentTurnPhase
-    | NarrationPhase
-    | ScoringPhase
-    | RoundAdvancePhase
-    | GameCompletePhase,
-    Field(discriminator="kind"),
-]
-
-
-class PublicGameView(ContractModel):
-    """Shared public lifecycle, board, score, and phase fields."""
-
-    game_id: UUID
-    version: int = Field(ge=0)
-    status: GameStatus
-    round_number: int = Field(ge=1, le=6)
-    turn_number: int = Field(ge=0, le=8)
-    dealer: Player
-    active_player: Player | None
-    human_role: Player
-    opponent_role: Player
-    coffin: CoffinSlots
-    current_round_moves: tuple[PlayedMove, ...]
-    pending_round_result: RoundRecord | None
-    completed_rounds: tuple[RoundRecord, ...]
-    total_scores: PlayerScore
-    phase: ResumablePhase
-    latest_event_sequence: int = Field(ge=0)
-    narration_enabled: bool
-
-
-class HumanGameView(PublicGameView):
-    """Local-session game view extended with human hand and legal moves."""
-
-    human_hand: CardSlot
-    legal_moves: tuple[LegalMove, ...]
-    events: tuple[PublicEvent, ...]
-
-
-class EventsResponse(ContractModel):
-    """Local append-only events after a requested sequence number."""
-
-    events: tuple[PublicEvent, ...]
-    latest_sequence: int = Field(ge=0)
-
-
-class CreateGameRequest(ContractModel):
-    """Idempotent local request selecting role and optional game seed."""
-
-    human_role: Player
-    request_id: UUID
-    seed: str | None = None
-
-
-class MoveRequest(ContractModel):
-    """Idempotent local placement request using an opaque legal-move token."""
-
-    move_id: str
-    expected_version: int = Field(ge=0)
-    request_id: UUID
-
-
-class VersionedMutationRequest(ContractModel):
-    """Idempotent local mutation bound to the caller's current game version."""
-
-    expected_version: int = Field(ge=0)
-    request_id: UUID
-
-
-class ApiErrorResponse(ContractModel):
-    """Local API error with optional authoritative recovery view."""
-
-    code: Literal[
-        "not_found",
-        "stale_version",
-        "wrong_turn",
-        "wrong_phase",
-        "already_advanced",
-        "invalid_move",
-        "request_id_conflict",
-        "rate_limited",
-        "dependency_unavailable",
-        "validation_error",
-    ]
-    message: str
-    retryable: bool
-    current_version: int | None = Field(default=None, ge=0)
-    current_game: HumanGameView | None = None

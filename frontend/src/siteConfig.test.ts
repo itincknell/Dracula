@@ -9,7 +9,7 @@ import { resolveSiteLinks } from "./siteConfig";
 
 describe("site links", () => {
   it("uses local destinations when no deployment values are supplied", () => {
-    expect(resolveSiteLinks({})).toEqual({
+    expect(resolveSiteLinks()).toEqual({
       home: "/",
       rules: "/#/rules",
       about: "/about",
@@ -17,23 +17,14 @@ describe("site links", () => {
     });
   });
 
-  it("resolves all three destinations from deployment configuration", () => {
-    expect(resolveSiteLinks({
-      VITE_RULES_URL: "https://example.test/rules",
-      VITE_ABOUT_URL: "https://example.test/about",
-      VITE_CONTACT_URL: "https://example.test/contact",
-    })).toEqual({
-      home: "/",
-      rules: "https://example.test/rules",
-      about: "https://example.test/about",
-      contact: "https://example.test/contact",
-    });
-  });
-
   it("keeps internal routes under the GitHub Pages project base", () => {
-    expect(resolveSiteLinks({ BASE_URL: "/Dracula/" })).toMatchObject({
+    expect(resolveSiteLinks("/Dracula/")).toMatchObject({
       home: "/Dracula/",
       rules: "/Dracula/#/rules",
     });
+  });
+
+  it("normalizes a base path without a trailing slash", () => {
+    expect(resolveSiteLinks("/Dracula").home).toBe("/Dracula/");
   });
 });

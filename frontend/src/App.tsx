@@ -5,7 +5,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Player } from "./contractPrimitives";
 import { type GameControllerContract, useGameStore } from "./gameControllerContract";
 import { GameWindow } from "./gameplay";
 import { RulesPage } from "./RulesPage";
@@ -14,7 +13,8 @@ import { siteLinks } from "./siteConfig";
 import { statelessApiClient } from "./statelessApi";
 import { StatelessGameController } from "./statelessGameStore";
 
-export type AppRoute =
+/** The four pages recognized by the deliberately small hash router. */
+type AppRoute =
   | { kind: "start" }
   | { kind: "game" }
   | { kind: "rules" }
@@ -27,8 +27,7 @@ export function resolveRoute(hash: string): AppRoute {
   return { kind: "not_found" };
 }
 
-export { SeenCardsExpando, seenCardIds } from "./SeenCardsExpando";
-
+/** Site-level navigation shared by the start and gameplay pages. */
 function FooterLinks() {
   return (
     <nav className="footer-links" aria-label="Project links">
@@ -50,15 +49,14 @@ export function GameStart({
   const routedToGame = useRef(false);
 
   useEffect(() => {
+    // createGame may already be waiting on the visible Dracula opening delay.
+    // Navigate as soon as its preview view exists, and only once per mount.
     if (view !== null && !routedToGame.current) {
       routedToGame.current = true;
       onGameCreated();
     }
   }, [onGameCreated, view]);
 
-  const start = async (role: Player) => {
-    await controller.createGame(role);
-  };
   return (
     <main className="page-shell start-page">
       <section className="start-card" aria-labelledby="start-title">
@@ -70,7 +68,7 @@ export function GameStart({
             className="primary-action"
             type="button"
             disabled={presentation.pending !== null}
-            onClick={() => void start("queen")}
+            onClick={() => void controller.createGame("queen")}
           >
             Start as Queen
           </button>
@@ -78,12 +76,18 @@ export function GameStart({
             className="primary-action"
             type="button"
             disabled={presentation.pending !== null}
-            onClick={() => void start("king")}
+            onClick={() => void controller.createGame("king")}
           >
             Start as King
           </button>
         </div>
-        {presentation.pending === "create_game" ? <p role="status">Dealing the first round…</p> : null}
+        {presentation.pending === "create_game" ? (
+          <div className="start-overlay">
+            <p className="start-progress" role="status">
+              Starting game<span className="start-progress-dots" aria-hidden="true" />
+            </p>
+          </div>
+        ) : null}
         {presentation.error !== null ? (
           <p className="start-error" role="alert">{presentation.error.message}</p>
         ) : null}
@@ -107,6 +111,9 @@ function GamePage({
   const loadAttempted = useRef(false);
 
   useEffect(() => {
+    // React StrictMode runs mount effects twice in development. The local ref
+    // prevents duplicate calls here; the controller also shares in-flight
+    // recovery among callers as a second boundary-level guarantee.
     if (view === null && !loadAttempted.current) {
       loadAttempted.current = true;
       void controller.loadGame();
@@ -157,6 +164,8 @@ function NotFoundPage() {
 }
 
 export function App({ controller: suppliedController }: { controller?: GameControllerContract }) {
+  // Component tests inject a controller. The real application creates exactly
+  // one stateless controller for the lifetime of this App mount.
   const controller = useMemo(
     () => suppliedController ?? new StatelessGameController(statelessApiClient),
     [suppliedController],
@@ -164,6 +173,8 @@ export function App({ controller: suppliedController }: { controller?: GameContr
   const [route, setRoute] = useState(() => resolveRoute(window.location.hash));
 
   useEffect(() => {
+    // Hash changes cover ordinary link navigation; popstate covers browser
+    // back/forward traversal after navigate() uses history.pushState.
     const updateRoute = () => setRoute(resolveRoute(window.location.hash));
     window.addEventListener("popstate", updateRoute);
     window.addEventListener("hashchange", updateRoute);
@@ -174,6 +185,8 @@ export function App({ controller: suppliedController }: { controller?: GameContr
   }, []);
 
   const navigate = useCallback((path: string) => {
+    // Hash routing lets every GitHub Pages request resolve the same index.html;
+    // no server-side fallback or routing package is required.
     const hash = path === "/" ? "#/" : `#${path}`;
     window.history.pushState({}, "", `${siteLinks.home}${hash}`);
     setRoute(resolveRoute(hash));

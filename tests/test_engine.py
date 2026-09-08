@@ -11,8 +11,8 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from dracula.cards import CARD_IDS
-from dracula.engine import (
+from dracula.game.cards import CARD_IDS
+from dracula.game.engine import (
     CENTER_GRID_INDEX,
     MOVES_PER_ROUND,
     ROUNDS_PER_GAME,
@@ -45,6 +45,7 @@ from dracula.engine import (
     state_fingerprint,
     validate_state,
 )
+from dracula.game.scoring import round_score_deciding_rank
 
 GOLDEN_GAME_SEED = "engine-contract-fixture-1"
 GOLDEN_INITIAL_FINGERPRINT = (
@@ -216,20 +217,22 @@ def test_vampire_lines_score_zero(vampire: str, orientation: LineOrientation) ->
 
 # Tie resolution must descend in lockstep and accept the third level even when tied.
 @pytest.mark.parametrize(
-    ("queen", "king", "expected"),
+    ("queen", "king", "expected", "expected_rank"),
     (
-        ((40, 20, 10), (30, 25, 15), PlayerValues(40, 30)),
-        ((30, 24, 8), (30, 18, 11), PlayerValues(24, 18)),
-        ((30, 20, 9), (30, 20, 7), PlayerValues(9, 7)),
-        ((30, 20, 7), (30, 20, 7), PlayerValues(7, 7)),
+        ((40, 20, 10), (30, 25, 15), PlayerValues(40, 30), 0),
+        ((30, 24, 8), (30, 18, 11), PlayerValues(24, 18), 1),
+        ((30, 20, 9), (30, 20, 7), PlayerValues(9, 7), 2),
+        ((30, 20, 7), (30, 20, 7), PlayerValues(7, 7), 2),
     ),
 )
 def test_round_score_resolves_at_each_tie_level(
     queen: tuple[int, int, int],
     king: tuple[int, int, int],
     expected: PlayerValues[int],
+    expected_rank: int,
 ) -> None:
     assert resolve_round_scores(queen, king) == expected
+    assert round_score_deciding_rank(queen, king) == expected_rank
 
 
 # Turn ownership and dealer alternation determine which private hand may change.

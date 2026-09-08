@@ -1,6 +1,6 @@
 /**
  * Configures production-shaped browser tests for the built frontend.
- * Playwright starts the deterministic stateless fixture and Vite preview with
+ * Playwright builds the frontend and starts FastAPI serving it with
  * the selected local π1 artifact, then runs one serial desktop/mobile project.
  */
 import { defineConfig } from "@playwright/test";
@@ -15,6 +15,8 @@ const policy = path.resolve(
 );
 
 function shellValue(value: string): string {
+  // The policy path becomes part of a shell command assembled for Playwright.
+  // Quote embedded apostrophes so paths remain one environment value.
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
@@ -28,7 +30,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"]],
   use: {
-    baseURL: "http://127.0.0.1:4175/Dracula/",
+    baseURL: "http://127.0.0.1:8012/Dracula/",
     channel: "chrome",
     headless: true,
     reducedMotion: "reduce",
@@ -38,30 +40,17 @@ export default defineConfig({
   },
   webServer: [
     {
+      // The Python fixture serves the real stateless app and built frontend with a fixed game seed and
+      // selected local policy. It replaces only Bedrock with deterministic text.
       command: [
+        "VITE_API_ORIGIN=/Dracula/api VITE_BASE_PATH=/Dracula/ VITE_SCORING_REDUCED_STEP_MS=20 npm --prefix frontend run build &&",
         "DRACULA_LOCAL_GAME_SEED=dracula-stateless-frontend-v1",
-        "DRACULA_OPPONENT_MODE=pi1",
         `DRACULA_POLICY_ARTIFACT=${shellValue(policy)}`,
         ".venv/bin/uvicorn frontend_production_app:app",
         "--app-dir tests --host 127.0.0.1 --port 8012 --no-access-log",
       ].join(" "),
       cwd: projectRoot,
       port: 8012,
-      reuseExistingServer: false,
-      timeout: 60_000,
-    },
-    {
-      command: [
-        "VITE_API_ORIGIN=/api",
-        "VITE_BASE_PATH=/Dracula/",
-        "VITE_SCORING_REDUCED_STEP_MS=20",
-        "npm run build",
-        "&&",
-        "DRACULA_API_PROXY_TARGET=http://127.0.0.1:8012",
-        "npm run preview -- --host 127.0.0.1 --port 4175 --strictPort",
-      ].join(" "),
-      cwd: frontendRoot,
-      port: 4175,
       reuseExistingServer: false,
       timeout: 60_000,
     },

@@ -38,7 +38,7 @@ recovery, account history, or aggregate result store.
 
 The release is ready when:
 
-- The GitHub Pages application and API Gateway custom domain are reachable over
+- The combined FastAPI frontend and API are reachable at `/Dracula/` over
   HTTPS through the Cloudflare-managed domain.
 - A first-time user can open Rules, play as either role, finish six rounds, and
   start another game.

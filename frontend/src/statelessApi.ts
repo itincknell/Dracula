@@ -7,67 +7,74 @@ import {
   assertNarrationResponse,
   assertStatelessApiErrorResponse,
   assertStatelessGameResponse,
-  assertStatelessHealthResponse,
   type NarrationCueType,
   type NarrationResponse,
   type RecoveryEnvelope,
   type RequestedGameCommand,
   type StatelessApiErrorResponse,
   type StatelessGameResponse,
-  type StatelessHealthResponse,
 } from "./statelessContracts";
 import type { Player } from "./contractPrimitives";
 
-export interface ApiResult<T, Status extends number> {
-  status: Status;
-  data: T;
-}
-
+/** An HTTP failure whose already-validated public details may be shown by the UI. */
 export class StatelessApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly response: StatelessApiErrorResponse,
-  ) {
+  constructor(readonly response: StatelessApiErrorResponse) {
     super(response.message);
     this.name = "StatelessApiError";
   }
 }
 
+/**
+ * The requests used by the browser gameplay controller.
+ *
+ * Each method returns validated response data directly. HTTP status codes are
+ * checked inside the client because callers cannot usefully act on a different
+ * successful status for these fixed endpoints.
+ */
 export interface StatelessApiClient {
-  health(): Promise<StatelessHealthResponse>;
-  startGame(request: { human_role: Player; seed?: string }): Promise<ApiResult<StatelessGameResponse, 201>>;
+  startGame(request: { human_role: Player; seed?: string }): Promise<StatelessGameResponse>;
   applyCommand(request: {
     envelope: RecoveryEnvelope;
     command: RequestedGameCommand;
-  }): Promise<ApiResult<StatelessGameResponse, 200>>;
+  }): Promise<StatelessGameResponse>;
   resumeGame(request: {
     envelope: RecoveryEnvelope;
-  }): Promise<ApiResult<StatelessGameResponse, 200>>;
+  }): Promise<StatelessGameResponse>;
   narrate(request: {
     envelope: RecoveryEnvelope;
     cue_type: NarrationCueType;
-  }): Promise<ApiResult<NarrationResponse, 200>>;
+  }): Promise<NarrationResponse>;
 }
 
+/** The subset of `fetch` injected by tests; production uses the browser function. */
 type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+/**
+ * Normalize the build-time API origin before endpoint paths are appended.
+ * `/api` uses Vite's local proxy. A configured absolute origin has trailing
+ * slashes removed, while `/` becomes the empty same-origin prefix.
+ */
 export function resolveStatelessApiOrigin(configured: string | undefined): string {
   const value = configured?.trim() || "/api";
   return value === "/" ? "" : value.replace(/\/+$/, "");
 }
 
 export function createStatelessApiClient(
-  origin: string,
+  origin: string | undefined,
   fetchImplementation: FetchImplementation = fetch,
 ): StatelessApiClient {
   const base = resolveStatelessApiOrigin(origin);
 
+  /** Send one request, decode its body once, and establish the trusted boundary. */
   async function requestJson<T, Status extends number>(
     path: string,
     status: Status,
     validate: (value: unknown) => asserts value is T,
     init?: RequestInit,
-  ): Promise<ApiResult<T, Status>> {
+  ): Promise<T> {
+    // `no-store` prevents an intermediary browser cache from replaying a stale
+    // game response. Idempotence comes from the recovery envelope, not HTTP
+    // response caching.
     const response = await fetchImplementation(`${base}${path}`, {
       ...init,
       cache: "no-store",
@@ -77,6 +84,9 @@ export function createStatelessApiClient(
         ...init?.headers,
       },
     });
+
+    // Read text before parsing so an interrupted response produces a useful
+    // message instead of the browser's opaque "Unexpected end of JSON" error.
     const responseText = await response.text();
     if (responseText.trim().length === 0) {
       throw new TypeError("The game server returned no response. Please retry.");
@@ -87,17 +97,24 @@ export function createStatelessApiClient(
     } catch {
       throw new TypeError("The game server returned an invalid response. Please retry.");
     }
+
+    // Error bodies have their own public contract. Successfully shaped errors
+    // retain their retry guidance without exposing an arbitrary server body.
     if (!response.ok) {
       assertStatelessApiErrorResponse(payload);
-      throw new StatelessApiError(response.status, payload);
+      throw new StatelessApiError(payload);
     }
+
+    // Each endpoint has one documented success code. Accepting another code
+    // could conceal a changed server contract even if its body looked familiar.
     if (response.status !== status) {
       throw new TypeError(`Unexpected successful API status ${response.status}`);
     }
     validate(payload);
-    return { status, data: payload };
+    return payload;
   }
 
+  /** Serialize the JSON body and apply the common POST request contract. */
   const post = <T, Status extends number>(
     path: string,
     status: Status,
@@ -109,9 +126,6 @@ export function createStatelessApiClient(
   });
 
   return {
-    async health() {
-      return (await requestJson("/health", 200, assertStatelessHealthResponse)).data;
-    },
     startGame(request) {
       return post("/games", 201, assertStatelessGameResponse, request);
     },
@@ -128,5 +142,5 @@ export function createStatelessApiClient(
 }
 
 export const statelessApiClient = createStatelessApiClient(
-  resolveStatelessApiOrigin(import.meta.env.VITE_API_ORIGIN),
+  import.meta.env.VITE_API_ORIGIN,
 );

@@ -81,16 +81,51 @@ eligible request may generate again but never mutates the game envelope.
 
 ## Bedrock request boundary
 
-The request constructor emits the approved arcade-villain system prompt and one
-canonical JSON user message containing only the derived cue. Dracula opens with
-a taunt, gloats when winning, and reacts angrily when losing, without profanity,
-memes, or invented facts. Temperature is zero. `maxTokens` defaults to 96, and
-parsed text is additionally limited to 400 characters. Only one nonempty assistant text block is accepted; tool,
-reasoning, binary, empty, control-character, multi-block, and oversized output
-is rejected.
+The request constructor emits the approved arcade-villain system prompt and a
+short English account assembled from public game facts. It varies whether that
+account describes the leader as winning or the trailer as losing, while retries
+of the same round remain identical. Dracula responds in roughly 20–42 words,
+gloating when ahead and reacting angrily when behind, without profanity, memes,
+or invented facts. Temperature is 0.5 and `maxTokens` defaults to 96.
+Only one nonempty assistant text block is accepted; tool, reasoning, binary,
+empty, control-character, and multi-block output is rejected.
 
 `make preview-dialogue` uses the same grounding and frontend timing with a
 deterministic local adapter. It does not call Bedrock.
+
+## Local Bedrock preview
+
+The live-dialogue preview uses the ordinary local stateless gameplay server and
+the selected local policy artifact. Only the three narration requests leave the
+computer; no Lambda or API Gateway resource is involved.
+
+Install the optional local AWS SDK once:
+
+```bash
+.venv/bin/pip install -e '.[bedrock]'
+```
+
+Configure AWS credentials through Boto3's normal credential chain, then start
+the preview. For example, with an existing named profile:
+
+```bash
+AWS_PROFILE=dracula-local make preview-bedrock
+```
+
+The authenticated identity needs permission to call `bedrock:InvokeModel` for
+Amazon Nova Lite. Boto3 reads the named profile through its normal credential
+provider chain. Do not put AWS credentials in the repository or pass them to the
+browser. If credentials or model access are unavailable, the Bedrock error is
+logged and gameplay continues without narration.
+
+Defaults are `us-east-1` and `amazon.nova-lite-v1:0`. They can be overridden for
+an isolated test without editing tracked files:
+
+```bash
+AWS_PROFILE=dracula-local make preview-bedrock \
+  BEDROCK_REGION=us-east-1 \
+  BEDROCK_MODEL_ID=amazon.nova-lite-v1:0
+```
 
 `DRACULA_NARRATION_TIMEOUT_SECONDS` defaults to 8 seconds. The SDK client uses
 bounded connect and read timeouts. Automatic SDK retries are disabled for this
@@ -113,9 +148,9 @@ Production configuration fixes:
 - `DRACULA_NARRATION_TIMEOUT_SECONDS`
 - `DRACULA_NARRATION_MAX_TOKENS`
 
-Diagnostics contain cue type, success or failure category, latency, and input
-and output token counts. They omit seed, command history, cue facts, prompt,
-cards, hands, stock, policy data, and model ID. Narration is not
+Diagnostics contain cue type, success or failure category, latency, input and
+output token counts, and successful generated narration text. They omit seed,
+command history, cue facts, prompt, cards, hands, stock, policy data, and model ID. Narration is not
 server-persistent. The browser may retain successful display text locally.
 
 ## Selected model and voice

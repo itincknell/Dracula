@@ -13,12 +13,14 @@ const customRoot = path.join(frontendRoot, "assets", "cards");
 const destinationRoot = path.join(frontendRoot, "public", "cards");
 const manifestPath = path.join(frontendRoot, "card-assets.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+
+// The engine's card IDs are suit-major. Building that order here lets the
+// script reject missing, extra, reordered, or duplicate manifest entries
+// before Vite copies any card images.
 const canonicalRanks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
-const canonicalIds = [
-  ...["C", "D", "H", "S"].flatMap((suit) => canonicalRanks.map((rank) => `${rank}${suit}`)),
-  "V1",
-  "V2",
-];
+const canonicalIds = ["C", "D", "H", "S"].flatMap((suit) =>
+  canonicalRanks.map((rank) => `${rank}${suit}`),
+);
 const assets = Object.entries(manifest).map(([cardId, source]) => ({
   destination: `${cardId}.png`,
   source,
@@ -29,7 +31,7 @@ if (
   assets.length !== canonicalIds.length ||
   new Set(assets.map(({ source }) => source)).size !== canonicalIds.length
 ) {
-  throw new Error("card-assets.json must map the 54 canonical card IDs in canonical order to unique source files");
+  throw new Error("card-assets.json must map the 52 suited card IDs in canonical order to unique source files");
 }
 
 async function exists(file) {
@@ -43,6 +45,8 @@ async function exists(file) {
 
 await mkdir(destinationRoot, { recursive: true });
 if (!(await exists(sourceRoot))) {
+  // CI does not contain the licensed source pack. It may use the already
+  // selected public copies, but only if the entire canonical set is present.
   const missing = [];
   for (const asset of assets) {
     if (!(await exists(path.join(destinationRoot, asset.destination)))) missing.push(asset.destination);
@@ -51,6 +55,8 @@ if (!(await exists(sourceRoot))) {
     throw new Error(`Kenney source pack is unavailable and copied assets are missing: ${missing.join(", ")}`);
   }
 } else {
+  // A development checkout with the source pack refreshes all public copies
+  // from the manifest instead of trusting possibly stale generated assets.
   for (const asset of assets) {
     await copyFile(
       path.join(sourceRoot, asset.source),
@@ -60,6 +66,8 @@ if (!(await exists(sourceRoot))) {
 }
 
 for (const vampireId of ["V1", "V2"]) {
+  // Vampire cards are custom artwork and do not belong to the 52-card source
+  // manifest, but the browser expects them in the same public directory.
   await copyFile(
     path.join(customRoot, `${vampireId}.jpg`),
     path.join(destinationRoot, `${vampireId}.jpg`),
@@ -72,6 +80,8 @@ const portraits = [
   "dracula-angriest-grimace.jpg",
   "dracula-winning-grin.jpg",
 ];
+// Portraits are authored directly in public/ because their paths are stable UI
+// assets rather than generated card-pack selections.
 for (const portrait of portraits) {
   if (!(await exists(path.join(frontendRoot, "public", "portraits", portrait)))) {
     throw new Error(`required Dracula portrait is missing: ${portrait}`);

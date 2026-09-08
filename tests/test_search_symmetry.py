@@ -11,20 +11,20 @@ from collections.abc import Iterable
 import pytest
 import torch
 
-from dracula.action_contract import (
+from dracula.decision.action_mask import (
     PolicyActionContractError,
     build_representative_action_mask,
 )
-from dracula.active_policy import ActivePolicyRuntime
-from dracula.bgc_policy_model import BGCPolicyModel
-from dracula.bridge import transpose_grid_index
-from dracula.engine import apply_move, create_game, legal_moves
-from dracula.search import (
+from dracula.policy.runtime import ActivePolicyRuntime
+from dracula.policy.model import PolicyModel
+from dracula.decision.bridge import transpose_grid_index
+from dracula.game.engine import apply_move, create_game, legal_moves
+from dracula.decision.symmetry import (
     DestinationSymmetryError,
     destination_symmetry_groups,
 )
-from dracula.search.information import information_state_from_engine
-from dracula.strategic_actions import (
+from dracula.decision.information import information_state_from_engine
+from dracula.decision.strategic_actions import (
     select_concrete_action_index,
     strategic_action_groups,
 )
@@ -222,7 +222,7 @@ def test_paired_destination_choice_is_reproducible_and_group_preserving() -> Non
 
 def test_active_policy_selects_a_legal_group_for_every_authorized_pattern() -> None:
     runtime = ActivePolicyRuntime(
-        BGCPolicyModel(),
+        PolicyModel(),
         artifact_digest="a" * 64,
     )
     for decision_index, (occupied, _expected) in enumerate(AUTHORIZED_CASES):

@@ -3,7 +3,7 @@
  * Test cases can publish explicit game and presentation states without invoking
  * HTTP, browser persistence, or the production stateless store.
  */
-import type { LegalMove, Player, ResumablePhase } from "./contractPrimitives";
+import type { LegalMove, Player, PresentationPhase } from "./contractPrimitives";
 import type {
   GameControllerContract,
   GameStoreState,
@@ -12,12 +12,7 @@ import type {
 import type { HumanGameView } from "./gameView";
 
 export function testGameView(
-  phase: ResumablePhase = {
-    kind: "opponent_turn",
-    status: "ready",
-    job_id: null,
-    retryable: true,
-  },
+  phase: PresentationPhase = { kind: "opponent_turn" },
   changes: Partial<HumanGameView> = {},
 ): HumanGameView {
   return {
@@ -64,7 +59,7 @@ export class TestGameController implements GameControllerContract {
     this.state = {
       view,
       presentation: presentation(),
-      narration: { enabled: false, pending: false, messages: [] },
+      narration: { pending: false, messages: [] },
     };
   }
 
@@ -129,7 +124,7 @@ export class TestGameController implements GameControllerContract {
   async playPosition(position: number): Promise<boolean> {
     const move = this.legalMoveAt(position);
     if (move === null || this.actions.playMove === undefined) return false;
-    this.updatePresentation({ pending: "human_move", selectedHandSlot: null });
+    this.updatePresentation({ pending: "opponent_turn", selectedHandSlot: null });
     const view = await this.actions.playMove(move);
     this.publish({ view, presentation: presentation() });
     return true;

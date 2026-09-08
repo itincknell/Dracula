@@ -10,88 +10,111 @@ import {
   assertNullableString,
   assertNumber,
   assertOneOf,
-  assertPhase,
+  assertServerGamePhase,
   assertPlayerScore,
   assertScoringStep,
   assertString,
   exactKeys,
   record,
   type GameStatus,
+  type CoffinSlots,
+  type HandSlots,
+  type LegalMove,
   type Player,
   type PlayedMove,
   type PlayerScore,
-  type ResumablePhase,
+  type ServerGamePhase,
   type RoundRecord,
 } from "./contractPrimitives";
 
-export type AcceptedGameCommand =
-  | { type: "select_role"; human_role: Player }
+/**
+ * Commands accepted after a game has already been created.
+ * A placement names one stable hand slot and one global coffin position;
+ * advancement acknowledges the score presentation for a completed round.
+ */
+export type RequestedGameCommand =
   | { type: "place"; hand_slot: number; position: number }
   | { type: "advance_round" };
 
-export type RequestedGameCommand = Exclude<AcceptedGameCommand, { type: "select_role" }>;
+/**
+ * Every command needed to replay a game from its seed.
+ *
+ * Role selection is stored as the first accepted command even though it is
+ * supplied to the create-game endpoint rather than the command endpoint.
+ */
+export type AcceptedGameCommand =
+  | { type: "select_role"; human_role: Player }
+  | RequestedGameCommand;
 
+/** The complete client-owned recipe for rebuilding one authoritative game. */
 export interface RecoveryEnvelope {
   seed: string;
+  /** Accepted commands in execution order, beginning with role selection. */
   history: AcceptedGameCommand[];
 }
 
-export interface StatelessLegalMove {
-  card_id: string;
-  hand_slot: number;
-  position: number;
-}
-
-export type VisiblePlayedMove = PlayedMove;
-export type StatelessRoundRecord = RoundRecord;
-
+/**
+ * Public engine state returned after the server has settled automatic play.
+ *
+ * This is the raw wire shape. `gameView.ts` defines the trusted presentation
+ * copy, whose phase union additionally permits the browser-only opponent delay.
+ */
 export interface StatelessHumanGameView {
   status: GameStatus;
+  /** One-based round number. */
   round_number: number;
+  /** Number of placements already made in the current round. */
   turn_number: number;
   dealer: Player;
+  /** Null once no further placement is possible in the current game state. */
   active_player: Player | null;
   human_role: Player;
   opponent_role: Player;
-  coffin: [
-    string | null, string | null, string | null,
-    string | null, string | null, string | null,
-    string | null, string | null, string | null,
-  ];
-  current_round_moves: VisiblePlayedMove[];
-  pending_round_result: StatelessRoundRecord | null;
-  completed_rounds: StatelessRoundRecord[];
+  coffin: CoffinSlots;
+  current_round_moves: PlayedMove[];
+  /**
+   * The just-finished round while its score animation awaits acknowledgement.
+   * It is not duplicated in `completed_rounds` until the next round advances.
+   */
+  pending_round_result: RoundRecord | null;
+  completed_rounds: RoundRecord[];
   total_scores: PlayerScore;
-  phase: ResumablePhase;
-  human_hand: [string | null, string | null, string | null, string | null];
-  legal_moves: StatelessLegalMove[];
+  phase: ServerGamePhase;
+  human_hand: HandSlots;
+  /** Empty unless the stable phase is `human_turn`. */
+  legal_moves: LegalMove[];
 }
 
+/** A successful gameplay response pairs rebuilt public state with its replay recipe. */
 export interface StatelessGameResponse {
   envelope: RecoveryEnvelope;
   game: StatelessHumanGameView;
 }
 
-export interface StatelessHealthResponse {
-  status: "ok";
-  gameplay_mode: "stateless";
-  opponent_configured: boolean;
-  narration_enabled: boolean;
-  narration_configured: boolean;
-}
-
+/** Minimal operational status used by the frontend before gameplay begins. */
+/** The only three moments at which the frontend may request dialogue. */
 export type NarrationCueType = "opening" | "round_transition" | "final_result";
 
+/** A narration request either returns usable text or an explicit empty result. */
 export interface NarrationResponse {
   cue_type: NarrationCueType;
   status: "ready" | "unavailable";
   text: string | null;
 }
 
+/**
+ * Structured public errors returned by the stateless API.
+ *
+ * `validation_error` means the HTTP body did not match its declared shape.
+ * `invalid_history` means the recovery commands could not be replayed.
+ * `invalid_command`, `wrong_turn`, and `wrong_phase` reject a proposed move or
+ * lifecycle action. `ineligible_cue` rejects narration at the wrong moment,
+ * while `dependency_unavailable` reports an optional or required service that
+ * could not answer.
+ */
 export interface StatelessApiErrorResponse {
   code:
     | "validation_error"
-    | "request_too_large"
     | "invalid_history"
     | "invalid_command"
     | "wrong_turn"
@@ -99,12 +122,17 @@ export interface StatelessApiErrorResponse {
     | "ineligible_cue"
     | "dependency_unavailable";
   message: string;
+  /** Tells the controller whether repeating the same request may be useful. */
   retryable: boolean;
 }
 
+/** Validate one command stored in an untrusted browser recovery history. */
 function assertAcceptedGameCommand(value: unknown, label: string): void {
   const item = record(value, label);
   assertString(item.type, `${label} type`);
+
+  // The command type is a discriminator: each case has a different exact
+  // field set, and no command may smuggle unrelated state into replay.
   if (item.type === "select_role") {
     exactKeys(item, ["type", "human_role"], label);
     assertOneOf(item.human_role, ["queen", "king"], `${label} role`);
@@ -114,6 +142,9 @@ function assertAcceptedGameCommand(value: unknown, label: string): void {
     exactKeys(item, ["type", "hand_slot", "position"], label);
     assertNumber(item.hand_slot, `${label} hand slot`);
     assertNumber(item.position, `${label} position`);
+
+    // Hand slots are the engine's four stable card positions. Coffin positions
+    // use row-major indexes over all nine cells, including the occupied center.
     if (!Number.isInteger(item.hand_slot) || item.hand_slot < 0 || item.hand_slot > 3) {
       throw new TypeError(`${label} hand slot is out of range`);
     }
@@ -129,6 +160,13 @@ function assertAcceptedGameCommand(value: unknown, label: string): void {
   throw new TypeError(`${label} type is unsupported`);
 }
 
+/**
+ * Validate the seed and ordered commands loaded from browser storage or HTTP.
+ *
+ * The limit of 31 commands covers one role selection, up to 24 human card
+ * placements, and six round-advance commands. Gameplay replay later verifies
+ * that the individually well-formed commands are possible in that exact order.
+ */
 export function assertRecoveryEnvelope(value: unknown): asserts value is RecoveryEnvelope {
   const item = record(value, "recovery envelope");
   exactKeys(item, ["seed", "history"], "recovery envelope");
@@ -140,14 +178,23 @@ export function assertRecoveryEnvelope(value: unknown): asserts value is Recover
   if (item.history.length < 1 || item.history.length > 31) {
     throw new TypeError("recovery history length is invalid");
   }
-  item.history.forEach((command, index) => assertAcceptedGameCommand(command, `history command ${index}`));
+  item.history.forEach((command, index) => {
+    assertAcceptedGameCommand(command, `history command ${index}`);
+  });
+
+  // The seed does not imply which side the human chose. Requiring role
+  // selection exactly once makes replay identity unambiguous.
   const first = item.history[0] as Record<string, unknown>;
   if (first.type !== "select_role") throw new TypeError("history must begin with role selection");
-  if (item.history.slice(1).some((command) => (command as Record<string, unknown>).type === "select_role")) {
+  const roleWasRepeated = item.history
+    .slice(1)
+    .some((command) => (command as Record<string, unknown>).type === "select_role");
+  if (roleWasRepeated) {
     throw new TypeError("role selection may appear only once");
   }
 }
 
+/** Validate a public move; private hand-slot data is intentionally absent. */
 function assertVisiblePlayedMove(value: unknown): void {
   const item = record(value, "visible move");
   exactKeys(item, ["player", "card_id", "position", "turn_number"], "visible move");
@@ -157,6 +204,7 @@ function assertVisiblePlayedMove(value: unknown): void {
   assertNumber(item.turn_number, "visible move turn");
 }
 
+/** Validate one immutable completed-round record and all nested animation data. */
 function assertStatelessRoundRecord(value: unknown): void {
   const item = record(value, "stateless round record");
   exactKeys(
@@ -166,11 +214,16 @@ function assertStatelessRoundRecord(value: unknown): void {
   );
   assertNumber(item.round_number, "round number");
   assertOneOf(item.dealer, ["queen", "king"], "round dealer");
+
+  // A completed round always exposes the entire nine-card coffin.
   assertArray(item.coffin, "round coffin");
   if (item.coffin.length !== 9) throw new TypeError("round coffin requires nine cards");
   item.coffin.forEach((card) => assertString(card, "round coffin card"));
   assertArray(item.moves, "round moves");
   item.moves.forEach(assertVisiblePlayedMove);
+
+  // Scores and the presentation sequence are server-authored. The frontend
+  // renders them but never recalculates authoritative round results.
   assertArray(item.line_scores, "round line scores");
   item.line_scores.forEach(assertLineScore);
   assertArray(item.scoring_sequence, "scoring sequence");
@@ -178,6 +231,7 @@ function assertStatelessRoundRecord(value: unknown): void {
   assertPlayerScore(item.round_scores);
 }
 
+/** Validate one move the server says the human may currently make. */
 function assertStatelessLegalMove(value: unknown): void {
   const item = record(value, "stateless legal move");
   exactKeys(item, ["card_id", "hand_slot", "position"], "stateless legal move");
@@ -186,6 +240,7 @@ function assertStatelessLegalMove(value: unknown): void {
   assertNumber(item.position, "legal move position");
 }
 
+/** Validate the complete public game projection before React can consume it. */
 function assertStatelessHumanGameView(value: unknown): void {
   const item = record(value, "stateless game view");
   exactKeys(
@@ -197,6 +252,9 @@ function assertStatelessHumanGameView(value: unknown): void {
     ],
     "stateless game view",
   );
+
+  // First validate the scalar lifecycle and role fields that explain the rest
+  // of the response.
   assertOneOf(item.status, ["playing", "round_complete", "game_complete"], "game status");
   assertNumber(item.round_number, "game round");
   assertNumber(item.turn_number, "game turn");
@@ -204,16 +262,24 @@ function assertStatelessHumanGameView(value: unknown): void {
   if (item.active_player !== null) assertOneOf(item.active_player, ["queen", "king"], "active player");
   assertOneOf(item.human_role, ["queen", "king"], "human role");
   assertOneOf(item.opponent_role, ["queen", "king"], "opponent role");
+
+  // The live coffin and current moves are public even before a round ends.
   assertArray(item.coffin, "coffin");
   if (item.coffin.length !== 9) throw new TypeError("coffin requires nine slots");
   item.coffin.forEach((card) => assertNullableString(card, "coffin card"));
   assertArray(item.current_round_moves, "current round moves");
   item.current_round_moves.forEach(assertVisiblePlayedMove);
+
+  // A finished round occupies exactly one of these locations: pending while
+  // scoring is shown, then completed after the browser advances the round.
   if (item.pending_round_result !== null) assertStatelessRoundRecord(item.pending_round_result);
   assertArray(item.completed_rounds, "completed rounds");
   item.completed_rounds.forEach(assertStatelessRoundRecord);
   assertPlayerScore(item.total_scores);
-  assertPhase(item.phase);
+  assertServerGamePhase(item.phase);
+
+  // Only the human hand is public. Stable slots retain null holes after cards
+  // are played so submitted hand indexes continue to name the same cards.
   assertArray(item.human_hand, "human hand");
   if (item.human_hand.length !== 4) throw new TypeError("human hand requires four slots");
   item.human_hand.forEach((card) => assertNullableString(card, "human hand card"));
@@ -221,6 +287,7 @@ function assertStatelessHumanGameView(value: unknown): void {
   item.legal_moves.forEach(assertStatelessLegalMove);
 }
 
+/** Validate a successful response from any gameplay endpoint. */
 export function assertStatelessGameResponse(value: unknown): asserts value is StatelessGameResponse {
   const item = record(value, "stateless game response");
   exactKeys(item, ["envelope", "game"], "stateless game response");
@@ -228,20 +295,10 @@ export function assertStatelessGameResponse(value: unknown): asserts value is St
   assertStatelessHumanGameView(item.game);
 }
 
-export function assertStatelessHealthResponse(value: unknown): asserts value is StatelessHealthResponse {
-  const item = record(value, "stateless health response");
-  exactKeys(
-    item,
-    ["status", "gameplay_mode", "opponent_configured", "narration_enabled", "narration_configured"],
-    "stateless health response",
-  );
-  assertOneOf(item.status, ["ok"], "health status");
-  assertOneOf(item.gameplay_mode, ["stateless"], "gameplay mode");
-  assertBoolean(item.opponent_configured, "opponent configured");
-  assertBoolean(item.narration_enabled, "narration enabled");
-  assertBoolean(item.narration_configured, "narration configured");
-}
-
+/**
+ * Validate optional narration without making it part of gameplay correctness.
+ * Ready responses require nonempty text; unavailable responses require null.
+ */
 export function assertNarrationResponse(value: unknown): asserts value is NarrationResponse {
   const item = record(value, "narration response");
   exactKeys(item, ["cue_type", "status", "text"], "narration response");
@@ -253,6 +310,7 @@ export function assertNarrationResponse(value: unknown): asserts value is Narrat
   }
 }
 
+/** Validate the API's public error shape before displaying or acting on it. */
 export function assertStatelessApiErrorResponse(
   value: unknown,
 ): asserts value is StatelessApiErrorResponse {
@@ -261,7 +319,7 @@ export function assertStatelessApiErrorResponse(
   assertOneOf(
     item.code,
     [
-      "validation_error", "request_too_large", "invalid_history", "invalid_command",
+      "validation_error", "invalid_history", "invalid_command",
       "wrong_turn", "wrong_phase", "ineligible_cue", "dependency_unavailable",
     ],
     "stateless API error code",

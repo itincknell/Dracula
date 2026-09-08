@@ -5,19 +5,17 @@
  */
 import type { LegalMove } from "./contractPrimitives";
 import type { HumanGameView } from "./gameView";
-import type { StatelessGameResponse } from "./statelessContracts";
 
-export function projectStatelessResponse(response: StatelessGameResponse): HumanGameView {
-  return {
-    ...response.game,
-    legal_moves: response.game.legal_moves.map((move) => ({
-      ...move,
-      move_id: `${move.hand_slot}:${move.position}`,
-    })),
-  };
-}
-
+/**
+ * Show the human's chosen card before the server finishes Dracula's response.
+ *
+ * This creates a new presentation object; it never changes the validated view
+ * in place. The server response later replaces this preview in full. If the
+ * request fails, the controller restores the original view it kept separately.
+ */
 export function humanPlacementPreview(view: HumanGameView, move: LegalMove): HumanGameView {
+  // Tuple spreads become general arrays in TypeScript, so the assertions state
+  // that replacing one existing slot preserves the fixed coffin and hand sizes.
   const coffin = [...view.coffin] as HumanGameView["coffin"];
   coffin[move.position] = move.card_id;
   const humanHand = [...view.human_hand] as HumanGameView["human_hand"];
@@ -36,17 +34,19 @@ export function humanPlacementPreview(view: HumanGameView, move: LegalMove): Hum
         turn_number: view.turn_number + 1,
       },
     ],
-    phase: {
-      kind: "opponent_turn",
-      status: "pending",
-      job_id: null,
-      retryable: true,
-    },
+    phase: { kind: "opponent_turn" },
     human_hand: humanHand,
     legal_moves: [],
   };
 }
 
+/**
+ * Hide an already-computed Dracula opener until the minimum move delay passes.
+ *
+ * A stateless create/advance response may contain Dracula's opening placement
+ * because the server settles automatic play before responding. Only that exact
+ * one-move state can be rewound for display; all other views return null.
+ */
 export function opponentOpeningPreview(view: HumanGameView): HumanGameView | null {
   const openingMove = view.current_round_moves.at(-1);
   if (
@@ -59,6 +59,9 @@ export function opponentOpeningPreview(view: HumanGameView): HumanGameView | nul
   ) {
     return null;
   }
+
+  // Remove only the public effects of the opener. The authoritative response
+  // remains held by the controller and is published after the delay.
   const coffin = [...view.coffin] as HumanGameView["coffin"];
   coffin[openingMove.position] = null;
   return {
@@ -67,12 +70,7 @@ export function opponentOpeningPreview(view: HumanGameView): HumanGameView | nul
     active_player: view.opponent_role,
     coffin,
     current_round_moves: [],
-    phase: {
-      kind: "opponent_turn",
-      status: "pending",
-      job_id: null,
-      retryable: true,
-    },
+    phase: { kind: "opponent_turn" },
     legal_moves: [],
   };
 }

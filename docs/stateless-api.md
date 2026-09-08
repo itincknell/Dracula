@@ -2,23 +2,19 @@
 
 This contract defines production gameplay over the deterministic engine. The
 browser retains a plain recovery envelope; the service reconstructs the game
-without a database or server session. The repository-backed API remains an
-explicit local-development interface.
+without a database or server session. Local development uses this same API.
 
 ## Runtime selection
 
-Production loads `dracula.api.production:app`. That entry point always creates
-stateless gameplay and cannot fall back to a repository. Local development
-continues to load `dracula.api.app:app`, whose default mode is `local` and may
-use in-memory or SQLite persistence.
+Production loads `dracula.api.production:app`. Local development loads
+`dracula.api.development:app`, and dummy-dialogue previews load
+`dracula.api.preview:app`. All three compose the same stateless routes.
 
-Production configuration is centralized in `dracula.api.production_config`:
+Production configuration is centralized in `dracula.api.config`:
 `DRACULA_POLICY_ARTIFACT`, `DRACULA_NARRATION_ENABLED`, and
 `DRACULA_REPLAY_CACHE_ENTRIES`. The production entry point passes the selected
-policy directly to the stateless service; it does not consult local opponent
-modes. `DRACULA_GAMEPLAY_MODE=stateless` remains available only when explicitly
-constructing the general local application. Supplying a repository in that
-mode is an error.
+policy directly to the stateless service. There is no gameplay-mode switch or
+repository configuration.
 
 ## Recovery envelope
 
@@ -35,8 +31,7 @@ The complete browser-owned state is:
 }
 ```
 
-The JSON request body is capped at 64 KiB before parsing. The first command
-selects the human role exactly once. Later commands are
+The first command selects the human role exactly once. Later commands are
 human placements or explicit round advances. Dracula placements are not
 trusted browser commands: replay regenerates them through the selected `pi1`
 policy at the same deterministic decision boundary.
@@ -53,6 +48,11 @@ deal another round.
 
 ## Routes
 
+The paths below are relative to `/Dracula/api` in the combined production app.
+Local Vite development still proxies its `/api` prefix to these unprefixed
+service routes. Static files are mounted separately at `/Dracula/`; API routes
+are registered first and never fall back to frontend HTML.
+
 ### `GET /health`
 
 Stateless health returns only:
@@ -60,10 +60,8 @@ Stateless health returns only:
 ```json
 {
   "status": "ok",
-  "gameplay_mode": "stateless",
   "opponent_configured": true,
-  "narration_enabled": false,
-  "narration_configured": false
+  "narration_enabled": false
 }
 ```
 
@@ -115,8 +113,8 @@ This response never changes the submitted envelope or re-applies a command.
 On a cache miss the service:
 
 1. Creates the seeded engine state.
-2. Derives a stable internal game identity from seed and human role solely for
-   deterministic policy seed derivation.
+2. Uses the human role and game seed directly when a selected strategic group
+   needs a deterministic paired-destination coin flip.
 3. Runs a required Dracula opening turn.
 4. Replays each human command through normal engine legality.
 5. Runs each required non-forced Dracula move from Dracula's
@@ -134,14 +132,14 @@ rejected.
 
 ## Replay cache
 
-Each Lambda environment owns a bounded least-recently-used cache keyed by the
-SHA-256 digest of canonical seed-and-history JSON. Entries contain immutable
-reconstructed engine state, human role, and the stable internal game identity.
+Each Lambda environment owns a bounded least-recently-used cache keyed directly
+by the immutable recovery envelope. Entries contain immutable reconstructed
+engine state, human role, and the plain role-and-seed key used for deterministic
+paired-destination choices.
 
 `DRACULA_REPLAY_CACHE_ENTRIES` controls the bound and defaults to 256. Zero
-disables storage. Hits, misses, and eviction are internal diagnostics; none are
-returned publicly. Cache clearing, eviction, and process replacement change
-latency only.
+disables storage. Cache clearing, eviction, and process replacement change
+latency only; they never change replay results.
 
 ## Public response boundary
 
@@ -155,7 +153,7 @@ game
 The game projection contains public coffin and scoring information, the human
 hand, legal human card-slot/destination choices, totals, and the derived
 presentation phase. Public move records omit former hand slots, including
-Dracula's. The projection contains no random internal game ID, stock, opponent
+Dracula's. The projection contains no internal policy key, stock, opponent
 hand, engine object, state fingerprint, policy identity, artifact digest,
 observation, legal mask, logits, tensors, search diagnostics, or
 Lambda instance identity.
@@ -169,7 +167,6 @@ Requests reject unknown JSON fields. Stateless errors use a compact code,
 message, and retryable flag:
 
 - `validation_error`: malformed wire request.
-- `request_too_large`: the request exceeds 64 KiB.
 - `invalid_history`: a submitted envelope cannot be replayed.
 - `invalid_command`: the new placement is not legal.
 - `wrong_turn` or `wrong_phase`: the new command does not fit the reconstructed

@@ -245,12 +245,20 @@ describe("round completion controls", () => {
       () => new Promise<HumanGameView>(() => undefined),
     );
     const { timeline } = await setup(current, { advanceRound });
-    await advanceFrames(timeline.length - 1);
+    const totalsFrame = frameIndex(timeline, (frame) => frame.kind === "update_totals");
+    await advanceFrames(totalsFrame);
+    const totals = screen.getByLabelText("Round 6 totals");
+    const totalsText = totals.textContent;
+    await advanceFrames(timeline.length - 1 - totalsFrame);
     await act(async () => undefined);
     expect(advanceRound).toHaveBeenCalledTimes(1);
     await advanceFrames(3);
     expect(advanceRound).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Finalizing game…")).toBeInTheDocument();
+    expect(screen.queryByText("Finalizing game…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Play Again" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Round 6 totals")).toBe(totals);
+    expect(totals.textContent).toBe(totalsText);
+    expect(totals.closest(".scoring-presentation")).toHaveClass("stage-update_totals");
   });
 
   it("shows Play Again only after round six has entered the completed-game lifecycle", () => {
@@ -265,6 +273,8 @@ describe("round completion controls", () => {
     };
     const onNewGame = vi.fn();
     render(<FinalRoundPresentation record={record} view={completed} onNewGame={onNewGame} />);
+    expect(screen.getByRole("heading", { name: "You won" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Round 6 totals")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Play Again" }));
     expect(onNewGame).toHaveBeenCalledTimes(1);
   });

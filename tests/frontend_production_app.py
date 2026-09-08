@@ -6,19 +6,20 @@ Playwright can exercise recovery and UI behavior without AWS or Bedrock.
 
 from __future__ import annotations
 
-import json
+from pathlib import Path
 
-from dracula.api.app import create_app
-from dracula.api.narration import NarrationPrompt, NarrationProviderResult
+from dracula.api.development import create_app
+from dracula.api.narration.prompt import NarrationPrompt
+from dracula.api.narration.service import NarrationProviderResult
+from dracula.api.web import create_web_app
 
 
 class CueNarrationAdapter:
-    @property
-    def configured(self) -> bool:
-        return True
-
     def generate(self, prompt: NarrationPrompt) -> NarrationProviderResult:
-        cue = json.loads(prompt.user_text)["cue_type"]
+        # Production prompts contain English, so use the originating cue rather
+        # than parsing presentation text to select a predictable test response.
+        assert prompt.source_cue is not None
+        cue = prompt.source_cue.cue_type
         return NarrationProviderResult(
             text={
                 "opening": "Opening cue",
@@ -31,8 +32,8 @@ class CueNarrationAdapter:
         )
 
 
-app = create_app(
-    gameplay_mode="stateless",
+api = create_app(
     narration_enabled=True,
     narration_adapter=CueNarrationAdapter(),
 )
+app = create_web_app(api, Path(__file__).resolve().parents[1] / "frontend/dist")

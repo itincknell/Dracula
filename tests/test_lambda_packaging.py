@@ -11,16 +11,16 @@ import importlib.util
 import json
 import logging
 from pathlib import Path
+import re
 import sys
 
 import pytest
 
-from dracula.production_logging import JsonLogFormatter
-from dracula.api.production_config import ProductionSettings
+from dracula.api.logging import JsonLogFormatter
+from dracula.api.config import ProductionSettings
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = ROOT / "runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt"
 EXPECTED_ARTIFACT_SHA256 = (
     "d35196cf4513589def0ffb3c4c7c268e78652a46dab8ea41001ff2c648265203"
 )
@@ -52,29 +52,31 @@ def _load_release_builder():
 def test_release_context_contains_only_verified_selected_artifact(tmp_path: Path) -> None:
     builder = _load_builder()
     output = tmp_path / "context"
-    manifest = builder.build_context(ROOT, ARTIFACT, output)
+    artifact_digest = builder.build_context(ROOT, output)
 
-    assert manifest["artifact_sha256"] == EXPECTED_ARTIFACT_SHA256
-    assert hashlib.sha256((output / "artifacts/pi1.pt").read_bytes()).hexdigest() == (
+    assert artifact_digest == EXPECTED_ARTIFACT_SHA256
+    assert hashlib.sha256((output / "artifacts/policy.pt").read_bytes()).hexdigest() == (
         EXPECTED_ARTIFACT_SHA256
     )
     assert not (output / "runs").exists()
     assert not (output / "tests").exists()
-    assert not tuple(output.rglob("*.sqlite3"))
     assert not tuple(output.rglob("__pycache__"))
-    assert not (output / "src/dracula/bgc_policy_training.py").exists()
-    assert not (output / "src/dracula/bgc_policy_dataset.py").exists()
-    assert not (output / "src/dracula/api/service.py").exists()
+    assert not (output / "src/dracula/policy/training").exists()
     assert (output / "src/dracula/api/production.py").is_file()
-    assert json.loads((output / "release-manifest.json").read_text()) == manifest
+    assert (output / "src/dracula/api/stateless/replay.py").is_file()
+    assert not (output / "release-manifest.json").exists()
+    assert not (output / "pyproject.toml").exists()
+    assert (output / "frontend/index.html").is_file()
+    assert not (output / "frontend/node_modules").exists()
+    assert not (output / "frontend/src").exists()
 
 
 def test_release_context_fails_closed_on_wrong_artifact(tmp_path: Path) -> None:
     builder = _load_builder()
     wrong = tmp_path / "wrong.pt"
-    wrong.write_bytes(b"not pi1")
+    wrong.write_bytes(b"not selected policy")
     with pytest.raises(builder.ReleaseBuildError, match="digest differs"):
-        builder.build_context(ROOT, wrong, tmp_path / "context")
+        builder._verified_artifact_digest(wrong)
 
 
 def test_release_context_cli_reports_an_absolute_output(
@@ -84,11 +86,11 @@ def test_release_context_cli_reports_an_absolute_output(
     builder = _load_builder()
     output = tmp_path / "context"
 
-    assert builder.main(("--artifact", str(ARTIFACT), "--output", str(output))) == 0
+    assert builder.main(("--output", str(output))) == 0
 
-    result = json.loads(capsys.readouterr().out)
-    assert result["output"] == output.as_posix()
-    assert result["artifact_sha256"] == EXPECTED_ARTIFACT_SHA256
+    result = capsys.readouterr().out.strip()
+    assert f"output={output.as_posix()}" in result
+    assert f"policy_sha256={EXPECTED_ARTIFACT_SHA256}" in result
 
 
 def test_release_source_filter_rejects_generated_python_metadata(
@@ -113,50 +115,60 @@ def test_release_source_filter_rejects_generated_python_metadata(
     assert builder._display_path(outside, tmp_path) == outside.as_posix()
 
 
+def test_release_inventory_includes_all_authored_build_inputs() -> None:
+    builder = _load_release_builder()
+    paths = {path.relative_to(ROOT).as_posix() for path in builder._release_paths(ROOT)}
+
+    assert "frontend/scripts/prepare-card-assets.mjs" in paths
+    assert "frontend/scripts/verify-production-build.mjs" in paths
+    assert "src/dracula/api/stateless/replay.py" in paths
+    assert "tools/lambda_validation_gameplay.py" in paths
+
+
 def test_container_and_cloudformation_have_one_stateless_production_path() -> None:
     dockerfile = (ROOT / "deployment/container/Dockerfile").read_text()
     template = (ROOT / "infrastructure/application.yaml").read_text()
 
     assert "aws-lambda-adapter@sha256:" in dockerfile
-    assert "DRACULA_POLICY_ARTIFACT=/opt/dracula/artifacts/pi1.pt" in dockerfile
-    assert "DRACULA_GAMEPLAY_MODE" not in dockerfile
-    assert "DRACULA_OPPONENT_MODE" not in dockerfile
-    assert "DRACULA_BGC_PI0_ARTIFACT=/opt/dracula/artifacts/pi1.pt" not in dockerfile
-    assert "artifacts/pi1.pt" in dockerfile
-    assert "sqlite" not in dockerfile.lower()
+    assert "DRACULA_POLICY_ARTIFACT=/opt/dracula/artifacts/policy.pt" in dockerfile
+    assert "artifacts/policy.pt" in dockerfile
     assert "sagemaker" not in template.lower()
     assert "dynamodb" not in template.lower()
-    assert "DRACULA_GAMEPLAY_MODE" not in template
-    assert "DRACULA_OPPONENT_MODE" not in template
     assert "AWS::ApiGatewayV2::Api" in template
     assert "PayloadFormatVersion: \"2.0\"" in template
-    assert "EndpointType: REGIONAL" in template
+    assert "ANY /Dracula/{proxy+}" in template
+    assert "ANY /Dracula" in template
+    assert "DependsOn: [ApplicationRootRoute, ApplicationRoute, StaticGetRoute]" in template
     assert "bedrock:InvokeModel" in template
     assert "ReservedConcurrentExecutions" in template
-    assert "CorsConfiguration" in template
-    assert "AllowOrigins: [!Ref AllowedFrontendOrigin]" in template
+    assert 'AWS_LWA_ASYNC_INIT: "true"' in template
+    assert "CorsConfiguration" not in template
+    assert "AWS::ApiGatewayV2::DomainName" not in template
     assert "DetailedMetricsEnabled: false" in template
     assert "AWS::CloudWatch::Alarm" in template
     assert "MetricName: Errors" in template
     assert "MetricName: 5xx" in template
     assert "AWS::Budgets::Budget" in template
+    # CloudFormation rejected numeric Equals operands during stack creation,
+    # even though validate-template accepted them. Compare parameter strings.
+    assert re.search(r"!Equals \[[^\]]*, -?\d+\]", template) is None
 
 
 def test_production_settings_have_one_neutral_policy_artifact_name(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("DRACULA_POLICY_ARTIFACT", "/opt/dracula/artifacts/pi1.pt")
+    monkeypatch.setenv("DRACULA_POLICY_ARTIFACT", "/opt/dracula/artifacts/policy.pt")
     monkeypatch.setenv("DRACULA_NARRATION_ENABLED", "true")
     monkeypatch.setenv("DRACULA_REPLAY_CACHE_ENTRIES", "17")
 
     assert ProductionSettings.from_environment() == ProductionSettings(
-        policy_artifact="/opt/dracula/artifacts/pi1.pt",
+        policy_artifact="/opt/dracula/artifacts/policy.pt",
         narration_enabled=True,
         replay_cache_entries=17,
     )
 
 
-def test_environment_parameter_files_contain_no_account_or_model_identity() -> None:
+def test_environment_parameter_files_contain_selected_model_but_no_account_identity() -> None:
     for environment in ("staging", "production"):
         path = ROOT / f"infrastructure/parameters/{environment}.json"
         values = {
@@ -164,11 +176,22 @@ def test_environment_parameter_files_contain_no_account_or_model_identity() -> N
             for item in json.loads(path.read_text())
         }
         assert values["EnvironmentName"] == environment
-        assert values["BedrockModelId"] == ""
-        assert values["BedrockModelArn"] == ""
-        assert values["CustomDomainCertificateArn"] == ""
+        assert values["BedrockModelId"] == "amazon.nova-lite-v1:0"
+        # AWS foundation-model ARNs have an empty account field and are safe
+        # release configuration, unlike an operator's account-owned ARN.
+        expected_arn = (
+            "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0"
+            if environment == "production" else ""
+        )
+        assert values["BedrockModelArn"] == expected_arn
+        assert "CustomDomainCertificateArn" not in values
         assert values["AlarmNotificationEmail"] == ""
-        assert "arn:aws" not in path.read_text()
+        assert re.search(r"arn:aws[^:]*:[^:]*:[^:]*:[0-9]{12}:", path.read_text()) is None
+        if environment == "production":
+            assert values["NarrationEnabled"] == "true"
+            assert values["ReservedConcurrency"] == "-1"
+            assert values["MonthlyBudgetUsd"] == "10"
+            assert values["BudgetNotificationEmail"] == ""
 
 
 def test_production_log_formatter_emits_one_json_object() -> None:

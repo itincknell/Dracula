@@ -17,10 +17,18 @@ __pycache__/
 /frontend/test-results/
 /frontend/.env*.local
 
-# Protected local runtime state, active logs, runs, and verified archives
+# Local runtime state, logs, and model artifacts
 /.local/
 /runs/
 /output*
+
+# Private working notes and assistant/release scratch output
+/reports/
+/docs/design-tracker.md
+/dracula-blog-draft.md
+/.wrangler/
+**/.wrangler/
+/.codex/
 
 # Local immutable source packs; selected assets are copied into the frontend.
 /Cards (large)/

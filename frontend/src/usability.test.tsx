@@ -16,7 +16,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { GameStart, SeenCardsExpando } from "./App";
+import { GameStart } from "./App";
+import { SeenCardsExpando } from "./SeenCardsExpando";
 import { GameWindow } from "./gameplay";
 import { RulesPage } from "./RulesPage";
 import { TestGameController, testGameView } from "./testGameController";
@@ -28,7 +29,7 @@ function humanTurnController(): TestGameController {
     { kind: "human_turn" },
     {
       active_player: "queen",
-      legal_moves: [{ move_id: "m", card_id: "2C", hand_slot: 0, position: 8 }],
+      legal_moves: [{ card_id: "2C", hand_slot: 0, position: 8 }],
     },
   ));
 }

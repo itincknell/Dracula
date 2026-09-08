@@ -19,6 +19,8 @@ import "./styles.css";
 const root = document.getElementById("root");
 if (root === null) throw new Error("Application root is missing");
 
+// StrictMode surfaces unsafe effects during local development. The stateless
+// controller coalesces recovery calls that React intentionally repeats.
 createRoot(root).render(
   <StrictMode>
     <App />

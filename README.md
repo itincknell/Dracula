@@ -8,17 +8,20 @@ React, and the standalone `pi1` feed-forward policy.
 
 | Path | Ownership |
 | --- | --- |
-| `src/`, `tests/` | Python engine, policy, service, retained trainer, and regression suites |
+| `src/dracula/game/` | Cards, immutable engine state, rules, scoring, and lifecycle |
+| `src/dracula/decision/`, `src/dracula/search/` | Player-visible decisions, symmetry, and retained information-set UCT |
+| `src/dracula/policy/` | Standalone policy runtime, artifact, and offline training pipeline |
+| `src/dracula/api/` | Stateless gameplay, narration, local preview, and production composition |
+| `tests/` | Python regression and privacy suites |
 | `frontend/` | React application, selected card assets, and browser tests |
-| `docs/`, `contracts/` | Active design contracts and public API fixtures |
-| `configs/`, `tools/` | Selected training input and release utilities |
-| `queries/` | Read-only local gameplay reports |
-| `reports/` | Active evidence, historical experiment indexes, and maintenance handoffs |
+| `docs/` | Active design and operating contracts |
+| `tools/` | Release and deployment utilities |
 
 `Cards (large)` and `Cards (medium)` are retained card-source assets; runtime
 card and Dracula portrait assets live under `frontend/public/`. Ignored
-`.local/`, `runs/`, and `output*` paths contain protected local state,
-collection artifacts, archives, and logs rather than project source.
+`runs/bgc-policy-pi1-001/artifacts/pi1-policy.pt` is the ignored selected model
+artifact required by local play and release builds. Rebuildable output remains
+ignored rather than part of the repository.
 
 ## Local gameplay
 
@@ -41,6 +44,19 @@ local dialogue:
 make preview-dialogue
 ```
 
+Exercise the same preview with live Amazon Bedrock narration after installing
+the optional AWS SDK and configuring credentials through Boto3's normal
+credential chain:
+
+```bash
+.venv/bin/pip install -e '.[bedrock]'
+make preview-bedrock
+```
+
+This calls Amazon Nova Lite in `us-east-1`; gameplay and policy inference remain
+local. The AWS identity needs `bedrock:InvokeModel` permission. See the
+[narrator contract](docs/narrator.md#local-bedrock-preview).
+
 Open <http://127.0.0.1:5173> for development or
 <http://127.0.0.1:4173> for preview. Stop either command with `Ctrl-C`.
 
@@ -49,47 +65,38 @@ missing or incompatible artifact fails explicitly; there is no fallback.
 
 For separate development terminals, use `make dev-api` and
 `make dev-frontend`. `API_PORT`, `DEV_PORT`, and `PREVIEW_PORT` may be
-overridden. Reset local game state after stopping the servers with
-`make reset-local`.
+overridden. Stop any preview with `Ctrl-C`.
 
 ## Verification
 
 ```bash
 make test
 make test-e2e
-make pages-build
-make pages-test
+make web-build
+make web-test
 ```
 
-`pages-build` verifies the `/Dracula/` asset base, production API origin, and
-absence of local URLs. `pages-test` runs a complete stateless six-round browser
+`web-build` verifies the `/Dracula/` asset base, production API origin, and
+absence of local URLs. `web-test` runs a complete stateless six-round browser
 game with reload and narration coverage; neither command publishes anything.
 
-## Recorded games
-
-Completed and in-progress games remain in `.local/dracula.sqlite3`.
-
-```bash
-make play-report
-make play-game GAME_ID=00000000-0000-0000-0000-000000000000
-```
-
-The [design index](docs/README.md), [active tracker](docs/design-tracker.md),
-and [report index](reports/README.md) describe the current contracts and
-historical evidence.
+The [design index](docs/README.md) describes the current contracts and
+operating instructions.
 
 ## Deployment target
 
 The locked release serves the frontend from
-`https://ian-tincknell.com/Dracula/` on GitHub Pages and the API from
-`https://api.ian-tincknell.com/` through API Gateway and a Lambda container.
+`https://ian-tincknell.com/Dracula/` through Cloudflare, API Gateway, and one
+Lambda container. FastAPI serves both the built frontend and `/Dracula/api`.
+The personal website remains on GitHub Pages; Dracula has no Pages release.
 Gameplay is stateless: the browser carries the initial seed and accepted
 command history, and Lambda replays or locally caches the reconstructed state.
 Direct Bedrock narration runs only at opening, rounds 1–5 transitions, and the
 final game result. See [deployment](docs/deployment.md) and the implemented
 [stateless gameplay API](docs/stateless-api.md).
 
-The Pages workflow validates pull requests without publishing. Production
-publication is an explicit manual dispatch from a reviewed release tag. The
-exact command, API-first cutover order, rollback, and teardown steps live only
-in the [production release plan](reports/active/production-release-readiness.md).
+The frontend workflow validates without publishing. Use
+`make preview-app NARRATION_ENABLED=true` for the combined FastAPI application
+at <http://127.0.0.1:4173/Dracula/> with real Bedrock narration.
+The [deployment contract](docs/deployment.md) covers build, staging, public
+cutover, rollback, and teardown.

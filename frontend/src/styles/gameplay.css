@@ -12,6 +12,7 @@
   box-shadow: 0 0 0 5px #050407, 0 0 0 7px #2a1c23, 8px 10px 0 #020203;
 }
 
+/* The full-width expando remains prominent below the complete game frame. */
 .cheat-sheet-expando {
   display: flex;
   align-items: center;
@@ -42,6 +43,7 @@
   box-shadow: inset 0 0 0 3px #09070b;
 }
 
+/* The 13-rank table scrolls rather than compressing below legible width. */
 .seen-card-grid-scroll { overflow-x: auto; }
 .seen-card-grid { width: 100%; min-width: 650px; border-collapse: collapse; table-layout: fixed; }
 .seen-card-grid caption { margin-bottom: 10px; color: var(--gold); font-family: "Silkscreen", monospace; font-size: 9px; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
@@ -58,6 +60,7 @@
 .vampire-ledger-cell strong { color: var(--gold); }
 .vampire-ledger-cell[data-seen="true"] span { color: var(--cyan); text-shadow: 0 0 8px rgb(85 217 207 / 60%); }
 
+/* Page heading keeps the wordmark and one-based round indicator on one line. */
 .game-heading {
   display: flex;
   align-items: center;
@@ -73,8 +76,10 @@
 .game-heading h1 { margin: 0; font-size: 38px; line-height: 1; text-shadow: 2px 2px 0 var(--blood); }
 .game-heading > span { font-size: 24px; }
 .wordmark { color: var(--bone); font-size: 38px; font-weight: 700; text-decoration: none; }
+/* Responsive rules follow game width rather than the surrounding viewport. */
 .game-layout-container { container-name: game-layout; container-type: inline-size; }
 
+/* Desktop divides the frame into gameplay and Dracula-commentary columns. */
 .game-window {
   position: relative;
   display: grid;
@@ -85,6 +90,7 @@
   box-shadow: 0 0 0 5px #050407, 0 0 0 7px #2a1c23, 12px 16px 0 #020203, 0 30px 80px rgb(0 0 0 / 65%);
 }
 
+/* This inset line belongs to the outer frame and never affects layout. */
 .game-window::before {
   position: absolute;
   z-index: 8;
@@ -94,6 +100,7 @@
   pointer-events: none;
 }
 
+/* Main play reserves a board/hand region and a fixed scoreboard column. */
 .main-display {
   position: relative;
   display: grid;
@@ -109,6 +116,7 @@
 .main-display::after { position: absolute; inset: 14px; border: 1px solid rgb(255 255 255 / 4%); content: ""; pointer-events: none; }
 .main-display[aria-busy="true"] .hand { opacity: 0.48; filter: saturate(0.4); }
 
+/* The status row spans the board so its anchor survives scoring mode. */
 .turn-status {
   z-index: 1;
   grid-column: 1 / -1;
@@ -125,6 +133,7 @@
 
 .turn-status::before { color: var(--blood-hot); content: "> "; }
 
+/* Two columns and tabular numerals keep changing scores aligned. */
 .scoreboard {
   z-index: 1;
   grid-column: 2;
@@ -148,6 +157,7 @@
 .scoreboard strong { line-height: 1; }
 .scoreboard strong { color: var(--cyan); font-size: 20px; font-variant-numeric: tabular-nums; text-shadow: 0 0 10px rgb(85 217 207 / 45%); }
 
+/* The 3×3 coffin preserves the physical card aspect within the board. */
 .coffin {
   z-index: 1;
   grid-column: 1;
@@ -166,6 +176,7 @@
   aspect-ratio: 7 / 10;
 }
 
+/* Board, hand, and scoring cards share identical outer card boundaries. */
 .card-slot,
 .hand-card,
 .scoring-card {
@@ -189,6 +200,7 @@
 .scoring-card::after { position: absolute; inset: 4px; border: 1px solid rgb(255 255 255 / 3%); content: ""; pointer-events: none; }
 .card-slot.center-card { border-style: solid; border-color: #7b3546; box-shadow: 0 0 14px rgb(135 22 47 / 22%); }
 
+/* Tall artwork fits by height and keeps natural empty space on its sides. */
 .card-face {
   display: block;
   width: auto;
@@ -203,6 +215,7 @@
 
 button.card-slot, button.hand-card { cursor: pointer; }
 
+/* Only server-approved destinations receive interactive target treatment. */
 .legal-target {
   border: 2px solid var(--cyan);
   color: var(--cyan);
@@ -213,6 +226,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
 
 .legal-target span { color: var(--cyan); font-size: 25px; font-weight: 700; line-height: 1; text-shadow: 0 0 8px var(--cyan); }
 
+/* Four stable hand slots remain present after their cards are played. */
 .hand {
   z-index: 1;
   grid-column: 1;
@@ -243,6 +257,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
 .hand-card:disabled { filter: saturate(0.35) brightness(0.68); opacity: 0.58; cursor: not-allowed; }
 .played-card { opacity: 0.2; }
 
+/* Desktop commentary stacks a portrait above independently scrolling text. */
 .commentary-panel {
   position: relative;
   display: grid;
@@ -254,6 +269,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
   background: repeating-linear-gradient(0deg, transparent 0 7px, rgb(255 255 255 / 2%) 8px), linear-gradient(160deg, #23121b, #09080c 72%);
 }
 
+/* The portrait frame clips every preloaded mood image identically. */
 .portrait-placeholder {
   position: relative;
   display: grid;
@@ -264,6 +280,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
   aspect-ratio: var(--dracula-portrait-aspect);
 }
 
+/* Portraits fit by height and remain horizontally centered in the frame. */
 .dracula-avatar {
   position: absolute;
   top: 10px;
@@ -282,6 +299,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
   image-rendering: crisp-edges;
 }
 
+/* Exactly one preloaded portrait is displayed for the selected mood. */
 .portrait-placeholder[data-mood="default"] .dracula-avatar[data-portrait="default"],
 .portrait-placeholder[data-mood="angrier"] .dracula-avatar[data-portrait="angrier"],
 .portrait-placeholder[data-mood="angriest"] .dracula-avatar[data-portrait="angriest"],
@@ -289,6 +307,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
   display: block;
 }
 
+/* Narration scrolls independently without moving the gameplay surface. */
 .commentary-stream {
   position: relative;
   overflow-y: auto;
@@ -307,8 +326,10 @@ button.card-slot, button.hand-card { cursor: pointer; }
 }
 
 .commentary-dialogue::before { color: var(--blood-hot); content: "> "; }
+.commentary-measure { display: none; }
 .commentary-cursor { color: var(--blood-hot); animation: dialogue-cursor 620ms steps(1, end) infinite; }
 
+/* Standard visually-hidden text supplies the complete sentence to assistive technology. */
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -323,6 +344,7 @@ button.card-slot, button.hand-card { cursor: pointer; }
 .error-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border: 2px solid var(--danger); color: #fff1de; background: #4b0a1b; box-shadow: 6px 6px 0 #020203; font-family: "Silkscreen", monospace; font-size: 11px; }
 .error-banner button { min-height: 44px; padding: 6px 12px; border: 2px solid #fff1de; color: #fff1de; background: transparent; cursor: pointer; }
 
+/* Scoring replaces the interactive board in the same grid area without reflow. */
 .scoring-mode > .scoreboard,
 .scoring-mode > .hand,
 .scoring-mode > .coffin,

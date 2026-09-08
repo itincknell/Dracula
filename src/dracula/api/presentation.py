@@ -1,26 +1,24 @@
 """Project engine scoring and lifecycle facts into public presentation values.
 
-Both stateless production and local gameplay use these pure helpers so phase,
-line-score, and round-result representations cannot drift between transports.
+The stateless API uses these pure helpers to construct browser-facing phases,
+line scores, and round-scoring animation steps from verified engine results.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from dracula.api.contracts import (
     GameCompletePhase,
     HumanTurnPhase,
     LineScore as ApiLineScore,
-    OpponentTurnPhase,
-    PlayedMove,
+    Player,
     PlayerScore,
-    ResumablePhase,
-    RoundRecord,
     ScoringPhase,
     ScoringStep,
 )
-from dracula.cards import Suit, card_by_id
-from dracula.engine import (
-    EnginePlayedMove,
+from dracula.game.cards import Suit, card_by_id
+from dracula.game.engine import (
     EnginePlayer,
     EngineRoundResult,
     EngineState,
@@ -31,10 +29,26 @@ from dracula.engine import (
     derive_game_outcome,
     other_player,
 )
+from dracula.game.scoring import round_score_deciding_rank
 
 
-def phase_for_state(state: EngineState, human_role: EnginePlayer) -> ResumablePhase:
-    """Project engine lifecycle into the browser's resumable presentation phase."""
+@dataclass(frozen=True, slots=True)
+class RoundPresentation:
+    """Scoring fields shared by local and stateless completed-round records."""
+
+    round_number: int
+    dealer: Player
+    coffin: tuple[str, str, str, str, str, str, str, str, str]
+    line_scores: tuple[ApiLineScore, ...]
+    scoring_sequence: tuple[ScoringStep, ...]
+    round_scores: PlayerScore
+
+
+def phase_for_state(
+    state: EngineState,
+    human_role: EnginePlayer,
+) -> HumanTurnPhase | ScoringPhase | GameCompletePhase:
+    """Project a settled engine state into its browser-facing phase."""
 
     if state.status is EngineStatus.GAME_COMPLETE:
         outcome = derive_game_outcome(state)
@@ -47,10 +61,12 @@ def phase_for_state(state: EngineState, human_role: EnginePlayer) -> ResumablePh
         )
         return GameCompletePhase(outcome=winner)
     if state.status is EngineStatus.ROUND_COMPLETE:
-        return ScoringPhase(round_number=state.round_number, next_step_index=0)
+        return ScoringPhase(round_number=state.round_number)
     if state.active_player is human_role:
         return HumanTurnPhase()
-    return OpponentTurnPhase(status="ready")
+    # The stateless service finishes every automatic opponent move before it
+    # projects a response; reaching this branch would violate that boundary.
+    raise ValueError("cannot project an unsettled opponent turn")
 
 
 def player_score(values: PlayerValues[int], human_role: EnginePlayer) -> PlayerScore:
@@ -58,18 +74,6 @@ def player_score(values: PlayerValues[int], human_role: EnginePlayer) -> PlayerS
 
     return PlayerScore(
         human=values[human_role], opponent=values[other_player(human_role)]
-    )
-
-
-def played_move(move: EnginePlayedMove) -> PlayedMove:
-    """Project an accepted engine move into the shared public API shape."""
-
-    return PlayedMove(
-        player=move.player.value,
-        card_id=move.card_id,
-        hand_slot=move.hand_slot,
-        position=move.global_grid_index,
-        turn_number=move.turn_number,
     )
 
 
@@ -165,9 +169,9 @@ def _score_comparison_steps(
     opponent_totals = sorted(
         (line.total for line in result.line_scores[opponent]), reverse=True
     )
+    selected_rank = round_score_deciding_rank(human_totals, opponent_totals)
     steps: list[ScoringStep] = []
-    selected_rank = 2
-    for rank in range(3):
+    for rank in range(selected_rank + 1):
         tied = human_totals[rank] == opponent_totals[rank]
         steps.append(
             ScoringStep(
@@ -182,9 +186,6 @@ def _score_comparison_steps(
                 },
             )
         )
-        if rank < 2 and not tied:
-            selected_rank = rank
-            break
     return steps, selected_rank
 
 
@@ -200,52 +201,64 @@ def _scoring_sequence(
     steps = _line_scoring_steps(result)
     comparisons, selected_rank = _score_comparison_steps(result, human_role)
     steps.extend(comparisons)
-    opponent = other_player(human_role)
-    steps.append(
-        ScoringStep(
-            kind="select_round_score",
-            player=None,
-            line=None,
-            details={
-                "rank": selected_rank + 1,
-                "human_score": result.round_scores[human_role],
-                "opponent_score": result.round_scores[opponent],
-            },
-        )
-    )
-    steps.append(
-        ScoringStep(
-            kind="update_total",
-            player=None,
-            line=None,
-            details={
-                "human_previous": previous_totals[human_role],
-                "human_round": result.round_scores[human_role],
-                "human_total": previous_totals[human_role]
-                + result.round_scores[human_role],
-                "opponent_previous": previous_totals[opponent],
-                "opponent_round": result.round_scores[opponent],
-                "opponent_total": previous_totals[opponent]
-                + result.round_scores[opponent],
-            },
-        )
-    )
+    steps.append(_selected_score_step(result, human_role, selected_rank))
+    steps.append(_total_update_step(result, human_role, previous_totals))
     return tuple(steps)
 
 
-def round_record(
+def _selected_score_step(
+    result: EngineRoundResult,
+    human_role: EnginePlayer,
+    selected_rank: int,
+) -> ScoringStep:
+    opponent = other_player(human_role)
+    return ScoringStep(
+        kind="select_round_score",
+        player=None,
+        line=None,
+        details={
+            "rank": selected_rank + 1,
+            "human_score": result.round_scores[human_role],
+            "opponent_score": result.round_scores[opponent],
+        },
+    )
+
+
+def _total_update_step(
     result: EngineRoundResult,
     human_role: EnginePlayer,
     previous_totals: PlayerValues[int],
-) -> RoundRecord:
-    """Project one completed result and its deterministic scoring presentation."""
+) -> ScoringStep:
+    opponent = other_player(human_role)
+    return ScoringStep(
+        kind="update_total",
+        player=None,
+        line=None,
+        details={
+            "human_previous": previous_totals[human_role],
+            "human_round": result.round_scores[human_role],
+            "human_total": previous_totals[human_role]
+            + result.round_scores[human_role],
+            "opponent_previous": previous_totals[opponent],
+            "opponent_round": result.round_scores[opponent],
+            "opponent_total": previous_totals[opponent]
+            + result.round_scores[opponent],
+        },
+    )
+
+
+def round_presentation(
+    result: EngineRoundResult,
+    human_role: EnginePlayer,
+    previous_totals: PlayerValues[int],
+) -> RoundPresentation:
+    """Build the transport-independent scoring fields for one finished round."""
 
     line_order = (result.dealer, other_player(result.dealer))
-    return RoundRecord(
+    return RoundPresentation(
         round_number=result.round_number,
         dealer=result.dealer.value,
         coffin=result.coffin,
-        moves=tuple(played_move(move) for move in result.moves),
         line_scores=tuple(
             _api_line(line)
             for player in line_order

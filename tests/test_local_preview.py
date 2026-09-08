@@ -6,20 +6,14 @@ and remain suitable for exercising the production frontend's dialogue timing.
 
 from __future__ import annotations
 
-import json
-
-from dracula.api.local_preview import LocalDummyNarrationAdapter
-from dracula.api.narration import NarrationPrompt
+from dracula.api.preview import LocalDummyNarrationAdapter
+from dracula.api.narration.cues import GroundedNarrationCue
+from dracula.api.narration.prompt import NarrationPrompt
 
 
 def _generate(cue_type: str, facts: dict[str, object]) -> str:
-    prompt = NarrationPrompt(
-        system_text="unused local fixture",
-        user_text=json.dumps(
-            {"cue_type": cue_type, "public_facts": facts},
-            sort_keys=True,
-        ),
-    )
+    cue = GroundedNarrationCue(cue_type, facts)  # type: ignore[arg-type]
+    prompt = NarrationPrompt("fixture", "fixture", source_cue=cue)
     return LocalDummyNarrationAdapter().generate(prompt).text
 
 

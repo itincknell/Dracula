@@ -14,6 +14,7 @@
   min-width: 0;
 }
 
+/* Desktop scoring places the completed coffin beside the calculation area. */
 .scoring-coffin {
   display: grid;
   grid-template-columns: repeat(3, minmax(64px, 1fr));
@@ -37,9 +38,12 @@
 }
 .scoring-card.active-series { border-color: var(--blood-hot); box-shadow: 0 0 15px rgb(193 39 70 / 34%); }
 .scoring-card.multiplier-card { border-color: var(--cyan); box-shadow: inset 0 0 0 3px #071113, 0 0 16px rgb(85 217 207 / 40%); }
+/* Width and height animate while transform scale stays at 1. This avoids the
+ * fractional transform resampling that caused card-image shimmer. */
 .scoring-coffin[data-reduced-motion="false"] .scoring-card.score-pop { animation: score-card-pop 280ms steps(3, end); }
 .scoring-coffin[data-reduced-motion="false"] .scoring-card.score-ripple { animation: score-card-ripple 280ms steps(3, end); animation-delay: calc(var(--ripple-order) * 70ms); }
 
+/* Every scoring workspace shares one frame, preventing layout jumps between stages. */
 .calculation-workspace,
 .round-comparison,
 .selected-round-scores,
@@ -63,6 +67,7 @@
 .score-expression.collapse_sum, .score-expression.line_total { animation: expression-collapse 380ms steps(4, end); }
 .multiplier-description { color: var(--gold); font-family: "Silkscreen", monospace; font-size: 0.55em; line-height: 1.15; text-transform: uppercase; }
 
+/* Reserved height keeps the line-total strip stable as values appear. */
 .completed-line-totals,
 .ranked-line-totals { display: flex; justify-content: center; gap: 18px; min-height: 42px; }
 
@@ -73,10 +78,12 @@
 .selected-round-scores,
 .round-totals { grid-column: 1 / -1; justify-self: center; width: min(100%, 700px); display: grid; grid-template-columns: 1fr 1fr; gap: clamp(24px, 6vw, 70px); }
 
+/* Human and Dracula columns share grid rules so labels and numbers align. */
 .comparison-column,
 .selected-round-scores > div,
 .round-totals > div { display: grid; justify-items: center; gap: 10px; }
 .round-totals > div {
+  /* Empty side columns center the right-aligned number stack as one unit. */
   grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr);
   column-gap: 0;
 }
@@ -107,6 +114,7 @@
 .final-outcome h2 { margin: 0; font-size: clamp(38px, 6vw, 62px); }
 .scoring-presentation[data-reduced-motion="true"] * { animation: none !important; transition: none !important; }
 
+/* Stepped keyframes provide the locked arcade bounce and cursor behavior. */
 @keyframes target-pulse { 50% { border-color: #b6fff8; } }
 @keyframes score-pop { 50% { transform: scale(1.08); } }
 @keyframes score-card-pop { 50% { width: 108%; height: 108%; } }

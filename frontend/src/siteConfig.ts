@@ -1,7 +1,11 @@
 /**
- * Resolves navigation links for local development and the deployed Pages path.
- * Build-time values may replace defaults, while callers receive one stable set
- * of home, rules, about, and contact destinations.
+ * Resolve the four links displayed in the application shell.
+ *
+ * Vite supplies `BASE_URL` as `/` during local development and `/Dracula/` in
+ * the production build. Home and Rules belong to this application and must
+ * remain under that base path. About and Contact belong to the surrounding
+ * personal site, so their root-relative paths deliberately do not include the
+ * application base.
  */
 export interface SiteLinks {
   home: string;
@@ -10,20 +14,19 @@ export interface SiteLinks {
   contact: string;
 }
 
-export function resolveSiteLinks(environment: {
-  BASE_URL?: string;
-  VITE_RULES_URL?: string;
-  VITE_ABOUT_URL?: string;
-  VITE_CONTACT_URL?: string;
-}): SiteLinks {
-  const base = environment.BASE_URL?.trim() || "/";
+/** Build navigation links from Vite's application base path. */
+export function resolveSiteLinks(baseUrl?: string): SiteLinks {
+  const base = baseUrl?.trim() || "/";
+  // A trailing slash lets both `/` and `/Dracula/` accept the same appended
+  // hash route without producing malformed paths.
   const normalizedBase = base.endsWith("/") ? base : `${base}/`;
   return {
     home: normalizedBase,
-    rules: environment.VITE_RULES_URL?.trim() || `${normalizedBase}#/rules`,
-    about: environment.VITE_ABOUT_URL?.trim() || "/about",
-    contact: environment.VITE_CONTACT_URL?.trim() || "/contact",
+    rules: `${normalizedBase}#/rules`,
+    about: "/about",
+    contact: "/contact",
   };
 }
 
-export const siteLinks = resolveSiteLinks(import.meta.env);
+/** The single link set used by the running application. */
+export const siteLinks = resolveSiteLinks(import.meta.env.BASE_URL);

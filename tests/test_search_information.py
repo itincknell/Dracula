@@ -10,9 +10,9 @@ from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
-from dracula.bridge import action_index_for_move
-from dracula.cards import CARD_IDS, sort_card_ids
-from dracula.engine import (
+from dracula.decision.bridge import action_index_for_move
+from dracula.game.cards import CARD_IDS, sort_card_ids
+from dracula.game.engine import (
     EnginePlayer,
     EngineStatus,
     PlayerValues,
@@ -23,8 +23,8 @@ from dracula.engine import (
     legal_moves,
     other_player,
 )
-from dracula.engine_dealing import as_hand, deal_round, shuffled_deck, starting_coffin
-from dracula.search.information import (
+from dracula.game.dealing import as_hand, deal_round, shuffled_deck, starting_coffin
+from dracula.decision.information import (
     PublicGameHistory,
     PublicPlayedMove,
     canonical_information_data,

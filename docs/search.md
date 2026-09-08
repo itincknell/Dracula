@@ -1,9 +1,9 @@
 # Search, symmetry, and policy move selection
 
 Standalone `pi1` remains the selected production opponent. The repository also
-retains the two BGC-128 controllers that produced its training lineage: the
-original belief-greedy continuation and the phase-two policy continuation.
-They are maintained search and evaluation code, not Lambda gameplay fallbacks.
+retains information-set UCT with two interchangeable continuation policies:
+belief-greedy completion scoring and standalone policy inference. This is
+maintained search and evaluation code, not a Lambda gameplay fallback.
 
 ## Information boundary
 
@@ -111,9 +111,9 @@ Every other occupied-position pattern retains each legal destination as its
 own group. The two three-card cases are recognized only from their exact board
 patterns. Different hand cards always remain separate actions.
 
-## BGC-128 outer search
+## Information-set UCT
 
-`BGCInformationSetSearch` runs 128 round-local UCT simulations. Each simulation
+`InformationSetUCTSearch` runs 128 round-local UCT simulations. Each simulation
 samples a complete hidden world using only the root player's information state.
 Whenever another simulated actor must decide, that actor receives a newly
 projected `SearchInformationState`; the continuation policy never receives the
@@ -136,20 +136,18 @@ The retained configuration is:
 
 ## Continuation policies
 
-The original BGC continuation evaluates every legal strategic group over eight
+The belief-greedy continuation evaluates every legal strategic group over eight
 shared samples of the acting player's unseen cards. For each group it places the
 candidate card at the representative destination, fills the remaining round in
 a deterministic sampled order, and uses exact engine scoring. It chooses the
 highest mean actor-relative differential, breaking an exact tie by canonical
 representative index.
 
-The phase-two continuation replaces only that response calculation with one
-policy inference. It uses the current 659-bit observation encoder, final model
-artifact loader, representative mask, canonical argmax, and paired-destination
-coin. Outer sampling, UCT, symmetry, transitions, and terminal scoring remain
-the same. The adapter is artifact-neutral: the D1 experiment supplied `pi0`;
-the same final tensor contract can load another verified policy artifact for a
-controlled comparison.
+The policy continuation instead chooses each response with one policy
+inference. It uses the current 659-bit observation encoder, final model artifact
+loader, representative mask, canonical argmax, and paired-destination coin.
+Outer sampling, UCT, symmetry, transitions, and terminal scoring remain the
+same.
 
 ## Representative actions
 

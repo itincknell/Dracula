@@ -1,6 +1,7 @@
 """Define the shared boundary between outer search and response selection.
 
-The outer BGC search owns hidden-world sampling, engine transitions, and value
+The outer information-set UCT search owns hidden-world sampling, engine
+transitions, and value
 backup. A continuation policy sees only the simulated actor's information and
 returns one move. The immutable records below carry that decision, aggregate
 search evidence, and private diagnostics without coupling search to a specific
@@ -13,9 +14,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from dracula.engine import EnginePlayer, EngineRoundResult, other_player
-from dracula.search.information import SearchInformationState
-from dracula.strategic_actions import StrategicActionGroup
+from dracula.game.engine import EnginePlayer, EngineRoundResult, other_player
+from dracula.decision.information import SearchInformationState
+from dracula.decision.strategic_actions import StrategicActionGroup
 
 # Both outer UCT and belief-greedy responses use this fixed scale. It preserves
 # score ordering while keeping score differences comparable with UCT exploration.
@@ -90,7 +91,7 @@ class ContinuationDecision:
 
 
 class ContinuationPolicy(Protocol):
-    """Interface for choosing simulated responses inside outer BGC search.
+    """Choose simulated responses inside information-set UCT search.
 
     Implementations may use belief completions or one policy inference, but
     receive only ``SearchInformationState`` for the actor taking the move.

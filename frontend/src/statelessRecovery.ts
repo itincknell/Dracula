@@ -7,12 +7,14 @@ import { assertRecoveryEnvelope, type RecoveryEnvelope } from "./statelessContra
 
 export const RECOVERY_STORAGE_KEY = "dracula.recovery-envelope";
 
+/** The three localStorage operations used here, kept injectable for tests. */
 export interface BrowserStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
 }
 
+/** Return the browser's persistent storage and reject non-browser execution. */
 export function defaultBrowserStorage(): BrowserStorage {
   if (typeof window === "undefined") {
     throw new Error("browser storage is unavailable");
@@ -20,27 +22,37 @@ export function defaultBrowserStorage(): BrowserStorage {
   return window.localStorage;
 }
 
+/**
+ * Store and recover the seed-plus-command envelope as JSON.
+ *
+ * Saving does not validate a second time because envelopes reach this class
+ * only after the API response boundary. Loading does validate because users,
+ * extensions, or an older build may have changed localStorage while the
+ * application was not running.
+ */
 export class RecoveryEnvelopeStore {
   constructor(private readonly storage: BrowserStorage) {}
 
   save(envelope: RecoveryEnvelope): RecoveryEnvelope {
     this.storage.setItem(RECOVERY_STORAGE_KEY, JSON.stringify(envelope));
-    return structuredClone(envelope);
+    return envelope;
   }
 
+  /** Parse and validate saved state, clearing it if it cannot be trusted. */
   load(): RecoveryEnvelope | null {
     const encoded = this.storage.getItem(RECOVERY_STORAGE_KEY);
     if (encoded === null) return null;
     try {
       const parsed: unknown = JSON.parse(encoded);
       assertRecoveryEnvelope(parsed);
-      return structuredClone(parsed);
+      return parsed;
     } catch {
       this.clear();
       throw new TypeError("The saved game was malformed and has been cleared.");
     }
   }
 
+  /** Remove the only locally persisted game value. */
   clear(): void {
     this.storage.removeItem(RECOVERY_STORAGE_KEY);
   }

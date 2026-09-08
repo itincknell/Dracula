@@ -30,15 +30,12 @@ encryption. Users may inspect or alter their single-player game data. Strict
 bounded parsing and engine replay reject malformed or impossible histories.
 There is no production database.
 
-SQLite remains local development and test infrastructure only.
+## FastAPI serves the complete game
 
-## Hosting is split by responsibility
-
-GitHub Pages serves the React application at
-`https://ian-tincknell.com/Dracula/`. Cloudflare remains DNS authority. A
-Cloudflare `api` CNAME directs `api.ian-tincknell.com` to a Regional API Gateway
-custom domain. API Gateway invokes one Lambda container containing FastAPI, the
-engine, and `pi1`.
+One Lambda image contains the React distribution, FastAPI, engine, and `pi1`.
+Cloudflare forwards `/Dracula/` and `/Dracula/api` to API Gateway's generated
+HTTPS endpoint. Other personal-site paths remain on GitHub Pages. No separate
+Dracula Pages publication, API custom domain, or ACM certificate is required.
 
 ## Bedrock narration is sparse
 
@@ -50,12 +47,11 @@ There is no move banter or per-score narration.
 The browser controls presentation timing. Bedrock receives only a public cue
 and cannot block or mutate gameplay.
 
-## Training lineage is evidence, not runtime
+## Training remains separate from runtime
 
-BGC-128 produced balanced root-visit targets for `pi0`; `pi0` continuations
-produced D1; D1 trained `pi1`. PPO, recurrent policies, critics, original
-information-set search, shallow Teacher v2, response rankers, expert iteration,
-Sam-128, and hybrid serving remain historical evidence.
+Maintained information-set UCT and policy-training code support future model
+work, but neither runs inside production gameplay. The deployed service loads
+only the selected standalone artifact.
 
 ## The frontend shows game-relevant knowledge
 

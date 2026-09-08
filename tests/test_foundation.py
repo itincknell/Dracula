@@ -6,7 +6,7 @@ import hashlib
 
 import pytest
 
-from dracula.cards import (
+from dracula.game.cards import (
     CARD_BY_ID,
     CARD_IDS,
     CARD_INDEX_BY_ID,
@@ -15,7 +15,7 @@ from dracula.cards import (
     Suit,
     card_by_index,
 )
-from dracula.engine import (
+from dracula.game.engine import (
     EnginePlayer,
     create_initial_deal,
     deal_round,
@@ -55,7 +55,7 @@ def test_card_metadata_preserves_rules_relevant_identity() -> None:
 
 
 def test_local_seed_and_random_generator_are_repeatable() -> None:
-    assert stable_seed("deal", 12) == stable_seed("deal", 12)
+    assert stable_seed("deal", 12) == 2589705311707625369
     assert stable_seed("deal", 12) != stable_seed("deal", 13)
     first = deterministic_random("fixture", 9)
     second = deterministic_random("fixture", 9)

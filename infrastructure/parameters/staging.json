@@ -1,20 +1,62 @@
 [
-  {"ParameterKey": "ProjectName", "ParameterValue": "dracula-api"},
-  {"ParameterKey": "EnvironmentName", "ParameterValue": "staging"},
-  {"ParameterKey": "AllowedFrontendOrigin", "ParameterValue": "https://ian-tincknell.com"},
-  {"ParameterKey": "LambdaMemoryMb", "ParameterValue": "2048"},
-  {"ParameterKey": "LambdaTimeoutSeconds", "ParameterValue": "20"},
-  {"ParameterKey": "ReservedConcurrency", "ParameterValue": "2"},
-  {"ParameterKey": "ReplayCacheEntries", "ParameterValue": "256"},
-  {"ParameterKey": "NarrationEnabled", "ParameterValue": "false"},
-  {"ParameterKey": "BedrockModelId", "ParameterValue": ""},
-  {"ParameterKey": "BedrockModelArn", "ParameterValue": ""},
-  {"ParameterKey": "NarrationTimeoutSeconds", "ParameterValue": "8"},
-  {"ParameterKey": "NarrationMaxTokens", "ParameterValue": "96"},
-  {"ParameterKey": "LogRetentionDays", "ParameterValue": "14"},
-  {"ParameterKey": "MonthlyBudgetUsd", "ParameterValue": "0"},
-  {"ParameterKey": "BudgetNotificationEmail", "ParameterValue": ""},
-  {"ParameterKey": "AlarmNotificationEmail", "ParameterValue": ""},
-  {"ParameterKey": "CustomDomainName", "ParameterValue": ""},
-  {"ParameterKey": "CustomDomainCertificateArn", "ParameterValue": ""}
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "dracula-api"
+  },
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "staging"
+  },
+  {
+    "ParameterKey": "LambdaMemoryMb",
+    "ParameterValue": "2048"
+  },
+  {
+    "ParameterKey": "LambdaTimeoutSeconds",
+    "ParameterValue": "20"
+  },
+  {
+    "ParameterKey": "ReservedConcurrency",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "ReplayCacheEntries",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "NarrationEnabled",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "BedrockModelId",
+    "ParameterValue": "amazon.nova-lite-v1:0"
+  },
+  {
+    "ParameterKey": "BedrockModelArn",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "NarrationTimeoutSeconds",
+    "ParameterValue": "8"
+  },
+  {
+    "ParameterKey": "NarrationMaxTokens",
+    "ParameterValue": "96"
+  },
+  {
+    "ParameterKey": "LogRetentionDays",
+    "ParameterValue": "14"
+  },
+  {
+    "ParameterKey": "MonthlyBudgetUsd",
+    "ParameterValue": "0"
+  },
+  {
+    "ParameterKey": "BudgetNotificationEmail",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "AlarmNotificationEmail",
+    "ParameterValue": ""
+  }
 ]

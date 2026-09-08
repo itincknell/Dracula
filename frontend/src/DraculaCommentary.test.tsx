@@ -43,6 +43,11 @@ describe("Dracula portrait state", () => {
     expect(draculaMood(view({ round_number: 4, total_scores: { human: 30, opponent: 31 } })))
       .toBe("winning");
     expect(draculaMood(view({
+      round_number: 3,
+      status: "round_complete",
+      total_scores: { human: 30, opponent: 31 },
+    }))).toBe("winning");
+    expect(draculaMood(view({
       round_number: 6,
       status: "game_complete",
       total_scores: { human: 101, opponent: 100 },
@@ -75,7 +80,6 @@ describe("Dracula portrait state", () => {
           total_scores: { human: 100, opponent: 40 },
         })}
         narration={{
-          enabled: true,
           pending: false,
           messages: ["Opening", "One", "Two", "Three", "Four"],
         }}
@@ -104,7 +108,7 @@ describe("Dracula portrait state", () => {
     const rendered = render(
       <DraculaCommentary
         view={view({ total_scores: { human: 0, opponent: 0 } })}
-        narration={{ enabled: true, pending: false, messages: ["Opening"] }}
+        narration={{ pending: false, messages: ["Opening"] }}
       />,
     );
     act(() => vi.advanceTimersByTime(34));
@@ -121,7 +125,7 @@ describe("Dracula portrait state", () => {
           status: "round_complete",
           total_scores: { human: 100, opponent: 20 },
         })}
-        narration={{ enabled: true, pending: true, messages: ["Opening"] }}
+        narration={{ pending: true, messages: ["Opening"] }}
       />,
     );
     expect(portrait).toHaveAttribute("data-mood", "default");
@@ -135,7 +139,7 @@ describe("Dracula portrait state", () => {
           status: "round_complete",
           total_scores: { human: 100, opponent: 20 },
         })}
-        narration={{ enabled: true, pending: false, messages: ["Opening", "New taunt"] }}
+        narration={{ pending: false, messages: ["Opening", "New taunt"] }}
       />,
     );
     expect(rendered.container.querySelector(".portrait-placeholder"))
@@ -155,7 +159,7 @@ describe("Dracula portrait state", () => {
     const rendered = render(
       <DraculaCommentary
         view={losing}
-        narration={{ enabled: true, pending: false, messages: ["A narrow defeat."] }}
+        narration={{ pending: false, messages: ["A narrow defeat."] }}
       />,
     );
 
@@ -166,7 +170,7 @@ describe("Dracula portrait state", () => {
     rendered.rerender(
       <DraculaCommentary
         view={{ ...losing, status: "playing", round_number: 5 }}
-        narration={{ enabled: true, pending: false, messages: ["A narrow defeat."] }}
+        narration={{ pending: false, messages: ["A narrow defeat."] }}
       />,
     );
     expect(rendered.container.querySelector(".portrait-placeholder"))
@@ -183,7 +187,7 @@ describe("Dracula portrait state", () => {
     const rendered = render(
       <DraculaCommentary
         view={losing}
-        narration={{ enabled: true, pending: false, messages: ["You will regret this."] }}
+        narration={{ pending: false, messages: ["You will regret this."] }}
       />,
     );
 
@@ -195,7 +199,7 @@ describe("Dracula portrait state", () => {
     rendered.rerender(
       <DraculaCommentary
         view={{ ...losing, status: "playing", round_number: 5 }}
-        narration={{ enabled: true, pending: false, messages: ["You will regret this."] }}
+        narration={{ pending: false, messages: ["You will regret this."] }}
       />,
     );
     expect(portrait).toHaveAttribute("data-mood", "angriest");
@@ -212,7 +216,7 @@ describe("Dracula portrait state", () => {
     let rendered = render(
       <DraculaCommentary
         view={finalLoss}
-        narration={{ enabled: true, pending: false, messages: ["Impossible!"] }}
+        narration={{ pending: false, messages: ["Impossible!"] }}
       />,
     );
 
@@ -230,7 +234,7 @@ describe("Dracula portrait state", () => {
           status: "playing",
           total_scores: { human: 0, opponent: 0 },
         }}
-        narration={{ enabled: true, pending: false, messages: ["Welcome."] }}
+        narration={{ pending: false, messages: ["Welcome."] }}
       />,
     );
     portrait = rendered.container.querySelector(".portrait-placeholder");
@@ -243,9 +247,11 @@ describe("retro dialogue", () => {
   it("reveals text one character at a time while moving a block cursor", () => {
     vi.useFakeTimers();
     const rendered = render(<RetroDialogue text="Bite!" characterDelayMs={10} />);
-    const visible = rendered.container.querySelector<HTMLElement>("[aria-hidden='true']");
+    const visible = rendered.container.querySelector<HTMLElement>(".commentary-typed");
     expect(visible).toHaveTextContent("█");
     expect(visible).not.toHaveTextContent("Bite!");
+    expect(rendered.container.querySelector(".commentary-measure"))
+      .toHaveTextContent("Bite!█");
 
     act(() => vi.advanceTimersByTime(30));
     expect(visible).toHaveTextContent("Bit█");

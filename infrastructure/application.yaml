@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Stateless Dracula FastAPI, Lambda, Bedrock, and Regional HTTP API.
+Description: Dracula frontend, stateless FastAPI, Lambda, and Bedrock.
 
 Metadata:
   cfn-lint:
@@ -7,6 +7,8 @@ Metadata:
       ignore_checks: [W1030]
 
 Parameters:
+  # Deployment commands supply environment-specific resource, capacity, and
+  # integration choices. Bounds reject accidental unbounded Lambda settings.
   ProjectName:
     Type: String
     Default: dracula-api
@@ -18,9 +20,6 @@ Parameters:
     Type: String
     Description: Immutable ECR image URI including an at-sign SHA-256 digest.
     AllowedPattern: ".+@sha256:[0-9a-f]{64}"
-  AllowedFrontendOrigin:
-    Type: String
-    AllowedPattern: "https://[^/]+"
   LambdaMemoryMb:
     Type: Number
     Default: 2048
@@ -34,8 +33,9 @@ Parameters:
   ReservedConcurrency:
     Type: Number
     Default: 2
-    MinValue: 1
+    MinValue: -1
     MaxValue: 20
+    Description: Function cap; -1 uses the shared account concurrency pool.
   ReplayCacheEntries:
     Type: Number
     Default: 256
@@ -76,15 +76,10 @@ Parameters:
   AlarmNotificationEmail:
     Type: String
     Default: ""
-  CustomDomainName:
-    Type: String
-    Default: ""
-  CustomDomainCertificateArn:
-    Type: String
-    Default: ""
-    AllowedPattern: "(^$)|(^arn:aws[a-zA-Z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/.+$)"
 
 Rules:
+  # CloudFormation stops before creating resources when optional features have
+  # only part of their required configuration.
   NarrationConfigurationIsComplete:
     RuleCondition: !Equals [!Ref NarrationEnabled, "true"]
     Assertions:
@@ -92,34 +87,28 @@ Rules:
           - !Not [!Equals [!Ref BedrockModelId, ""]]
           - !Not [!Equals [!Ref BedrockModelArn, ""]]
         AssertDescription: Narration requires both a Bedrock model ID and ARN.
-  CustomDomainConfigurationIsComplete:
-    Assertions:
-      - Assert: !Or
-          - !And
-            - !Equals [!Ref CustomDomainName, ""]
-            - !Equals [!Ref CustomDomainCertificateArn, ""]
-          - !And
-            - !Not [!Equals [!Ref CustomDomainName, ""]]
-            - !Not [!Equals [!Ref CustomDomainCertificateArn, ""]]
-        AssertDescription: Custom domain name and certificate ARN must be supplied together.
   BudgetConfigurationIsComplete:
     Assertions:
       - Assert: !Or
           - !And
-            - !Equals [!Ref MonthlyBudgetUsd, 0]
+            - !Equals [!Ref MonthlyBudgetUsd, "0"]
             - !Equals [!Ref BudgetNotificationEmail, ""]
           - !And
-            - !Not [!Equals [!Ref MonthlyBudgetUsd, 0]]
+            - !Not [!Equals [!Ref MonthlyBudgetUsd, "0"]]
             - !Not [!Equals [!Ref BudgetNotificationEmail, ""]]
         AssertDescription: Monthly budget and notification email must be supplied together.
 
 Conditions:
+  # Optional Bedrock, concurrency reservation, alarm, and budget settings disappear
+  # entirely when their corresponding parameter group is disabled.
   NarrationIsEnabled: !Equals [!Ref NarrationEnabled, "true"]
-  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
-  HasMonthlyBudget: !Not [!Equals [!Ref MonthlyBudgetUsd, 0]]
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, "-1"]]
+  HasMonthlyBudget: !Not [!Equals [!Ref MonthlyBudgetUsd, "0"]]
   HasAlarmNotification: !Not [!Equals [!Ref AlarmNotificationEmail, ""]]
 
 Resources:
+  # Lambda and API Gateway write to explicit retained log groups rather than
+  # allowing implicit groups with unlimited retention.
   FunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -181,6 +170,9 @@ Resources:
       Description: Stateless Dracula gameplay and optional narration API.
       Environment:
         Variables:
+          # Keep initialization progress when loading PyTorch exceeds Lambda's
+          # initial ten-second window; readiness still gates the first request.
+          AWS_LWA_ASYNC_INIT: "true"
           DRACULA_BEDROCK_MODEL_ID: !Ref BedrockModelId
           DRACULA_BEDROCK_REGION: !Ref AWS::Region
           DRACULA_NARRATION_ENABLED: !Ref NarrationEnabled
@@ -194,10 +186,13 @@ Resources:
         ApplicationLogLevel: INFO
         LogFormat: JSON
         LogGroup: !Ref FunctionLogGroup
-        SystemLogLevel: WARN
+        SystemLogLevel: INFO
       MemorySize: !Ref LambdaMemoryMb
       PackageType: Image
-      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      ReservedConcurrentExecutions: !If
+        - HasReservedConcurrency
+        - !Ref ReservedConcurrency
+        - !Ref AWS::NoValue
       Role: !GetAtt FunctionRole.Arn
       Timeout: !Ref LambdaTimeoutSeconds
       Tags:
@@ -209,11 +204,6 @@ Resources:
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
-      CorsConfiguration:
-        AllowHeaders: [content-type]
-        AllowMethods: [GET, POST]
-        AllowOrigins: [!Ref AllowedFrontendOrigin]
-        MaxAge: 86400
       Description: Stateless Dracula gameplay HTTP API.
       DisableExecuteApiEndpoint: false
       Name: !Sub ${ProjectName}-${EnvironmentName}
@@ -232,48 +222,38 @@ Resources:
       PayloadFormatVersion: "2.0"
       TimeoutInMillis: 29000
 
-  HealthRoute:
+  ApplicationRootRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref HttpApi
       AuthorizationType: NONE
-      RouteKey: GET /health
+      RouteKey: ANY /Dracula
       Target: !Sub integrations/${LambdaIntegration}
 
-  StartGameRoute:
+  ApplicationRoute:
+    # Forward the full application path; FastAPI separates files from JSON routes.
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref HttpApi
       AuthorizationType: NONE
-      RouteKey: POST /games
+      RouteKey: ANY /Dracula/{proxy+}
       Target: !Sub integrations/${LambdaIntegration}
 
-  CommandRoute:
+  StaticGetRoute:
+    # A page loads several images/fonts together. Give GETs their own burst
+    # allowance without increasing the rate of gameplay or Bedrock POSTs.
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref HttpApi
       AuthorizationType: NONE
-      RouteKey: POST /games/command
-      Target: !Sub integrations/${LambdaIntegration}
-
-  ResumeRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref HttpApi
-      AuthorizationType: NONE
-      RouteKey: POST /games/resume
-      Target: !Sub integrations/${LambdaIntegration}
-
-  NarrationRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref HttpApi
-      AuthorizationType: NONE
-      RouteKey: POST /narration
+      RouteKey: GET /Dracula/{proxy+}
       Target: !Sub integrations/${LambdaIntegration}
 
   HttpStage:
     Type: AWS::ApiGatewayV2::Stage
+    # RouteSettings names a route by text, so CloudFormation cannot infer this
+    # dependency. API Gateway requires that route to exist before stage creation.
+    DependsOn: [ApplicationRootRoute, ApplicationRoute, StaticGetRoute]
     Properties:
       AccessLogSettings:
         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
@@ -285,6 +265,10 @@ Resources:
         DetailedMetricsEnabled: false
         ThrottlingBurstLimit: 10
         ThrottlingRateLimit: 5
+      RouteSettings:
+        "GET /Dracula/{proxy+}":
+          ThrottlingBurstLimit: 50
+          ThrottlingRateLimit: 20
       StageName: $default
       Tags:
         Application: dracula
@@ -368,31 +352,6 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  RegionalDomain:
-    Type: AWS::ApiGatewayV2::DomainName
-    Condition: HasCustomDomain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W1030]
-    Properties:
-      DomainName: !Ref CustomDomainName
-      DomainNameConfigurations:
-        - CertificateArn: !Ref CustomDomainCertificateArn
-          EndpointType: REGIONAL
-          SecurityPolicy: TLS_1_2
-      Tags:
-        Application: dracula
-        Environment: !Ref EnvironmentName
-
-  RegionalDomainMapping:
-    Type: AWS::ApiGatewayV2::ApiMapping
-    Condition: HasCustomDomain
-    Properties:
-      ApiId: !Ref HttpApi
-      DomainName: !Ref RegionalDomain
-      Stage: !Ref HttpStage
-
   MonthlyCostBudget:
     Type: AWS::Budgets::Budget
     Condition: HasMonthlyBudget
@@ -407,8 +366,8 @@ Resources:
       NotificationsWithSubscribers:
         - Notification:
             ComparisonOperator: GREATER_THAN
-            NotificationType: FORECASTED
-            Threshold: 80
+            NotificationType: ACTUAL
+            Threshold: 100
             ThresholdType: PERCENTAGE
           Subscribers:
             - Address: !Ref BudgetNotificationEmail
@@ -421,12 +380,6 @@ Outputs:
     Value: !GetAtt HttpApi.ApiEndpoint
   FunctionArn:
     Value: !GetAtt GameplayFunction.Arn
-  RegionalCustomDomainTarget:
-    Condition: HasCustomDomain
-    Value: !GetAtt RegionalDomain.RegionalDomainName
-  RegionalHostedZoneId:
-    Condition: HasCustomDomain
-    Value: !GetAtt RegionalDomain.RegionalHostedZoneId
   OperationalAlarmTopicArn:
     Condition: HasAlarmNotification
     Value: !Ref OperationalAlarmTopic

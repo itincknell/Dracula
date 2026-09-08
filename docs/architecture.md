@@ -3,21 +3,20 @@
 ## Final deployment shape
 
 ```text
-ian-tincknell.com/Dracula/          api.ian-tincknell.com
-GitHub Pages React frontend  --->  API Gateway HTTP API
-                                          |
-                                          v
-                                  AWS Lambda container
-                                  FastAPI + engine + pi1
-                                          |
-                                          `-- Amazon Bedrock narration
+ian-tincknell.com/Dracula/ -> Cloudflare Worker -> API Gateway HTTP API
+                                                     |
+                                                     v
+                                             AWS Lambda container
+                                             FastAPI: frontend + API
+                                             engine + pi1 + Bedrock
+Other personal-site paths -> existing GitHub Pages website
 ```
 
-Cloudflare remains the DNS provider. The existing apex-domain records continue
-to direct `ian-tincknell.com` to GitHub Pages. A separate `api` CNAME directs
-`api.ian-tincknell.com` to the Regional API Gateway custom-domain target.
-GitHub Pages hosts only static frontend files. API Gateway invokes the Lambda
-container through the AWS Lambda Web Adapter.
+Cloudflare forwards only `/Dracula` and its child paths to the generated API
+Gateway HTTPS endpoint. The original GitHub Pages site remains the origin for
+other paths. API Gateway invokes the combined FastAPI container through Lambda
+Web Adapter. No separate API domain, certificate, or cross-origin request is
+needed. The public Worker route remains disabled until cutover is authorized.
 
 There is no SageMaker endpoint, production database, shared server session, or
 search process. The selected opponent is the standalone `pi1` policy model.
@@ -30,51 +29,33 @@ The deployment details and ordered release work are authoritative in
 The production image and CloudFormation definitions are implemented and
 locally validated. The image embeds the digest-verified `pi1`, runs the
 stateless FastAPI entry point through Lambda Web Adapter, and requires no
-persistent filesystem. Staging has not been created because the available AWS
-CLI session is not authenticated; see the
-[packaging report](../reports/active/lambda-packaging-and-infrastructure.md).
+persistent filesystem.
 
 ## Module ownership
 
-The refactored Python runtime has explicit, cycle-free owners:
+The Python package is divided by responsibility:
 
-- `dracula.engine` is the stable gameplay facade and owns legal moves,
-  transitions, and lifecycle orchestration. Domain values, dealing, scoring,
-  validation, and canonical serialization live in `engine_types`,
-  `engine_dealing`, `scoring`, `engine_validation`, and
-  `engine_serialization` respectively.
-- `search.information` owns actor-visible state and fingerprints;
-  `search.symmetry` owns the exhaustive early-turn destination table;
-  `search.determinization` reconstructs private sampled worlds; and
-  `search.bgc` owns the retained round-local UCT. `search.belief_greedy` and
-  `search.policy_continuation` provide the original and phase-two response
-  policies. These search controllers support provenance and comparison but are
-  not invoked by production gameplay.
-- `strategic_actions` owns strategic groups and deterministic concrete-member
-  choice. `action_contract` owns representative masks, proxy mapping, and
-  standalone output resolution.
-- `bgc_policy_model` owns the compact policy network, `bgc_policy` owns its
-  artifact contract, and `active_policy` is the selected `pi1` runtime. The
-  retained training path separates converted-corpus loading, metrics,
-  optimization, checkpoint persistence, contracts, immutable configuration,
-  command-line handling, and run coordination into the corresponding
-  `bgc_policy_*` modules.
-- `api.stateless_service` owns replay and command application;
-  `api.stateless_projection` owns the public view; `api.stateless_contracts`
-  owns production wire models; and `api.stateless_routes` plus
-  `api.stateless_app` own HTTP assembly. `api.production` is the Lambda entry
-  point. Repository-backed sessions remain isolated in the explicit local
-  application: `api.session` owns persisted values, `api.local_projection`
-  owns browser-safe views and move tokens, `api.local_session_events` owns
-  event construction, and `api.service` owns transactions.
-- `api.narration_cues` owns grounded cue construction, `api.narration` owns
-  provider-independent orchestration and failure isolation, and `api.bedrock`
-  owns provider transport.
+- `dracula.game` owns cards, immutable domain values, scoring, dealing,
+  validation, serialization, legal moves, transitions, and lifecycle.
+- `dracula.decision` owns the player-visible information boundary, action-space
+  bridge, destination symmetry, strategic groups, and representative masks.
+- `dracula.search` owns information-set UCT, private determinizations, tree and
+  simulation mechanics, and the belief-greedy and policy continuation choices.
+  Search supports training provenance and comparison but is not invoked by
+  production gameplay.
+- `dracula.policy` owns the compact neural model, observation encoding,
+  deployment artifact, gameplay runtime, and policy protocol. Offline dataset,
+  optimization, checkpoint, reporting, and CLI code lives under
+  `dracula.policy.training`.
+- `dracula.api.stateless` owns production replay and HTTP behavior;
+  `dracula.api.narration` owns grounded prompts and Bedrock transport; and
+  `dracula.api.production` is the Lambda composition root.
+  `dracula.api.development` and `dracula.api.preview` compose the same stateless
+  services for local work, with the preview supplying deterministic narration.
 
-Maintained code imports these owner modules directly. The retained model
-compatibility code is the verified reader for the sealed 659-bit `pi1`
-training corpus; restored BGC code uses the current information, symmetry,
-observation, and artifact contracts directly.
+Maintained code imports these owner packages directly. The retained training
+reader accepts the sealed 659-bit `pi1` corpus, and information-set UCT uses the
+same decision, symmetry, observation, and artifact contracts as production.
 
 The frontend follows the same separation:
 
@@ -84,8 +65,7 @@ The frontend follows the same separation:
 - `statelessApi`, `statelessRecovery`, `statelessProjection`, and
   `statelessNarration` own transport, browser persistence, pure response
   projection, and narration coordination. `statelessGameStore` owns gameplay
-  sequencing. The frontend supports only the stateless gameplay transport;
-  local session gameplay remains a Python API and operational-record surface.
+  sequencing. The frontend supports only the stateless gameplay transport.
 - `gameplay`, `DraculaCommentary`, `scoringStateMachine`,
   `ScoringWorkspaces`, and `ScoringPresentation` own presentation;
   `SeenCardsExpando` owns the public card ledger. Ordered `styles/base.css`,
@@ -112,7 +92,7 @@ Each mutation submits the current envelope and one requested command.
 FastAPI:
 
 1. Parses bounded JSON and rejects unknown fields or excessive history.
-2. Looks up the envelope digest in the current Lambda environment's local
+2. Looks up the immutable envelope in the current Lambda environment's local
    reconstruction cache.
 3. On a miss, creates the seeded game and replays every command through normal
    engine validation.
@@ -172,12 +152,10 @@ store, with SHA-256 digest
 It contains the selected weights and one format marker. The release build
 copies and verifies it inside the Lambda image.
 
-The repository retains the BGC-128 search lineage needed to review and reproduce
-the training process: the original eight-completion belief-greedy continuation
-and the phase-two `pi0` continuation. These controllers use the current 659-bit
-policy boundary and symmetry contract, but they are not production gameplay
-fallbacks. Sam, shallow search, PPO, response rankers, and hybrid-search
-implementations remain historical evidence only.
+The maintained information-set UCT can use either the eight-completion
+belief-greedy continuation or a supplied standalone-policy continuation. Both
+use the current 659-bit policy boundary and symmetry contract. Search remains
+offline tooling and is not a production gameplay fallback.
 
 ## Narrator scheduling
 
@@ -214,16 +192,14 @@ The production FastAPI route surface is:
 | `GET /health` | Report application, model-load, and Bedrock configuration health |
 
 The exact implemented gameplay schema is in
-[stateless gameplay API](stateless-api.md). The frontend calls
-`https://api.ian-tincknell.com` explicitly. API Gateway CORS
-allows the deployed GitHub Pages origin. No route accepts a caller-selected
+[stateless gameplay API](stateless-api.md). Production mounts these routes under
+`/Dracula/api`, and the frontend calls that same-origin prefix. No route accepts a caller-selected
 model, prompt, controller, or engine operation.
 
 ## Local architecture
 
-SQLite and the session-oriented API remain narrowly isolated local-development
-and historical-record infrastructure. The normal local preview uses the same
-stateless routes and replay cache as production.
+The local development server and dummy-dialogue preview use the same stateless
+routes and replay cache as production. They add no persistence layer.
 
 ## Required invariants
 

@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dracula.bridge import COFFIN_POSITION_COUNT, HAND_SLOT_COUNT, global_grid_index
-from dracula.cards import sort_card_ids
-from dracula.engine import (
+from dracula.decision.bridge import COFFIN_POSITION_COUNT, HAND_SLOT_COUNT, global_grid_index
+from dracula.game.cards import sort_card_ids
+from dracula.game.engine import (
     CENTER_GRID_INDEX,
     EnginePlayedMove,
     EnginePlayer,
@@ -28,7 +28,7 @@ from dracula.engine import (
     score_coffin,
 )
 from dracula.randomness import shuffled
-from dracula.search.information import (
+from dracula.decision.information import (
     InformationContractViolation,
     PublicPlayedMove,
     PublicRoundRecord,

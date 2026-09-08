@@ -4,6 +4,7 @@
  * can remain a simple document layout.
  */
 .cheat-sheet-window + .footer-links { margin-top: 24px; }
+/* The rules use a centered document width instead of game-board geometry. */
 .rules-page { max-width: 820px; }
 .rules-page > .wordmark { display: inline-block; margin: 14px 0 20px; }
 
@@ -16,6 +17,7 @@
   box-shadow: 9px 11px 0 #020203;
 }
 
+/* Contents links and section targets retain spacing suitable for direct hashes. */
 .rules-page article > header > p:last-child { color: var(--bone); font-size: 19px; }
 .rules-page section, .rules-sources { margin-top: 42px; scroll-margin-top: 24px; }
 .rules-page h2 { margin: 0 0 12px; color: var(--bone); font-size: clamp(32px, 5vw, 44px); }
@@ -23,6 +25,7 @@
 .rules-page li + li { margin-top: 8px; }
 .rules-contents { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 30px; padding: 17px 0; border-block: 1px solid #52333d; font-size: 10px; text-transform: uppercase; }
 .rules-table-scroll { max-width: 100%; overflow-x: auto; }
+/* A minimum table width favors horizontal scrolling over crushed rule labels. */
 .rules-page table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 15px; }
 .rules-page th, .rules-page td { padding: 11px 12px; border: 1px solid #55343f; text-align: left; }
 .rules-page tbody tr:nth-child(even) { background: rgb(135 22 47 / 8%); }

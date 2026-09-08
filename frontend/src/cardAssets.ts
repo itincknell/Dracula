@@ -5,7 +5,11 @@
  */
 import sourceAssets from "../card-assets.json";
 
-export const CANONICAL_CARD_IDS = Object.freeze(Object.keys(sourceAssets));
+export const CANONICAL_CARD_IDS = Object.freeze([
+  ...Object.keys(sourceAssets),
+  "V1",
+  "V2",
+]);
 
 const CARD_ASSET_URLS = Object.freeze(
   Object.fromEntries(

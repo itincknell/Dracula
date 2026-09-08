@@ -10,7 +10,7 @@ from dataclasses import replace
 
 import pytest
 
-from dracula.bridge import (
+from dracula.decision.bridge import (
     ACTION_COUNT,
     BridgeContractViolation,
     PolicyTurnKind,
@@ -23,7 +23,7 @@ from dracula.bridge import (
     resolve_policy_action,
     transpose_grid_index,
 )
-from dracula.engine import EnginePlayer, apply_move, create_game, legal_moves, other_player
+from dracula.game.engine import EnginePlayer, apply_move, create_game, legal_moves, other_player
 
 
 def test_grid_transpose_is_its_own_inverse() -> None:

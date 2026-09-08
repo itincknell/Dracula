@@ -37,9 +37,9 @@ receives only Dracula's player-relative observation.
 
 Staging exercises:
 
-1. `/health` under the API Gateway custom domain.
-2. GitHub Pages asset loading under `/Dracula/`.
-3. CORS restricted to the deployed frontend origin.
+1. `/Dracula/api/health` through the generated API Gateway HTTPS endpoint.
+2. FastAPI asset loading under `/Dracula/`, including exact binary file bytes.
+3. Same-origin API calls and no caching of gameplay or narration.
 4. Cold model initialization and warm reuse.
 5. Requests deliberately spread across fresh Lambda environments.
 6. Complete games as Queen and King.
@@ -52,8 +52,8 @@ Staging exercises:
 ## Operational data
 
 Normal logs contain request identity, route, duration, cache hit or miss,
-history length, opponent latency, action legality, Bedrock cue class, token
-usage, and failure category. Logs omit the game seed, action history, hands,
+history length, opponent latency, action legality, Bedrock cue class, generated
+narration text, token usage, and failure category. Logs omit the game seed, action history, hands,
 stock, model input, masks, logits, weights, and complete narrator prompt.
 
 No game database, backup, migration, or retention process exists. Browser-local
@@ -63,23 +63,29 @@ period. ECR image retention keeps the active release and rollback image.
 ## Cost boundary
 
 AWS cost comes from API Gateway requests, Lambda duration and memory, ECR image
-storage, CloudWatch, ACM-supported endpoints, and Bedrock input/output tokens.
+storage, CloudWatch, and Bedrock input/output tokens; Cloudflare Worker usage
+is accounted for separately.
 There is no database or SageMaker endpoint cost. Cost validation measures cold
 and warm request duration, model-load memory, narration tokens per complete
 game, expected traffic, and a bounded abuse case.
 
 ## Local development
 
-The normal local preview uses the stateless API and exact `pi1` artifact.
-SQLite remains only for explicit historical-record inspection and the retained
-local-stateful compatibility tests; it is not a production adapter.
+The normal local preview uses the same stateless API and exact `pi1` artifact
+as the production composition.
 
 ```bash
 make dev
 make preview
+make preview-dialogue
+make preview-bedrock
 make test
 make test-e2e
 ```
+
+`preview-dialogue` uses deterministic local text. `preview-bedrock` keeps the
+game and policy local while sending only eligible narration cues to Bedrock;
+credential setup is documented in the [narrator contract](narrator.md#local-bedrock-preview).
 
 The final deployment topology and remaining implementation phases are in
 [deployment](deployment.md).

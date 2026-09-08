@@ -131,8 +131,10 @@ text unreadable. Gameplay responses never force an automatic scroll.
 
 The human plays by dragging a card from their hand onto the coffin. Legal drop
 targets are derived from legal moves in `HumanGameView`. A valid drop maps to the
-corresponding server-issued `move_id`. Invalid positions do not accept the drop,
-and the hand is not updated until the server accepts the move.
+corresponding card, hand-slot, and coffin position. Invalid positions do not
+accept the drop. The frontend displays the proposed placement immediately and
+replaces it with the server's authoritative response or restores the prior view
+if the request fails.
 
 Touch and keyboard users can perform the same spatial action by selecting a
 card and then selecting a highlighted legal coffin position. This is a direct
@@ -298,12 +300,12 @@ The principal UI responsibilities are `GameStart`, `GameWindow`, `MainDisplay`,
 CSS Grid provides the outer desktop/narrow layouts and the coffin. Container
 queries, `aspect-ratio`, and bounded fluid sizing support internal scaling. Card
 assets use the Kenney Playing Cards Pack described below. Native browser drag
-events, tap selection, and keyboard selection share the same server-issued move
-ID path; no drag-and-drop framework owns game state.
+events, tap selection, and keyboard selection submit the same legal placement;
+no drag-and-drop framework owns game state.
 
-The production build uses the GitHub Pages base `/Dracula/` and the build-time
-API origin `https://api.ian-tincknell.com`. Its three in-app locations are hash
-fragments (`#/`, `#/game`, and `#/rules`) beneath the one Pages entry point, so
+FastAPI serves the production build at `/Dracula/` with same-origin API prefix
+`/Dracula/api`. Its three in-app locations are hash fragments (`#/`, `#/game`,
+and `#/rules`) beneath the one entry point, so
 direct navigation and refresh require neither a router dependency nor a copied
 404 page. Rules continues to open in a new tab.
 
@@ -377,9 +379,8 @@ The human hand uses a 72-pixel minimum card size and may grow to 110 pixels when
 space permits. Responsive layouts preserve that minimum so suit marks remain
 readable rather than shrinking the cards to avoid scrolling.
 
-The retired original portrait is not part of the active asset set. Four
-project-provided portraits use contained rendering in both regions so the full
-square artwork remains visible and unused side space is intentional:
+Four project-provided portraits use contained rendering in both regions so the
+full square artwork remains visible and unused side space is intentional:
 
 - `dracula-angry-frown.jpg` is the default.
 - `dracula-angrier-frown.jpg` appears whenever Dracula trails.
@@ -387,8 +388,8 @@ square artwork remains visible and unused side space is intentional:
   50 points in rounds 4–6.
 - `dracula-winning-grin.jpg` appears when Dracula leads in rounds 4–6.
 
-While current round dialogue is printing after the severe-loss state, the
-angrier and angriest portraits alternate until the user advances the round.
+Portrait changes occur when dialogue starts printing. A completed-game loss
+uses the static angriest portrait until the user starts another game.
 
 The Rules, About, and Contact destinations are configuration values. All three
 must resolve correctly, and Rules opens a new tab.

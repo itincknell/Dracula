@@ -18,6 +18,7 @@ function playerHeading(player: Player, humanRole: Player): string {
   return player === humanRole ? "Your Score" : "Dracula's Score";
 }
 
+/** Return the line addressed by frames that operate on one specific line. */
 function activeLine(
   model: ScoringPresentationModel,
   frame: ScoringFrame,
@@ -26,6 +27,11 @@ function activeLine(
   return model.orientations[frame.orientationIndex].lines[frame.lineIndex];
 }
 
+/**
+ * Render the completed coffin while marking cards used by the current frame.
+ * CSS owns motion; this component supplies stable classes for the active line,
+ * multiplier highlights, the current value pop, and the sum-collapse ripple.
+ */
 export function ScoringCoffin({
   model,
   frame,
@@ -49,6 +55,8 @@ export function ScoringCoffin({
       data-reduced-motion={reducedMotion}
     >
       {model.record.coffin.map((cardId, position) => {
+        // Card IDs are unique within a deck, so membership and ripple order can
+        // be derived from the active line without referring to grid geometry.
         const inLine = line?.line.card_ids.includes(cardId) ?? false;
         const emphasized = showEmphasis && (line?.line.highlighted_card_ids.includes(cardId) ?? false);
         const popping = popCard === cardId || (frame.kind === "line_total" && inLine);
@@ -74,6 +82,7 @@ export function ScoringCoffin({
   );
 }
 
+/** Display a Vampire card as zero while retaining its engine-supplied value. */
 function valueText(item: PresentedLine, cardIndex: number): string {
   const cardId = item.line.card_ids[cardIndex];
   if (
@@ -85,6 +94,7 @@ function valueText(item: PresentedLine, cardIndex: number): string {
   return String(item.values[cardIndex]);
 }
 
+/** Render every arithmetic stage for one row or column. */
 function LineWorkspace({
   model,
   frame,
@@ -97,6 +107,9 @@ function LineWorkspace({
 }) {
   const orientation = model.orientations[frame.orientationIndex];
   const item = orientation.lines[frame.lineIndex];
+
+  // The same fixed-height workspace changes only its expression as the line
+  // moves from card values to sum, multiplier description, factor, and total.
   let expression: ReactNode;
   if (frame.kind === "reveal_value") {
     expression = item.values.slice(0, frame.cardIndex + 1).map((_value, index) => valueText(item, index)).join(" + ");
@@ -109,6 +122,9 @@ function LineWorkspace({
   } else {
     expression = item.line.total;
   }
+
+  // Totals from earlier lines stay visible. The current total joins them only
+  // at its final line_total frame, keeping the tally synchronized with cards.
   const completed = orientation.lines.slice(0, frame.lineIndex).map((line) => line.line.total);
   if (frame.kind === "line_total") completed.push(item.line.total);
   return (
@@ -117,7 +133,7 @@ function LineWorkspace({
         <p className="score-heading">{playerHeading(orientation.player, model.humanRole)}</p>
         <p className="series-label">{item.line.direction === "row" ? "Row" : "Col"} {item.line.index + 1}</p>
       </div>
-      <div className={`score-expression ${frame.kind}`} data-stage={frame.kind}>{expression}</div>
+      <div className={`score-expression ${frame.kind}`}>{expression}</div>
       <div className="completed-line-totals" aria-label="Completed line totals">
         {completed.map((total, index) => <span key={`${index}-${total}`}>{total}</span>)}
       </div>
@@ -125,6 +141,7 @@ function LineWorkspace({
   );
 }
 
+/** Show one player's completed line totals in strongest-to-weakest order. */
 function RankedOrientation({
   model,
   orientationIndex,
@@ -138,16 +155,51 @@ function RankedOrientation({
       <div className="score-workspace-heading">
         <p className="score-heading">{playerHeading(orientation.player, model.humanRole)}</p>
       </div>
+      {/* This invisible-sized placeholder preserves the expression row while
+          the ranked totals replace the earlier arithmetic. */}
       <div className="score-expression score-expression-placeholder" aria-hidden="true">0</div>
       <div className="ranked-line-totals" aria-label="Ranked line totals">
         {orientation.rankedTotals.map((total, index) => (
-          <span key={index} data-rank={index + 1}>{total}</span>
+          <span key={index}>{total}</span>
         ))}
       </div>
     </section>
   );
 }
 
+function ComparisonColumn({
+  heading,
+  totals,
+  model,
+  comparisonIndex,
+}: {
+  heading: string;
+  totals: [number, number, number];
+  model: ScoringPresentationModel;
+  comparisonIndex: number;
+}) {
+  return (
+    <div className="comparison-column">
+      <h2>{heading}</h2>
+      {totals.map((total, index) => {
+        // Future ranks remain dim. Reached ties are struck and labeled before
+        // the animation moves to the next rank; the deciding rank is active.
+        const comparison = model.comparisons[index];
+        const reached = index <= comparisonIndex;
+        const tied = reached && comparison?.tied === true;
+        const className = tied ? "tied-score" : reached ? "active-score" : "pending-score";
+        return (
+          <span className={className} key={index}>
+            {total}
+            {tied ? <small>Tie</small> : null}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Compare the players' ranked line totals side by side until one differs. */
 function ComparisonWorkspace({
   model,
   comparisonIndex,
@@ -157,28 +209,23 @@ function ComparisonWorkspace({
 }) {
   return (
     <section className="round-comparison" aria-live="polite">
-      <div className="comparison-column">
-        <h2>Your Score</h2>
-        {model.humanRankedTotals.map((total, index) => {
-          const comparison = model.comparisons[index];
-          const reached = index <= comparisonIndex;
-          const tied = reached && comparison?.tied === true;
-          return <span className={tied ? "tied-score" : reached ? "active-score" : "pending-score"} key={index}>{total}{tied ? <small>Tie</small> : null}</span>;
-        })}
-      </div>
-      <div className="comparison-column">
-        <h2>Dracula's Score</h2>
-        {model.opponentRankedTotals.map((total, index) => {
-          const comparison = model.comparisons[index];
-          const reached = index <= comparisonIndex;
-          const tied = reached && comparison?.tied === true;
-          return <span className={tied ? "tied-score" : reached ? "active-score" : "pending-score"} key={index}>{total}{tied ? <small>Tie</small> : null}</span>;
-        })}
-      </div>
+      <ComparisonColumn
+        heading="Your Score"
+        totals={model.humanRankedTotals}
+        model={model}
+        comparisonIndex={comparisonIndex}
+      />
+      <ComparisonColumn
+        heading="Dracula's Score"
+        totals={model.opponentRankedTotals}
+        model={model}
+        comparisonIndex={comparisonIndex}
+      />
     </section>
   );
 }
 
+/** Show the two line totals selected as this round's official scores. */
 function SelectedScores({ model }: { model: ScoringPresentationModel }) {
   return (
     <section className="selected-round-scores" aria-live="polite">
@@ -188,25 +235,46 @@ function SelectedScores({ model }: { model: ScoringPresentationModel }) {
   );
 }
 
+/** Show round additions and resulting cumulative totals in aligned columns. */
 export function RoundTotals({ model }: { model: ScoringPresentationModel }) {
+  const columns = [
+    {
+      label: "Your Score",
+      owner: "Your",
+      round: model.totals.humanRound,
+      previous: model.totals.humanPrevious,
+      total: model.totals.humanTotal,
+    },
+    {
+      label: "Dracula's Score",
+      owner: "Dracula's",
+      round: model.totals.opponentRound,
+      previous: model.totals.opponentPrevious,
+      total: model.totals.opponentTotal,
+    },
+  ];
   return (
     <section className="round-totals" aria-label={`Round ${model.record.round_number} totals`}>
-      <div>
-        <span>Your Score</span>
-        <strong aria-label={`Your round score: ${model.totals.humanRound}`}>{model.totals.humanRound}</strong>
-        <span className="previous-total" aria-label={`Your previous total: ${model.totals.humanPrevious}`}>+ {model.totals.humanPrevious}</span>
-        <b aria-label={`Your new total: ${model.totals.humanTotal}`}>{model.totals.humanTotal}</b>
-      </div>
-      <div>
-        <span>Dracula's Score</span>
-        <strong aria-label={`Dracula's round score: ${model.totals.opponentRound}`}>{model.totals.opponentRound}</strong>
-        <span className="previous-total" aria-label={`Dracula's previous total: ${model.totals.opponentPrevious}`}>+ {model.totals.opponentPrevious}</span>
-        <b aria-label={`Dracula's new total: ${model.totals.opponentTotal}`}>{model.totals.opponentTotal}</b>
-      </div>
+      {columns.map((column) => (
+        <div key={column.label}>
+          <span>{column.label}</span>
+          <strong aria-label={`${column.owner} round score: ${column.round}`}>
+            {column.round}
+          </strong>
+          <span
+            className="previous-total"
+            aria-label={`${column.owner} previous total: ${column.previous}`}
+          >
+            + {column.previous}
+          </span>
+          <b aria-label={`${column.owner} new total: ${column.total}`}>{column.total}</b>
+        </div>
+      ))}
     </section>
   );
 }
 
+/** Select the workspace matching the current scoring frame. */
 export function PresentationWorkspace({
   model,
   frame,
@@ -231,10 +299,8 @@ export function PresentationWorkspace({
   }
   if (frame.kind === "select_round_score") return <SelectedScores model={model} />;
   if (frame.kind === "update_totals" || frame.kind === "complete") return <RoundTotals model={model} />;
-  const message = frame.kind === "entering"
-    ? "Preparing the completed coffin…"
-    : frame.kind === "orientation_handoff"
-      ? "Now for the other score…"
-      : "Waiting for commentary…";
+  let message = "Waiting for commentary…";
+  if (frame.kind === "entering") message = "Preparing the completed coffin…";
+  else if (frame.kind === "orientation_handoff") message = "Now for the other score…";
   return <p className="presentation-status" aria-live="polite">{message}</p>;
 }

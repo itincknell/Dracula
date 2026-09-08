@@ -6,29 +6,33 @@ timeouts, malformed responses, retry behavior, and narrator-disabled play.
 
 from __future__ import annotations
 
-import json
 import sys
+from dataclasses import replace
 from types import ModuleType
 from typing import Any, Mapping
 
 import pytest
 from fastapi.testclient import TestClient
 
-from dracula.api.app import create_app
-from dracula.api.bedrock import BedrockRuntimeAdapter, parse_bedrock_text
-from dracula.api.narration import (
-    FakeNarrationAdapter,
-    GroundedNarrationCue,
-    MAX_NARRATION_CHARACTERS,
+from dracula.api.development import create_app
+from dracula.api.narration.bedrock import (
+    BedrockRuntimeAdapter,
     NarrationConfigurationError,
-    NarrationPrompt,
-    NarrationProviderError,
-    build_narration_prompt,
 )
-from dracula.api.narration_cues import _winning_combination
-from dracula.api.policy import PolicyTurnResult
-from dracula.api.stateless_contracts import RecoveryEnvelope
-from dracula.engine import EnginePlayer, LineOrientation, PlayerValues, score_line
+from dracula.api.narration.cues import (
+    GroundedNarrationCue,
+    _round_tie_break,
+    _winning_combination,
+)
+from dracula.api.narration.prompt import NarrationPrompt, build_narration_prompt
+from dracula.api.narration.service import (
+    NarrationProviderError,
+    NarrationProviderResult,
+    validate_narration_text,
+)
+from dracula.policy.contracts import PolicyTurnResult
+from dracula.api.stateless.contracts import RecoveryEnvelope
+from dracula.game.engine import EnginePlayer, LineOrientation, PlayerValues, score_line
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore:Using `httpx` with `starlette.testclient` is deprecated"
@@ -53,6 +57,31 @@ class CapturingBedrockClient:
         return self.response
 
 
+class FakeNarrationAdapter:
+    """Record prompts and return a fixed result or failure for service tests."""
+
+    def __init__(
+        self,
+        text: str = "The night has only begun.",
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.text = text
+        self.error = error
+        self.requests: list[NarrationPrompt] = []
+
+    def generate(self, prompt: NarrationPrompt) -> NarrationProviderResult:
+        self.requests.append(prompt)
+        if self.error is not None:
+            raise self.error
+        return NarrationProviderResult(
+            text=self.text,
+            input_tokens=12,
+            output_tokens=6,
+            latency_ms=0.1,
+        )
+
+
 def _bedrock_response(text: str = "Welcome to my table.") -> dict[str, object]:
     return {
         "output": {
@@ -73,7 +102,6 @@ def _app(
     enabled: bool = True,
 ) -> Any:
     return create_app(
-        gameplay_mode="stateless",
         policy_executor=FirstLegalPolicy(),
         narration_enabled=enabled,
         narration_adapter=adapter,
@@ -147,7 +175,7 @@ def test_bedrock_converse_request_and_normalized_response_contract() -> None:
                     "content": [{"text": '{"public_facts":{}}'}],
                 }
             ],
-            "inferenceConfig": {"maxTokens": 72, "temperature": 0.0},
+            "inferenceConfig": {"maxTokens": 72, "temperature": 0.5},
         }
     ]
 
@@ -170,36 +198,68 @@ def test_bedrock_converse_request_and_normalized_response_contract() -> None:
     ),
 )
 def test_malformed_bedrock_output_is_rejected(response: Mapping[str, object]) -> None:
-    with pytest.raises(NarrationProviderError):
-        parse_bedrock_text(response)
-
-
-@pytest.mark.parametrize("text", ("", "\0unsafe", "x" * 401))
-def test_empty_control_character_and_oversized_output_is_rejected(text: str) -> None:
-    with pytest.raises(NarrationProviderError):
-        parse_bedrock_text(_bedrock_response(text))
-
-
-def test_prompt_construction_is_canonical_plain_public_json() -> None:
-    left = GroundedNarrationCue(
-        "round_transition",
-        {"round": 2, "human_round_score": 8, "dracula_round_score": 11},
+    adapter = BedrockRuntimeAdapter(
+        CapturingBedrockClient(response),
+        model_id="test.model-v1",
     )
-    right = GroundedNarrationCue(
-        "round_transition",
-        {"dracula_round_score": 11, "human_round_score": 8, "round": 2},
-    )
-    left_prompt = build_narration_prompt(left)
-    right_prompt = build_narration_prompt(right)
+    with pytest.raises(NarrationProviderError):
+        adapter.generate(NarrationPrompt("system", "user"))
 
-    assert left_prompt == right_prompt
-    assert json.loads(left_prompt.user_text) == {
-        "cue_type": "round_transition",
-        "public_facts": {
-            "dracula_round_score": 11,
-            "human_round_score": 8,
+
+@pytest.mark.parametrize("text", ("", "\0unsafe"))
+def test_empty_and_control_character_output_is_rejected(text: str) -> None:
+    with pytest.raises(NarrationProviderError):
+        validate_narration_text(text)
+
+
+def test_prompt_construction_uses_plain_english_summary() -> None:
+    cue = GroundedNarrationCue(
+        "round_transition",
+        {
+            "dracula_attitude": "amused",
+            "leader": "dracula",
             "round": 2,
+            "round_result": "dracula",
+            "score_movement": "Dracula extends the lead over the human",
+            "winning_combination": "three Hearts for a 5x multiplier",
         },
+    )
+    prompt = build_narration_prompt(cue)
+
+    assert prompt.user_text == (
+        "Dracula is winning after round 2. Dracula extends the lead over the "
+        "human. Dracula put together three Hearts for a 5x multiplier. "
+        "Dracula is amused."
+    )
+    assert "Input:" not in prompt.system_text
+    assert "Output:" not in prompt.system_text
+
+
+def test_examples_are_separate_conversation_turns_before_the_live_cue() -> None:
+    client = CapturingBedrockClient(_bedrock_response())
+    adapter = BedrockRuntimeAdapter(client, model_id="test.model-v1")
+    prompt = build_narration_prompt(
+        GroundedNarrationCue(
+            "opening",
+            {
+                "dracula_attitude": "imperious",
+                "first_player": "queen",
+                "human_role": "queen",
+            },
+        )
+    )
+
+    adapter.generate(prompt)
+
+    messages = client.calls[0]["messages"]
+    assert isinstance(messages, list)
+    assert [message["role"] for message in messages[:-1]] == [
+        "user",
+        "assistant",
+    ] * len(prompt.example_turns)
+    assert messages[-1] == {
+        "role": "user",
+        "content": [{"text": prompt.user_text}],
     }
 
 
@@ -232,6 +292,46 @@ def test_winning_combination_uses_the_approved_plain_language(
     assert _winning_combination(result, EnginePlayer.QUEEN) == expected
 
 
+@pytest.mark.parametrize(
+    ("queen_totals", "king_totals", "expected"),
+    (
+        ((50, 25, 10), (40, 30, 15), None),
+        (
+            (50, 25, 10),
+            (50, 20, 15),
+            "the players' best lines tied, and their second-best lines decided the round",
+        ),
+        (
+            (50, 25, 11),
+            (50, 25, 10),
+            "the players' best and second-best lines tied, and their third-best lines decided the round",
+        ),
+    ),
+)
+def test_round_cue_reports_ranked_line_tie_break(
+    queen_totals: tuple[int, int, int],
+    king_totals: tuple[int, int, int],
+    expected: str | None,
+) -> None:
+    best = score_line(("2S", "3S", "4S"), LineOrientation.ROW)
+    filler = score_line(("AC", "2D", "3S"), LineOrientation.ROW)
+    queen_lines = tuple(
+        replace(best if index == 0 else filler, line_index=index, total=total)
+        for index, total in enumerate(queen_totals)
+    )
+    king_lines = tuple(
+        replace(filler, line_index=index, total=total)
+        for index, total in enumerate(king_totals)
+    )
+    result = type(
+        "Result",
+        (),
+        {"line_scores": PlayerValues(queen=queen_lines, king=king_lines)},
+    )()
+
+    assert _round_tie_break(result) == expected
+
+
 def test_opening_is_grounded_by_replay_and_contains_no_private_state() -> None:
     adapter = FakeNarrationAdapter("Enter, if you dare.")
     application = _app(adapter)
@@ -249,14 +349,13 @@ def test_opening_is_grounded_by_replay_and_contains_no_private_state() -> None:
     assert len(adapter.requests) == 1
     assert health.json() == {
         "status": "ok",
-        "gameplay_mode": "stateless",
         "opponent_configured": True,
         "narration_enabled": True,
-        "narration_configured": True,
     }
-    facts = json.loads(adapter.requests[0].user_text)
-    assert set(facts) == {"cue_type", "public_facts"}
-    assert set(facts["public_facts"]) == {
+    source_cue = adapter.requests[0].source_cue
+    assert source_cue is not None
+    assert set(source_cue.facts) == {
+        "dracula_attitude",
         "dracula_role",
         "first_player",
         "human_role",
@@ -311,21 +410,31 @@ def test_only_opening_rounds_one_to_five_and_final_result_are_eligible() -> None
         final = _narrate(client, response, "final_result")
         assert final.status_code == 200
         assert final.json()["status"] == "ready"
-        final_facts = json.loads(adapter.requests[-1].user_text)["public_facts"]
+        final_cue = adapter.requests[-1].source_cue
+        assert final_cue is not None
+        final_facts = final_cue.facts
         assert final_facts["final_result"] in {"human", "dracula", "tie"}
         assert final_facts["tie_break"] in {
             "total_score",
             "sixth_round_score",
             "tie",
         }
-        assert set(final_facts) == {"final_result", "tie_break"}
+        assert set(final_facts) == {
+            "dracula_attitude",
+            "final_result",
+            "tie_break",
+        }
         too_late_opening = _narrate(client, response, "opening")
         assert too_late_opening.status_code == 409
 
     # Opening + five transitions + one final result. Rejected timing never calls
     # the provider, so round six cannot accidentally emit two narrator jobs.
     assert len(adapter.requests) == 7
-    cue_types = [json.loads(item.user_text)["cue_type"] for item in adapter.requests]
+    cue_types = [
+        item.source_cue.cue_type
+        for item in adapter.requests
+        if item.source_cue is not None
+    ]
     assert cue_types == ["opening"] + ["round_transition"] * 5 + ["final_result"]
 
 
@@ -344,18 +453,40 @@ def test_round_cue_contains_only_engine_grounded_public_facts() -> None:
 
     assert narration.status_code == 200
     assert before == after == response
-    payload = json.loads(adapter.requests[-1].user_text)
-    facts = payload["public_facts"]
+    source_cue = adapter.requests[-1].source_cue
+    assert source_cue is not None
+    facts = source_cue.facts
     pending = response["game"]["pending_round_result"]
     assert facts["round"] == 1
     assert facts["round_result"] in {"human", "dracula", "tie"}
     assert isinstance(facts["score_movement"], str)
-    expected_fields = {"round", "round_result", "score_movement"}
+    expected_fields = {
+        "dracula_attitude",
+        "leader",
+        "round",
+        "round_result",
+        "score_movement",
+    }
+    assert facts["dracula_attitude"] in {
+        "imperious",
+        "amused",
+        "angry",
+        "angrier",
+    }
+    if "vampires_played" in facts:
+        expected_fields.add("vampires_played")
+        assert all(
+            description.startswith(("the human played ", "Dracula played "))
+            for description in facts["vampires_played"]
+        )
     if facts["round_result"] == "tie":
         assert "winning_combination" not in facts
     else:
         expected_fields.add("winning_combination")
         assert isinstance(facts["winning_combination"], str)
+        if "round_tie_break" in facts:
+            expected_fields.add("round_tie_break")
+            assert "lines tied" in facts["round_tie_break"]
     assert set(facts) == expected_fields
 
     prompt_text = adapter.requests[-1].user_text
@@ -374,6 +505,32 @@ def test_round_cue_contains_only_engine_grounded_public_facts() -> None:
         "search_tree",
     )
     assert all(term not in prompt_text for term in forbidden_terms)
+
+
+def test_round_cue_reports_vampires_by_player_with_correct_plural() -> None:
+    adapter = FakeNarrationAdapter()
+    application = _app(adapter)
+    with TestClient(application) as client:
+        response = _start(client, "round-with-vampires")
+        vampire_facts: list[str] = []
+        for _ in range(6):
+            response = _advance_to_scoring(client, response)
+            narration = _narrate(client, response, "round_transition")
+            if narration.status_code == 200:
+                source_cue = adapter.requests[-1].source_cue
+                assert source_cue is not None
+                facts = source_cue.facts
+                vampire_facts.extend(facts.get("vampires_played", []))
+            if vampire_facts or response["game"]["round_number"] == 6:
+                break
+            response = client.post(
+                "/games/command", json=_next_command(response)
+            ).json()
+
+    assert vampire_facts
+    for description in vampire_facts:
+        count = int(description.split()[-2])
+        assert description.endswith("vampire" if count == 1 else "vampires")
 
 
 def test_timeout_and_retry_return_empty_state_without_mutating_game(caplog: Any) -> None:
@@ -424,7 +581,7 @@ def test_disabled_narrator_never_invokes_adapter_or_fabricates_text() -> None:
     assert health.json()["narration_enabled"] is False
 
 
-@pytest.mark.parametrize("text", ("", "x" * (MAX_NARRATION_CHARACTERS + 1)))
+@pytest.mark.parametrize("text", ("", "\0unsafe"))
 def test_bad_fake_output_uses_same_empty_failure_boundary(text: str) -> None:
     adapter = FakeNarrationAdapter(text)
     with TestClient(_app(adapter)) as client:
@@ -469,7 +626,6 @@ def test_enabled_production_narration_has_no_silent_unconfigured_fallback(
     monkeypatch.delenv("DRACULA_BEDROCK_REGION", raising=False)
     with pytest.raises(NarrationConfigurationError, match="MODEL_ID"):
         create_app(
-            gameplay_mode="stateless",
             policy_executor=FirstLegalPolicy(),
             narration_enabled=True,
         )

@@ -184,8 +184,6 @@ export function scoringView(options: ScoringFixtureOptions = {}): HumanGameView 
     phase: {
       kind: "scoring",
       round_number: record.round_number,
-      next_step_index: 0,
-      pending_narration_id: null,
     },
   };
 }

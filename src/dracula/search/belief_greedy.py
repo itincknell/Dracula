@@ -1,22 +1,45 @@
-"""Choose BGC continuation moves with one-ply belief-greedy evaluation.
+"""Choose continuation moves by scoring plausible completed coffins.
 
-This policy replaces a nested response search. It samples eight plausible
-opponent hands from the acting player's unseen cards. For each sample, every
-legal strategic group is placed first and the remaining round is completed in
-one reproducible order. Groups are ranked by their mean exact round-score
-difference across those shared samples.
+Information-set UCT calls this policy when it needs a move to continue one of
+its trial rounds. The policy receives only the information visible to the
+player whose simulated turn it is.
 
-The method reasons about hidden cards probabilistically but never receives the
-authoritative opponent hand or stock order.
+To choose one move, the "belief greedy" policy follows these steps:
+
+1. List every legal choice of card and strategically distinct destination.
+2. Draw eight possible hands that the opponent could hold from the cards this
+   player has not seen.
+3. For each possible opponent hand, evaluate every legal choice from step 1.
+   Put the chosen card at that choice's representative destination. Then make a
+   complete hypothetical coffin by placing this player's remaining cards and
+   the sampled opponent cards into every empty position. Each remaining card
+   receives a stable pseudo-random priority derived from that sample's seed and
+   the card's identity. Cards sorted by those priorities fill the empty coffin
+   positions in grid order. This is not intended to imitate tactical play: it
+   supplies a reproducible, varied completion in which a given card keeps the
+   same priority while different candidate moves are compared. No further move
+   selection occurs inside the completion.
+4. Score each completed coffin. If Queen is choosing, the result is Queen's
+   score minus King's. If King is choosing, it is King's score minus Queen's.
+5. Average each candidate's eight results and choose the highest average.
+
+All candidates use the same possible opponent hand and completion order within
+each of the eight samples. This makes their scores directly comparable instead
+of giving each candidate different sampling luck. Canonical action order breaks
+an exact tie. If the winning destination group is a mirrored pair, the
+deterministic fair coin chooses its concrete destination only after this
+comparison is complete.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
-from dracula.bridge import ACTION_COUNT
-from dracula.engine import EnginePlayer, resolve_round_scores, score_coffin
+from dracula.decision.bridge import ACTION_COUNT
+from dracula.game.engine import EnginePlayer, score_coffin
+from dracula.game.scoring import round_scores_from_lines
 from dracula.randomness import shuffled, stable_seed
 from dracula.search.contracts import (
     ContinuationDecision,
@@ -24,12 +47,15 @@ from dracula.search.contracts import (
     SearchInterrupted,
     StrategicGroupStatistics,
 )
-from dracula.search.bgc import BGCInformationSetSearch, BGCSearchConfig
-from dracula.search.information import (
+from dracula.search.information_set_uct import (
+    InformationSetUCTConfig,
+    InformationSetUCTSearch,
+)
+from dracula.decision.information import (
     SearchInformationState,
     information_state_fingerprint,
 )
-from dracula.strategic_actions import (
+from dracula.decision.strategic_actions import (
     StrategicActionGroup,
     select_concrete_action_index,
     strategic_action_groups,
@@ -38,13 +64,9 @@ from dracula.strategic_actions import (
 
 @dataclass(frozen=True, slots=True)
 class BeliefGreedyContinuationConfig:
-    """Sampling budget for the baseline BGC one-ply response policy."""
+    """Set how many hypothetical opponent hands evaluate each candidate move."""
 
     belief_completion_count: int = 8
-
-    def __post_init__(self) -> None:
-        if self.belief_completion_count < 1:
-            raise ValueError("belief completion count must be positive")
 
 
 def _response_seed(
@@ -74,59 +96,91 @@ def _completion_order(cards: tuple[str, ...], seed: int) -> tuple[str, ...]:
     )
 
 
-def _group_value(
+def _sample_opponent_hand(
+    information: SearchInformationState,
+    completion_seed: int,
+) -> tuple[str, ...]:
+    """Draw the unseen cards used as one possible opponent hand."""
+
+    sampled = shuffled(information.unseen_card_ids, completion_seed)
+    opponent_hand = sampled[: information.opponent_remaining_count]
+    return tuple(sorted(opponent_hand))
+
+
+def _fill_remaining_positions(
+    coffin: list[str | None],
+    remaining_cards: tuple[str, ...],
+    completion_seed: int,
+) -> tuple[str, ...]:
+    """Fill open grid positions using one sample's stable card priorities."""
+
+    empty_positions = tuple(
+        index for index, card_id in enumerate(coffin) if card_id is None
+    )
+    ordered_cards = _completion_order(remaining_cards, completion_seed)
+
+    # Strict pairing enforces the central completion invariant: after the
+    # candidate move, the two sampled hands exactly fill the current round.
+    for position, card_id in zip(empty_positions, ordered_cards, strict=True):
+        coffin[position] = card_id
+    return cast(tuple[str, ...], tuple(coffin))
+
+
+def _completed_coffin(
     information: SearchInformationState,
     group: StrategicActionGroup,
     opponent_hand: tuple[str, ...],
     completion_seed: int,
-) -> float:
-    """Return one group's exact score after one sampled round completion.
+) -> tuple[str, ...]:
+    """Place one candidate and complete the board under one sampled belief."""
 
-    Evaluation uses the group's designated representative destination. A paired
-    concrete destination is chosen only after the strategic group wins the mean
-    comparison, so it cannot influence the group's estimated value.
-    """
-
-    card_id = information.own_hand[group.hand_slot]
-    if card_id is None:
-        raise ValueError("strategic group refers to an unavailable card")
     coffin = list(information.coffin)
-    coffin[group.representative_grid_index] = card_id
+    # Strategic groups come from the information state's legal actions, which
+    # guarantees that the named hand slot contains a card.
+    coffin[group.representative_grid_index] = information.own_hand[group.hand_slot]
     own_remaining = tuple(
-        candidate
-        for hand_slot, candidate in enumerate(information.own_hand)
-        if hand_slot != group.hand_slot and candidate is not None
+        card_id
+        for hand_slot, card_id in enumerate(information.own_hand)
+        if hand_slot != group.hand_slot and card_id is not None
     )
-    empty_positions = tuple(
-        index for index, candidate in enumerate(coffin) if candidate is None
+    return _fill_remaining_positions(
+        coffin,
+        own_remaining + opponent_hand,
+        completion_seed,
     )
-    future_cards = own_remaining + opponent_hand
-    if len(future_cards) != len(empty_positions):
-        raise ValueError("belief completion does not fill the current round")
-    # This continuation is deliberately one-ply: after the candidate action,
-    # a deterministic completion assigns the remaining sampled cards to spaces.
-    for position, future_card in zip(
-        empty_positions,
-        _completion_order(future_cards, completion_seed),
-        strict=True,
-    ):
-        coffin[position] = future_card
 
-    complete_coffin = tuple(coffin)
-    if any(card is None for card in complete_coffin):
-        raise ValueError("belief completion left an empty coffin position")
-    lines = score_coffin(complete_coffin)  # type: ignore[arg-type]
-    scores = resolve_round_scores(
-        tuple(line.total for line in lines.queen),
-        tuple(line.total for line in lines.king),
-    )
-    actor = information.player
+
+def _actor_relative_value(
+    coffin: tuple[str, ...],
+    actor: EnginePlayer,
+) -> float:
+    """Score one full coffin as the choosing player's normalized advantage."""
+
+    lines = score_coffin(coffin)
+    scores = round_scores_from_lines(lines)
     differential = (
         scores.queen - scores.king
         if actor is EnginePlayer.QUEEN
         else scores.king - scores.queen
     )
     return differential / ROUND_SCORE_NORMALIZER
+
+
+def _group_value(
+    information: SearchInformationState,
+    group: StrategicActionGroup,
+    opponent_hand: tuple[str, ...],
+    completion_seed: int,
+) -> float:
+    """Evaluate one candidate against one possible opponent hand."""
+
+    coffin = _completed_coffin(
+        information,
+        group,
+        opponent_hand,
+        completion_seed,
+    )
+    return _actor_relative_value(coffin, information.player)
 
 
 def _evaluate_group_values(
@@ -143,15 +197,9 @@ def _evaluate_group_values(
         if should_stop is not None and should_stop():
             raise SearchInterrupted("belief-greedy continuation interrupted")
         completion_seed = stable_seed(request_seed, completion_index)
-        # Only the opponent cards needed to finish this round are sampled. The
-        # same hand and completion order are then reused for every candidate.
-        opponent_hand = tuple(
-            sorted(
-                shuffled(information.unseen_card_ids, completion_seed)[
-                    : information.opponent_remaining_count
-                ]
-            )
-        )
+        opponent_hand = _sample_opponent_hand(information, completion_seed)
+
+        # Reusing the sample isolates candidate choice from sampling luck.
         for group in groups:
             value_sums[group.representative_action_index] += _group_value(
                 information,
@@ -160,6 +208,49 @@ def _evaluate_group_values(
                 completion_seed,
             )
     return value_sums
+
+
+def _mean_group_value(
+    value_sums: list[float],
+    group: StrategicActionGroup,
+    completion_count: int,
+) -> float:
+    """Return one candidate's mean over all sampled completions."""
+
+    return value_sums[group.representative_action_index] / completion_count
+
+
+def _group_statistics(
+    groups: tuple[StrategicActionGroup, ...],
+    value_sums: list[float],
+    completion_count: int,
+) -> tuple[StrategicGroupStatistics, ...]:
+    """Convert accumulated sample values into continuation diagnostics."""
+
+    return tuple(
+        StrategicGroupStatistics(
+            group,
+            completion_count,
+            _mean_group_value(value_sums, group, completion_count),
+        )
+        for group in groups
+    )
+
+
+def _best_group(
+    groups: tuple[StrategicActionGroup, ...],
+    value_sums: list[float],
+    completion_count: int,
+) -> StrategicActionGroup:
+    """Choose the highest mean value, resolving exact ties canonically."""
+
+    return min(
+        groups,
+        key=lambda group: (
+            -_mean_group_value(value_sums, group, completion_count),
+            group.representative_action_index,
+        ),
+    )
 
 
 class BeliefGreedyContinuation:
@@ -190,21 +281,9 @@ class BeliefGreedyContinuation:
             completion_count,
             should_stop,
         )
-        statistics = tuple(
-            StrategicGroupStatistics(
-                group,
-                completion_count,
-                value_sums[group.representative_action_index] / completion_count,
-            )
-            for group in groups
-        )
-        selected_group = min(
-            groups,
-            key=lambda group: (
-                -value_sums[group.representative_action_index] / completion_count,
-                group.representative_action_index,
-            ),
-        )
+        statistics = _group_statistics(groups, value_sums, completion_count)
+        selected_group = _best_group(groups, value_sums, completion_count)
+
         # The fair coin affects only the concrete member returned to the engine.
         return ContinuationDecision(
             selected_group=selected_group,
@@ -219,12 +298,12 @@ class BeliefGreedyContinuation:
         )
 
 
-class BeliefGreedyInformationSetSearch(BGCInformationSetSearch):
-    """BGC-128 with the baseline eight-completion greedy continuation."""
+class BeliefGreedyInformationSetSearch(InformationSetUCTSearch):
+    """Run information-set UCT with belief-greedy continuation moves."""
 
     def __init__(
         self,
-        search_config: BGCSearchConfig = BGCSearchConfig(),
+        search_config: InformationSetUCTConfig = InformationSetUCTConfig(),
         continuation_config: BeliefGreedyContinuationConfig = (
             BeliefGreedyContinuationConfig()
         ),
